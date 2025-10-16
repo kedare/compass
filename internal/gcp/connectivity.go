@@ -3,7 +3,6 @@ package gcp
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -53,6 +52,19 @@ type ConnectivityTestResult struct {
 	State                     string
 	Result                    string
 }
+
+type backoffConfig struct {
+	initial    time.Duration
+	multiplier float64
+	max        time.Duration
+}
+
+var (
+	operationTimeout    = 5 * time.Minute
+	newOperationBackoff = func() backoffConfig {
+		return backoffConfig{initial: time.Second, multiplier: 1.5, max: 10 * time.Second}
+	}
+)
 
 // EndpointInfo represents source or destination endpoint information.
 type EndpointInfo struct {
@@ -288,9 +300,25 @@ func (c *ConnectivityClient) DeleteTest(ctx context.Context, testName string) er
 func (c *ConnectivityClient) waitForOperation(ctx context.Context, opName string) error {
 	logger.Log.Debugf("Waiting for operation: %s", opName)
 
-	maxAttempts := 60 // 5 minutes with 5 second intervals
-	for i := range maxAttempts {
-		op, err := c.service.Projects.Locations.Global.Operations.Get(opName).Context(ctx).Do()
+	poll := func(ctx context.Context) (*networkmanagement.Operation, error) {
+		return c.service.Projects.Locations.Global.Operations.Get(opName).Context(ctx).Do()
+	}
+
+	return waitForOperationWithBackoff(ctx, poll)
+}
+
+func waitForOperationWithBackoff(ctx context.Context, poll func(context.Context) (*networkmanagement.Operation, error)) error {
+	deadline := time.Now().Add(operationTimeout)
+	backoff := newOperationBackoff()
+	delay := backoff.initial
+	attempt := 0
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		op, err := poll(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to get operation status: %w", err)
 		}
@@ -305,11 +333,35 @@ func (c *ConnectivityClient) waitForOperation(ctx context.Context, opName string
 			return nil
 		}
 
-		logger.Log.Tracef("Operation still running (attempt %d/%d)", i+1, maxAttempts)
-		time.Sleep(5 * time.Second)
-	}
+		attempt++
+		logger.Log.Tracef("Operation still running (attempt %d), waiting %s", attempt, delay)
 
-	return errors.New("operation timed out after 5 minutes")
+		if time.Now().After(deadline) {
+			return fmt.Errorf("operation timed out after %s", operationTimeout)
+		}
+
+		wait := delay
+		if remaining := time.Until(deadline); remaining < wait {
+			wait = remaining
+		}
+
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+
+		nextDelay := time.Duration(float64(delay) * backoff.multiplier)
+		if nextDelay > backoff.max {
+			nextDelay = backoff.max
+		}
+		if nextDelay <= 0 {
+			nextDelay = backoff.initial
+		}
+		delay = nextDelay
+	}
 }
 
 // convertTestResult converts API test result to our internal format.
