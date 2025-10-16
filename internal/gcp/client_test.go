@@ -2,6 +2,8 @@ package gcp
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"google.golang.org/api/compute/v1"
@@ -416,11 +418,41 @@ func TestCollectManagedInstancesError(t *testing.T) {
 	}
 }
 
-func TestGetDefaultProject(t *testing.T) {
-	// Test that getDefaultProject returns empty string
-	// This is expected since we don't implement actual gcloud config reading
-	result := getDefaultProject()
-	if result != "" {
-		t.Errorf("getDefaultProject() = %v, want empty string", result)
+func TestGetDefaultProjectFromEnv(t *testing.T) {
+	t.Setenv("GOOGLE_CLOUD_PROJECT", "env-project")
+	if project := getDefaultProject(); project != "env-project" {
+		t.Fatalf("expected env-project, got %s", project)
+	}
+}
+
+func TestGetDefaultProjectFromConfig(t *testing.T) {
+	t.Setenv("GOOGLE_CLOUD_PROJECT", "")
+	t.Setenv("CLOUDSDK_CORE_PROJECT", "")
+
+	configDir := t.TempDir()
+	configPath := filepath.Join(configDir, "configurations")
+	if err := os.MkdirAll(configPath, 0o755); err != nil {
+		t.Fatalf("failed to create config path: %v", err)
+	}
+
+	content := "[core]\nproject = config-project\n"
+	if err := os.WriteFile(filepath.Join(configPath, "config_default"), []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	t.Setenv("CLOUDSDK_CONFIG", configDir)
+
+	if project := getDefaultProject(); project != "config-project" {
+		t.Fatalf("expected config-project, got %s", project)
+	}
+}
+
+func TestGetDefaultProjectNoSource(t *testing.T) {
+	t.Setenv("GOOGLE_CLOUD_PROJECT", "")
+	t.Setenv("CLOUDSDK_CORE_PROJECT", "")
+	t.Setenv("CLOUDSDK_CONFIG", t.TempDir())
+
+	if project := getDefaultProject(); project != "" {
+		t.Fatalf("expected empty project, got %s", project)
 	}
 }
