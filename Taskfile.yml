@@ -1,0 +1,203 @@
+version: '3'
+
+vars:
+  BINARY_NAME: cx
+  BUILD_DIR: ./
+  MAIN_PATH: ./main.go
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo "dev"
+  COMMIT:
+    sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
+  BUILD_DATE:
+    sh: date -u +"%Y-%m-%dT%H:%M:%SZ"
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list-all
+
+  build:
+    desc: Build the application
+    cmds:
+      - go build -ldflags="-X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.BUILD_DATE}}" -o {{.BINARY_NAME}} {{.MAIN_PATH}}
+
+  build-all:
+    desc: Build for multiple platforms
+    cmds:
+      - task: build-linux
+      - task: build-darwin
+      - task: build-windows
+
+  build-linux:
+    desc: Build for Linux
+    env:
+      GOOS: linux
+      GOARCH: amd64
+    cmds:
+      - go build -ldflags="-X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.BUILD_DATE}}" -o {{.BINARY_NAME}}-linux-amd64 {{.MAIN_PATH}}
+
+  build-darwin:
+    desc: Build for macOS
+    env:
+      GOOS: darwin
+      GOARCH: amd64
+    cmds:
+      - go build -ldflags="-X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.BUILD_DATE}}" -o {{.BINARY_NAME}}-darwin-amd64 {{.MAIN_PATH}}
+
+  build-darwin-arm64:
+    desc: Build for macOS ARM64
+    env:
+      GOOS: darwin
+      GOARCH: arm64
+    cmds:
+      - go build -ldflags="-X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.BUILD_DATE}}" -o {{.BINARY_NAME}}-darwin-arm64 {{.MAIN_PATH}}
+
+  build-windows:
+    desc: Build for Windows
+    env:
+      GOOS: windows
+      GOARCH: amd64
+    cmds:
+      - go build -ldflags="-X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.BUILD_DATE}}" -o {{.BINARY_NAME}}-windows-amd64.exe {{.MAIN_PATH}}
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test -v ./...
+
+  test-short:
+    desc: Run tests in short mode (skip integration tests)
+    cmds:
+      - go test -short -v ./...
+
+  test-coverage:
+    desc: Run tests with coverage
+    cmds:
+      - go test -v -coverprofile=coverage.out ./...
+      - go tool cover -html=coverage.out -o coverage.html
+
+  test-coverage-func:
+    desc: Run tests with coverage and show function coverage
+    cmds:
+      - go test -v -coverprofile=coverage.out ./...
+      - go tool cover -func=coverage.out
+
+  test-race:
+    desc: Run tests with race detector
+    cmds:
+      - go test -race -v ./...
+
+  test-bench:
+    desc: Run benchmark tests
+    cmds:
+      - go test -bench=. -v ./...
+
+  test-unit:
+    desc: Run only unit tests (exclude integration tests)
+    cmds:
+      - go test -short -v ./internal/...
+
+  test-integration:
+    desc: Run integration tests
+    cmds:
+      - go test -v ./cmd/... ./main_test.go
+
+  lint:
+    desc: Run golangci-lint with configuration
+    cmds:
+      - golangci-lint run ./...
+
+  lint-fix:
+    desc: Run golangci-lint and fix auto-fixable issues
+    cmds:
+      - golangci-lint run --fix ./...
+
+  lint-verbose:
+    desc: Run golangci-lint with verbose output
+    cmds:
+      - golangci-lint run -v ./...
+
+  lint-new:
+    desc: Run golangci-lint only on new/changed files (requires git)
+    cmds:
+      - golangci-lint run --new-from-rev=HEAD~1 ./...
+
+  fmt:
+    desc: Format code
+    cmds:
+      - go fmt ./...
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  mod-tidy:
+    desc: Tidy module dependencies
+    cmds:
+      - go mod tidy
+
+  mod-vendor:
+    desc: Vendor dependencies
+    cmds:
+      - go mod vendor
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -f {{.BINARY_NAME}}
+      - rm -f {{.BINARY_NAME}}-*
+      - rm -f coverage.out coverage.html
+      - rm -rf vendor/
+      - rm -rf tmp/
+
+  install:
+    desc: Install the application
+    cmds:
+      - task: build
+      - mkdir -p $HOME/.local/bin
+      - cp ./cx $HOME/.local/bin
+
+  run:
+    desc: Run the application
+    cmds:
+      - go run {{.MAIN_PATH}} {{.CLI_ARGS}}
+
+  dev:
+    desc: Development mode with auto-reload (requires air)
+    cmds:
+      - air
+
+  test-watch:
+    desc: Run tests in watch mode (requires entr)
+    cmds:
+      - find . -name '*.go' | entr -c go test -v ./...
+
+  check:
+    desc: Run all checks (fmt, vet, lint, test)
+    cmds:
+      - task: fmt
+      - task: vet
+      - task: lint
+      - task: test
+
+  ci:
+    desc: Run CI checks (used for continuous integration)
+    cmds:
+      - task: fmt
+      - task: vet
+      - task: test-race
+      - task: test-coverage-func
+
+  release:
+    desc: Build release binaries
+    cmds:
+      - task: clean
+      - task: check
+      - task: build-all
+
+  help:
+    desc: Show help for the built application
+    cmds:
+      - ./{{.BINARY_NAME}} --help
