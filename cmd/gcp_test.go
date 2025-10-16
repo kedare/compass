@@ -48,6 +48,11 @@ func TestGcpCommandFlags(t *testing.T) {
 	// Test that flags are properly configured
 	projectFlag := gcpCmd.Flags().Lookup("project")
 	if projectFlag == nil {
+		// Project flag is defined as persistent so it can be shared with
+		// connectivity subcommands; fall back to that flag set for validation.
+		projectFlag = gcpCmd.PersistentFlags().Lookup("project")
+	}
+	if projectFlag == nil {
 		t.Error("project flag not found")
 	} else {
 		if projectFlag.Shorthand != "p" {
