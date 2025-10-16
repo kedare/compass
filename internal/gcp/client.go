@@ -128,36 +128,48 @@ func (c *Client) FindInstance(ctx context.Context, instanceName, zone string) (*
 	}
 
 	logger.Log.Debug("Zone not specified, using aggregated list for auto-discovery")
-	// Use aggregated list to search all zones in a single API call
-	aggList, err := c.service.Instances.AggregatedList(c.project).Context(ctx).Do()
+
+	instanceData, err := c.findInstanceAcrossAggregatedPages(ctx, instanceName)
 	if err != nil {
-		logger.Log.Errorf("Failed to perform aggregated list: %v", err)
+		if errors.Is(err, ErrInstanceNotFound) {
+			logger.Log.Warnf("Instance '%s' not found in any zone", instanceName)
 
-		return nil, fmt.Errorf("failed to list instances: %w", err)
-	}
-
-	logger.Log.Debugf("Searching through aggregated instances")
-
-	for zoneName, instanceList := range aggList.Items {
-		for _, instance := range instanceList.Instances {
-			if instance.Name == instanceName {
-				logger.Log.Debugf("Found instance %s in %s", instanceName, zoneName)
-
-				result := c.convertInstance(instance)
-
-				// Cache the result
-				if c.cache != nil {
-					c.cacheInstance(instanceName, result)
-				}
-
-				return result, nil
-			}
+			return nil, fmt.Errorf("instance '%s': %w", instanceName, ErrInstanceNotFound)
 		}
+
+		return nil, err
 	}
 
-	logger.Log.Warnf("Instance '%s' not found in any zone", instanceName)
+	result := c.convertInstance(instanceData)
+	logger.Log.Debugf("Found instance %s in zone %s", instanceName, result.Zone)
 
-	return nil, fmt.Errorf("instance '%s': %w", instanceName, ErrInstanceNotFound)
+	if c.cache != nil {
+		c.cacheInstance(instanceName, result)
+	}
+
+	return result, nil
+}
+
+func (c *Client) findInstanceAcrossAggregatedPages(ctx context.Context, instanceName string) (*compute.Instance, error) {
+	fetch := func(pageToken string) (*compute.InstanceAggregatedList, error) {
+		call := c.service.Instances.AggregatedList(c.project).Context(ctx)
+		if pageToken != "" {
+			call = call.PageToken(pageToken)
+		}
+
+		list, err := call.Do()
+		if err != nil {
+			logger.Log.Errorf("Failed to perform aggregated list: %v", err)
+
+			return nil, fmt.Errorf("failed to list instances: %w", err)
+		}
+
+		logger.Log.Debugf("Scanning aggregated instance page (next token: %s)", list.NextPageToken)
+
+		return list, nil
+	}
+
+	return findInstanceInAggregatedPages(instanceName, fetch)
 }
 
 func (c *Client) findInstanceInZone(ctx context.Context, instanceName, zone string) (*Instance, error) {
@@ -266,24 +278,12 @@ func (c *Client) tryFindMIGFromCache(ctx context.Context, migName string) (*Inst
 func (c *Client) searchMIGInAggregatedList(ctx context.Context, migName string) (*Instance, error) {
 	logger.Log.Debug("Zone not specified, using aggregated list for MIG auto-discovery")
 
-	aggList, err := c.service.InstanceGroupManagers.AggregatedList(c.project).Context(ctx).Do()
+	scopeName, err := c.findMIGScopeAcrossAggregatedPages(ctx, migName)
 	if err != nil {
-		logger.Log.Errorf("Failed to perform MIG aggregated list: %v", err)
-
 		return nil, err
 	}
 
-	logger.Log.Debugf("Searching through aggregated MIGs")
-
-	for scopeName, migList := range aggList.Items {
-		for _, mig := range migList.InstanceGroupManagers {
-			if mig.Name == migName {
-				return c.handleFoundMIGInScope(ctx, migName, scopeName)
-			}
-		}
-	}
-
-	return nil, ErrMIGNotInAggregatedList
+	return c.handleFoundMIGInScope(ctx, migName, scopeName)
 }
 
 // handleFoundMIGInScope handles a MIG found in a specific scope.
@@ -311,6 +311,33 @@ func (c *Client) handleFoundMIGInScope(ctx context.Context, migName, scopeName s
 	}
 
 	return nil, fmt.Errorf("%w: %s", ErrUnknownScopeType, scopeName)
+}
+
+func (c *Client) findMIGScopeAcrossAggregatedPages(ctx context.Context, migName string) (string, error) {
+	fetch := func(pageToken string) (*compute.InstanceGroupManagerAggregatedList, error) {
+		call := c.service.InstanceGroupManagers.AggregatedList(c.project).Context(ctx)
+		if pageToken != "" {
+			call = call.PageToken(pageToken)
+		}
+
+		list, err := call.Do()
+		if err != nil {
+			logger.Log.Errorf("Failed to perform MIG aggregated list: %v", err)
+
+			return nil, err
+		}
+
+		logger.Log.Debugf("Scanning aggregated MIG page (next token: %s)", list.NextPageToken)
+
+		return list, nil
+	}
+
+	scope, err := findMIGScopeAcrossPages(migName, fetch)
+	if err != nil {
+		return "", err
+	}
+
+	return scope, nil
 }
 
 // searchMIGInRegions searches for a MIG by iterating through all regions.
@@ -357,24 +384,36 @@ func (c *Client) findInstanceInMIGZone(ctx context.Context, migName, zone string
 	}
 
 	logger.Log.Debugf("Found MIG %s in zone %s, listing instances", migName, zone)
-	// List instances in the MIG
-	instances, err := c.service.InstanceGroupManagers.ListManagedInstances(c.project, zone, migName).Context(ctx).Do()
-	if err != nil {
-		logger.Log.Errorf("Failed to list instances in MIG %s: %v", migName, err)
 
-		return nil, fmt.Errorf("failed to list MIG instances: %w", err)
+	managedInstances, err := collectManagedInstances(func(pageToken string) ([]*compute.ManagedInstance, string, error) {
+		call := c.service.InstanceGroupManagers.ListManagedInstances(c.project, zone, migName).Context(ctx)
+		if pageToken != "" {
+			call = call.PageToken(pageToken)
+		}
+
+		resp, err := call.Do()
+		if err != nil {
+			logger.Log.Errorf("Failed to list instances in MIG %s: %v", migName, err)
+
+			return nil, "", fmt.Errorf("failed to list MIG instances: %w", err)
+		}
+
+		return resp.ManagedInstances, resp.NextPageToken, nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	if len(instances.ManagedInstances) == 0 {
+	if len(managedInstances) == 0 {
 		logger.Log.Warnf("No instances found in MIG '%s'", migName)
 
 		return nil, fmt.Errorf("MIG '%s': %w", migName, ErrNoInstancesInMIG)
 	}
 
-	logger.Log.Debugf("Found %d instances in MIG %s", len(instances.ManagedInstances), migName)
+	logger.Log.Debugf("Found %d instances in MIG %s", len(managedInstances), migName)
 
 	// Get the first running instance
-	for _, managedInstance := range instances.ManagedInstances {
+	for _, managedInstance := range managedInstances {
 		logger.Log.Tracef("Checking instance %s (status: %s)", managedInstance.Instance, managedInstance.InstanceStatus)
 
 		if managedInstance.InstanceStatus == InstanceStatusRunning {
@@ -386,7 +425,7 @@ func (c *Client) findInstanceInMIGZone(ctx context.Context, migName, zone string
 	}
 
 	// If no running instance, get the first one
-	instanceName := extractInstanceName(instances.ManagedInstances[0].Instance)
+	instanceName := extractInstanceName(managedInstances[0].Instance)
 	logger.Log.Debugf("No running instances found, selecting first instance: %s", instanceName)
 
 	return c.findInstanceInZone(ctx, instanceName, zone)
@@ -436,24 +475,36 @@ func (c *Client) findInstanceInRegionalMIG(ctx context.Context, migName, region 
 	}
 
 	logger.Log.Debugf("Found regional MIG %s in region %s, listing instances", migName, region)
-	// List instances in the regional MIG
-	instances, err := c.service.RegionInstanceGroupManagers.ListManagedInstances(c.project, region, migName).Context(ctx).Do()
-	if err != nil {
-		logger.Log.Errorf("Failed to list instances in regional MIG %s: %v", migName, err)
 
-		return nil, fmt.Errorf("failed to list regional MIG instances: %w", err)
+	managedInstances, err := collectManagedInstances(func(pageToken string) ([]*compute.ManagedInstance, string, error) {
+		call := c.service.RegionInstanceGroupManagers.ListManagedInstances(c.project, region, migName).Context(ctx)
+		if pageToken != "" {
+			call = call.PageToken(pageToken)
+		}
+
+		resp, err := call.Do()
+		if err != nil {
+			logger.Log.Errorf("Failed to list instances in regional MIG %s: %v", migName, err)
+
+			return nil, "", fmt.Errorf("failed to list regional MIG instances: %w", err)
+		}
+
+		return resp.ManagedInstances, resp.NextPageToken, nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	if len(instances.ManagedInstances) == 0 {
+	if len(managedInstances) == 0 {
 		logger.Log.Warnf("No instances found in regional MIG '%s'", migName)
 
 		return nil, fmt.Errorf("regional MIG '%s': %w", migName, ErrNoInstancesInRegionalMIG)
 	}
 
-	logger.Log.Debugf("Found %d instances in regional MIG %s", len(instances.ManagedInstances), migName)
+	logger.Log.Debugf("Found %d instances in regional MIG %s", len(managedInstances), migName)
 
 	// Get the first running instance
-	for _, managedInstance := range instances.ManagedInstances {
+	for _, managedInstance := range managedInstances {
 		logger.Log.Tracef("Checking instance %s (status: %s)", managedInstance.Instance, managedInstance.InstanceStatus)
 
 		if managedInstance.InstanceStatus == InstanceStatusRunning {
@@ -466,8 +517,8 @@ func (c *Client) findInstanceInRegionalMIG(ctx context.Context, migName, region 
 	}
 
 	// If no running instance, get the first one
-	instanceName := extractInstanceName(instances.ManagedInstances[0].Instance)
-	instanceZone := extractZoneFromInstanceURL(instances.ManagedInstances[0].Instance)
+	instanceName := extractInstanceName(managedInstances[0].Instance)
+	instanceZone := extractZoneFromInstanceURL(managedInstances[0].Instance)
 	logger.Log.Debugf("No running instances found, selecting first instance: %s in zone: %s", instanceName, instanceZone)
 
 	return c.findInstanceInZone(ctx, instanceName, instanceZone)
@@ -600,6 +651,82 @@ func extractRegionFromZone(zone string) string {
 	}
 
 	return zone
+}
+
+func findInstanceInAggregatedPages(instanceName string, fetch func(pageToken string) (*compute.InstanceAggregatedList, error)) (*compute.Instance, error) {
+	pageToken := ""
+
+	for {
+		list, err := fetch(pageToken)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, scopedList := range list.Items {
+			for _, instance := range scopedList.Instances {
+				if instance.Name == instanceName {
+					return instance, nil
+				}
+			}
+		}
+
+		if list.NextPageToken == "" {
+			break
+		}
+
+		pageToken = list.NextPageToken
+	}
+
+	return nil, ErrInstanceNotFound
+}
+
+func findMIGScopeAcrossPages(migName string, fetch func(pageToken string) (*compute.InstanceGroupManagerAggregatedList, error)) (string, error) {
+	pageToken := ""
+
+	for {
+		list, err := fetch(pageToken)
+		if err != nil {
+			return "", err
+		}
+
+		for scopeName, scopedList := range list.Items {
+			for _, mig := range scopedList.InstanceGroupManagers {
+				if mig.Name == migName {
+					return scopeName, nil
+				}
+			}
+		}
+
+		if list.NextPageToken == "" {
+			break
+		}
+
+		pageToken = list.NextPageToken
+	}
+
+	return "", ErrMIGNotInAggregatedList
+}
+
+func collectManagedInstances(fetch func(pageToken string) ([]*compute.ManagedInstance, string, error)) ([]*compute.ManagedInstance, error) {
+	pageToken := ""
+	var all []*compute.ManagedInstance
+
+	for {
+		items, nextToken, err := fetch(pageToken)
+		if err != nil {
+			return nil, err
+		}
+
+		all = append(all, items...)
+
+		if nextToken == "" {
+			break
+		}
+
+		pageToken = nextToken
+	}
+
+	return all, nil
 }
 
 // LoadCache loads and returns the cache instance.

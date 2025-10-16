@@ -1,6 +1,7 @@
 package gcp
 
 import (
+	"errors"
 	"testing"
 
 	"google.golang.org/api/compute/v1"
@@ -274,6 +275,144 @@ func TestConvertInstanceNoExternalIP(t *testing.T) {
 
 	if !result.CanUseIAP {
 		t.Errorf("convertInstance().CanUseIAP = %v, want %v", result.CanUseIAP, true)
+	}
+}
+
+func TestFindInstanceInAggregatedPages(t *testing.T) {
+	pages := map[string]*compute.InstanceAggregatedList{
+		"": {
+			Items: map[string]compute.InstancesScopedList{
+				"zones/us-central1-a": {
+					Instances: []*compute.Instance{{Name: "other-instance"}},
+				},
+			},
+			NextPageToken: "token-1",
+		},
+		"token-1": {
+			Items: map[string]compute.InstancesScopedList{
+				"zones/us-central1-b": {
+					Instances: []*compute.Instance{{Name: "target-instance", Zone: "projects/p/zones/us-central1-b"}},
+				},
+			},
+		},
+	}
+
+	inst, err := findInstanceInAggregatedPages("target-instance", func(pageToken string) (*compute.InstanceAggregatedList, error) {
+		page, ok := pages[pageToken]
+		if !ok {
+			t.Fatalf("unexpected page token: %s", pageToken)
+		}
+
+		return page, nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if inst == nil || inst.Name != "target-instance" {
+		t.Fatalf("expected to find target-instance, got %#v", inst)
+	}
+}
+
+func TestFindInstanceInAggregatedPagesNotFound(t *testing.T) {
+	_, err := findInstanceInAggregatedPages("missing", func(string) (*compute.InstanceAggregatedList, error) {
+		return &compute.InstanceAggregatedList{}, nil
+	})
+
+	if !errors.Is(err, ErrInstanceNotFound) {
+		t.Fatalf("expected ErrInstanceNotFound, got %v", err)
+	}
+}
+
+func TestFindMIGScopeAcrossPages(t *testing.T) {
+	pages := map[string]*compute.InstanceGroupManagerAggregatedList{
+		"": {
+			Items: map[string]compute.InstanceGroupManagersScopedList{
+				"zones/us-central1-a": {
+					InstanceGroupManagers: []*compute.InstanceGroupManager{{Name: "other"}},
+				},
+			},
+			NextPageToken: "next",
+		},
+		"next": {
+			Items: map[string]compute.InstanceGroupManagersScopedList{
+				"regions/us-central1": {
+					InstanceGroupManagers: []*compute.InstanceGroupManager{{Name: "target-mig"}},
+				},
+			},
+		},
+	}
+
+	scope, err := findMIGScopeAcrossPages("target-mig", func(token string) (*compute.InstanceGroupManagerAggregatedList, error) {
+		page, ok := pages[token]
+		if !ok {
+			t.Fatalf("unexpected page token: %s", token)
+		}
+
+		return page, nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if scope != "regions/us-central1" {
+		t.Fatalf("expected scope regions/us-central1, got %s", scope)
+	}
+}
+
+func TestFindMIGScopeAcrossPagesNotFound(t *testing.T) {
+	_, err := findMIGScopeAcrossPages("missing", func(string) (*compute.InstanceGroupManagerAggregatedList, error) {
+		return &compute.InstanceGroupManagerAggregatedList{}, nil
+	})
+
+	if !errors.Is(err, ErrMIGNotInAggregatedList) {
+		t.Fatalf("expected ErrMIGNotInAggregatedList, got %v", err)
+	}
+}
+
+func TestCollectManagedInstances(t *testing.T) {
+	pages := map[string]struct {
+		items []*compute.ManagedInstance
+		next  string
+	}{
+		"": {
+			items: []*compute.ManagedInstance{{Instance: "instances/one"}},
+			next:  "token",
+		},
+		"token": {
+			items: []*compute.ManagedInstance{{Instance: "instances/two"}},
+		},
+	}
+
+	instances, err := collectManagedInstances(func(token string) ([]*compute.ManagedInstance, string, error) {
+		page, ok := pages[token]
+		if !ok {
+			t.Fatalf("unexpected token %s", token)
+		}
+
+		return page.items, page.next, nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(instances) != 2 {
+		t.Fatalf("expected 2 instances, got %d", len(instances))
+	}
+
+	if instances[1].Instance != "instances/two" {
+		t.Fatalf("unexpected instance order: %#v", instances)
+	}
+}
+
+func TestCollectManagedInstancesError(t *testing.T) {
+	sentinel := errors.New("boom")
+	_, err := collectManagedInstances(func(string) ([]*compute.ManagedInstance, string, error) {
+		return nil, "", sentinel
+	})
+
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected sentinel error, got %v", err)
 	}
 }
 
