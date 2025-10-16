@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"cx/internal/gcp"
+
+	"github.com/jedib0t/go-pretty/v6/table"
+	"github.com/jedib0t/go-pretty/v6/text"
 )
 
 // DisplayConnectivityTestResult formats and displays a connectivity test result.
@@ -73,10 +76,17 @@ func displayText(result *gcp.ConnectivityTestResult) error {
 		fmt.Printf("  Protocol:      %s\n", result.Protocol)
 	}
 
-	// Display path analysis
+	// Display path analysis - combine forward and return traces
 	if result.ReachabilityDetails != nil && len(result.ReachabilityDetails.Traces) > 0 {
 		fmt.Println("\n  Path Analysis:")
-		displayTraces(result.ReachabilityDetails.Traces, isReachable)
+
+		forwardTraces := result.ReachabilityDetails.Traces
+		var returnTraces []*gcp.Trace
+		if result.ReturnReachabilityDetails != nil {
+			returnTraces = result.ReturnReachabilityDetails.Traces
+		}
+
+		displayForwardAndReturnPaths(forwardTraces, returnTraces, isReachable)
 	}
 
 	// Display result message
@@ -158,7 +168,6 @@ func displayListText(results []*gcp.ConnectivityTestResult) error {
 		}
 
 		fmt.Printf("%s %s\n", statusIcon, result.DisplayName)
-		fmt.Printf("  Name:   %s\n", result.Name)
 		fmt.Printf("  Status: %s\n", status)
 
 		if result.Source != nil {
@@ -213,32 +222,272 @@ func displayTable(results []*gcp.ConnectivityTestResult) error {
 	return nil
 }
 
-// displayTraces displays network traces.
+// displayTraces displays network traces in a table layout.
 func displayTraces(traces []*gcp.Trace, isReachable bool) {
-	for _, trace := range traces {
+	for traceIdx, trace := range traces {
 		if len(trace.Steps) == 0 {
 			continue
 		}
 
-		fmt.Print("  └─")
-
-		for i, step := range trace.Steps {
-			if i > 0 {
-				fmt.Print(" → ")
+		// If there are multiple traces, add a header to distinguish them
+		if len(traces) > 1 {
+			if traceIdx > 0 {
+				fmt.Println() // Add spacing between traces
 			}
-
-			// Format step description
-			desc := formatTraceStep(step)
-			fmt.Print(desc)
-
-			// Show failure indicator
-			if step.CausesDrop {
-				fmt.Print(" ✗")
-			}
+			fmt.Printf("    Path %d of %d:\n", traceIdx+1, len(traces))
 		}
 
-		fmt.Println()
+		// Create table
+		t := table.NewWriter()
+		t.SetOutputMirror(os.Stdout)
+		t.SetStyle(table.StyleLight)
+		t.Style().Options.SeparateRows = true
+
+		// Add header
+		t.AppendHeader(table.Row{"#", "Step", "Type", "Resource", "Status"})
+
+		// Add each step as a row
+		for i, step := range trace.Steps {
+			stepNum := fmt.Sprintf("%d", i+1)
+			stepType, resource, status := formatTraceStepForTable(step)
+
+			// Apply styling based on step state
+			if step.CausesDrop {
+				// Red bold for failures
+				stepNum = text.Bold.Sprint(text.FgRed.Sprint(stepNum))
+				stepType = text.Bold.Sprint(text.FgRed.Sprint(stepType))
+				resource = text.Bold.Sprint(text.FgRed.Sprint(resource))
+				status = text.Bold.Sprint(text.FgRed.Sprint(status))
+			} else {
+				// Green for successful steps
+				status = text.FgGreen.Sprint(status)
+			}
+
+			t.AppendRow(table.Row{stepNum, getStepIcon(i, len(trace.Steps), step.CausesDrop), stepType, resource, status})
+		}
+
+		t.Render()
 	}
+}
+
+// displayForwardAndReturnPaths displays forward and return traces, pairing them when possible.
+func displayForwardAndReturnPaths(forwardTraces []*gcp.Trace, returnTraces []*gcp.Trace, isReachable bool) {
+	// If we have both forward and return traces, try to pair them
+	if len(forwardTraces) > 0 && len(returnTraces) > 0 {
+		// For simplicity, pair the first forward with the first return
+		// In more complex scenarios, you might want to match by endpoint or other criteria
+		for i := 0; i < len(forwardTraces) && i < len(returnTraces); i++ {
+			if i > 0 {
+				fmt.Println()
+			}
+			if len(forwardTraces) > 1 {
+				fmt.Printf("    Path %d of %d:\n", i+1, len(forwardTraces))
+			}
+			displayForwardAndReturnSideBySide(forwardTraces[i], returnTraces[i])
+		}
+
+		// Display any extra forward traces without return
+		for i := len(returnTraces); i < len(forwardTraces); i++ {
+			if i > 0 {
+				fmt.Println()
+			}
+			fmt.Printf("    Path %d of %d:\n", i+1, len(forwardTraces))
+			displaySingleTrace(forwardTraces[i], "Forward Path (no return path)")
+		}
+
+		// Display any extra return traces without forward
+		for i := len(forwardTraces); i < len(returnTraces); i++ {
+			if i > 0 {
+				fmt.Println()
+			}
+			displaySingleTrace(returnTraces[i], "Return Path (no forward path)")
+		}
+	} else if len(forwardTraces) > 0 {
+		// Only forward traces
+		for i, trace := range forwardTraces {
+			if i > 0 {
+				fmt.Println()
+			}
+			if len(forwardTraces) > 1 {
+				fmt.Printf("    Path %d of %d:\n", i+1, len(forwardTraces))
+			}
+			displaySingleTrace(trace, "Forward Path")
+		}
+	} else if len(returnTraces) > 0 {
+		// Only return traces (unusual)
+		for i, trace := range returnTraces {
+			if i > 0 {
+				fmt.Println()
+			}
+			if len(returnTraces) > 1 {
+				fmt.Printf("    Path %d of %d:\n", i+1, len(returnTraces))
+			}
+			displaySingleTrace(trace, "Return Path")
+		}
+	}
+}
+
+// displayForwardAndReturnSideBySide displays forward and return traces in two columns.
+func displayForwardAndReturnSideBySide(forward *gcp.Trace, returnTrace *gcp.Trace) {
+	// Create two tables side by side
+	forwardTable := table.NewWriter()
+	forwardTable.SetStyle(table.StyleLight)
+	forwardTable.Style().Options.SeparateRows = true
+	forwardTable.AppendHeader(table.Row{"#", "Step", "Type", "Resource", "Status"})
+
+	returnTable := table.NewWriter()
+	returnTable.SetStyle(table.StyleLight)
+	returnTable.Style().Options.SeparateRows = true
+	returnTable.AppendHeader(table.Row{"#", "Step", "Type", "Resource", "Status"})
+
+	// Populate forward table
+	for i, step := range forward.Steps {
+		stepNum := fmt.Sprintf("%d", i+1)
+		stepType, resource, status := formatTraceStepForTable(step)
+
+		if step.CausesDrop {
+			stepNum = text.Bold.Sprint(text.FgRed.Sprint(stepNum))
+			stepType = text.Bold.Sprint(text.FgRed.Sprint(stepType))
+			resource = text.Bold.Sprint(text.FgRed.Sprint(resource))
+			status = text.Bold.Sprint(text.FgRed.Sprint(status))
+		} else {
+			status = text.FgGreen.Sprint(status)
+		}
+
+		forwardTable.AppendRow(table.Row{stepNum, getStepIcon(i, len(forward.Steps), step.CausesDrop), stepType, resource, status})
+	}
+
+	// Populate return table
+	for i, step := range returnTrace.Steps {
+		stepNum := fmt.Sprintf("%d", i+1)
+		stepType, resource, status := formatTraceStepForTable(step)
+
+		if step.CausesDrop {
+			stepNum = text.Bold.Sprint(text.FgRed.Sprint(stepNum))
+			stepType = text.Bold.Sprint(text.FgRed.Sprint(stepType))
+			resource = text.Bold.Sprint(text.FgRed.Sprint(resource))
+			status = text.Bold.Sprint(text.FgRed.Sprint(status))
+		} else {
+			status = text.FgGreen.Sprint(status)
+		}
+
+		returnTable.AppendRow(table.Row{stepNum, getStepIcon(i, len(returnTrace.Steps), step.CausesDrop), stepType, resource, status})
+	}
+
+	// Render tables side by side
+	forwardLines := strings.Split(forwardTable.Render(), "\n")
+	returnLines := strings.Split(returnTable.Render(), "\n")
+
+	// Calculate the width of the forward table (using the first line which is typically the widest)
+	forwardWidth := 0
+	if len(forwardLines) > 0 {
+		forwardWidth = len(stripAnsiCodes(forwardLines[0]))
+	}
+
+	// Print headers - pad the forward header to align with the return header
+	forwardHeader := "    " + text.Bold.Sprint("Forward Path")
+	forwardHeaderPadding := forwardWidth - len(stripAnsiCodes(forwardHeader))
+	if forwardHeaderPadding < 0 {
+		forwardHeaderPadding = 0
+	}
+	fmt.Println(forwardHeader + strings.Repeat(" ", forwardHeaderPadding) + " " + text.Bold.Sprint("Return Path"))
+
+	// Print tables side by side
+	maxLines := len(forwardLines)
+	if len(returnLines) > maxLines {
+		maxLines = len(returnLines)
+	}
+
+	for i := 0; i < maxLines; i++ {
+		forwardLine := ""
+		if i < len(forwardLines) {
+			forwardLine = forwardLines[i]
+		}
+
+		returnLine := ""
+		if i < len(returnLines) {
+			returnLine = returnLines[i]
+		}
+
+		// Pad forward line to consistent width
+		forwardLine = padRight(forwardLine, 85)
+		fmt.Printf("    %s %s\n", forwardLine, returnLine)
+	}
+}
+
+// displaySingleTrace displays a single trace with a title.
+func displaySingleTrace(trace *gcp.Trace, title string) {
+	fmt.Println("    " + text.Bold.Sprint(title))
+
+	t := table.NewWriter()
+	t.SetOutputMirror(os.Stdout)
+	t.SetStyle(table.StyleLight)
+	t.Style().Options.SeparateRows = true
+	t.AppendHeader(table.Row{"#", "Step", "Type", "Resource", "Status"})
+
+	for i, step := range trace.Steps {
+		stepNum := fmt.Sprintf("%d", i+1)
+		stepType, resource, status := formatTraceStepForTable(step)
+
+		if step.CausesDrop {
+			stepNum = text.Bold.Sprint(text.FgRed.Sprint(stepNum))
+			stepType = text.Bold.Sprint(text.FgRed.Sprint(stepType))
+			resource = text.Bold.Sprint(text.FgRed.Sprint(resource))
+			status = text.Bold.Sprint(text.FgRed.Sprint(status))
+		} else {
+			status = text.FgGreen.Sprint(status)
+		}
+
+		t.AppendRow(table.Row{stepNum, getStepIcon(i, len(trace.Steps), step.CausesDrop), stepType, resource, status})
+	}
+
+	t.Render()
+}
+
+// padRight pads a string to the right with spaces, accounting for ANSI color codes.
+func padRight(s string, length int) string {
+	// Remove ANSI codes to calculate visible length
+	visibleLen := len(stripAnsiCodes(s))
+	if visibleLen >= length {
+		return s
+	}
+	return s + strings.Repeat(" ", length-visibleLen)
+}
+
+// stripAnsiCodes removes ANSI escape codes from a string for length calculation.
+func stripAnsiCodes(s string) string {
+	// Simple regex to strip ANSI codes: \x1b\[[0-9;]*m
+	result := ""
+	inEscape := false
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			inEscape = true
+			i++ // skip '['
+			continue
+		}
+		if inEscape {
+			if (s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z') {
+				inEscape = false
+			}
+			continue
+		}
+		result += string(s[i])
+	}
+	return result
+}
+
+// getStepIcon returns the appropriate icon for a step based on its position and status.
+func getStepIcon(index, total int, causesDrop bool) string {
+	if causesDrop {
+		return "✗"
+	}
+	if index == 0 {
+		return "→"
+	}
+	if index == total-1 {
+		return "✓"
+	}
+	return "→"
 }
 
 // formatTraceStep formats a trace step for display.
@@ -273,6 +522,38 @@ func formatTraceStep(step *gcp.TraceStep) string {
 	}
 
 	return step.State
+}
+
+// formatTraceStepForTable formats a trace step for table display, returning type, resource, and status.
+func formatTraceStepForTable(step *gcp.TraceStep) (stepType string, resource string, status string) {
+	if step.Instance != "" {
+		return "VM Instance", extractResourceName(step.Instance), "OK"
+	}
+
+	if step.Firewall != "" {
+		if step.CausesDrop {
+			return "Firewall", step.Firewall, "BLOCKED"
+		}
+		return "Firewall", step.Firewall, "ALLOWED"
+	}
+
+	if step.Route != "" {
+		return "Route", step.Route, "OK"
+	}
+
+	if step.VPC != "" {
+		return "VPC", step.VPC, "OK"
+	}
+
+	if step.LoadBalancer != "" {
+		return "Load Balancer", step.LoadBalancer, "OK"
+	}
+
+	if step.Description != "" {
+		return "Step", step.Description, step.State
+	}
+
+	return "Step", "-", step.State
 }
 
 // displaySuggestedFixes displays suggested fixes for failed tests.

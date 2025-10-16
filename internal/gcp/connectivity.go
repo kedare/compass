@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"cx/internal/logger"
@@ -39,17 +40,18 @@ type ConnectivityTestConfig struct {
 
 // ConnectivityTestResult represents the result of a connectivity test.
 type ConnectivityTestResult struct {
-	CreateTime          time.Time
-	UpdateTime          time.Time
-	Source              *EndpointInfo
-	Destination         *EndpointInfo
-	ReachabilityDetails *ReachabilityDetails
-	Name                string
-	DisplayName         string
-	Description         string
-	Protocol            string
-	State               string
-	Result              string
+	CreateTime                time.Time
+	UpdateTime                time.Time
+	Source                    *EndpointInfo
+	Destination               *EndpointInfo
+	ReachabilityDetails       *ReachabilityDetails
+	ReturnReachabilityDetails *ReachabilityDetails
+	Name                      string
+	DisplayName               string
+	Description               string
+	Protocol                  string
+	State                     string
+	Result                    string
 }
 
 // EndpointInfo represents source or destination endpoint information.
@@ -72,8 +74,9 @@ type ReachabilityDetails struct {
 
 // Trace represents a network trace.
 type Trace struct {
-	EndpointInfo *EndpointInfo
-	Steps        []*TraceStep
+	EndpointInfo   *EndpointInfo
+	Steps          []*TraceStep
+	ForwardTraceID int64
 }
 
 // TraceStep represents a single step in the network trace.
@@ -321,36 +324,11 @@ func (c *ConnectivityClient) convertTestResult(test *networkmanagement.Connectiv
 	}
 
 	if test.ReachabilityDetails != nil {
-		errMsg := ""
-		if test.ReachabilityDetails.Error != nil {
-			errMsg = test.ReachabilityDetails.Error.Message
-		}
-		result.ReachabilityDetails = &ReachabilityDetails{
-			Result: test.ReachabilityDetails.Result,
-			Error:  errMsg,
-		}
+		result.ReachabilityDetails = c.convertReachabilityDetails(test.ReachabilityDetails)
+	}
 
-		if test.ReachabilityDetails.VerifyTime != "" {
-			if t, err := time.Parse(time.RFC3339, test.ReachabilityDetails.VerifyTime); err == nil {
-				result.ReachabilityDetails.VerifyTime = t
-			}
-		}
-
-		// Convert traces
-		for _, trace := range test.ReachabilityDetails.Traces {
-			t := &Trace{
-				Steps: make([]*TraceStep, 0),
-			}
-			if trace.EndpointInfo != nil {
-				t.EndpointInfo = c.convertEndpointInfo(trace.EndpointInfo)
-			}
-
-			for _, step := range trace.Steps {
-				t.Steps = append(t.Steps, c.convertTraceStep(step))
-			}
-
-			result.ReachabilityDetails.Traces = append(result.ReachabilityDetails.Traces, t)
-		}
+	if test.ReturnReachabilityDetails != nil {
+		result.ReturnReachabilityDetails = c.convertReachabilityDetails(test.ReturnReachabilityDetails)
 	}
 
 	if test.CreateTime != "" {
@@ -363,6 +341,48 @@ func (c *ConnectivityClient) convertTestResult(test *networkmanagement.Connectiv
 		if t, err := time.Parse(time.RFC3339, test.UpdateTime); err == nil {
 			result.UpdateTime = t
 		}
+	}
+
+	return result
+}
+
+// convertReachabilityDetails converts API reachability details to our internal format.
+func (c *ConnectivityClient) convertReachabilityDetails(details *networkmanagement.ReachabilityDetails) *ReachabilityDetails {
+	if details == nil {
+		return nil
+	}
+
+	errMsg := ""
+	if details.Error != nil {
+		errMsg = details.Error.Message
+	}
+
+	result := &ReachabilityDetails{
+		Result: details.Result,
+		Error:  errMsg,
+	}
+
+	if details.VerifyTime != "" {
+		if t, err := time.Parse(time.RFC3339, details.VerifyTime); err == nil {
+			result.VerifyTime = t
+		}
+	}
+
+	// Convert traces
+	for _, trace := range details.Traces {
+		t := &Trace{
+			Steps:          make([]*TraceStep, 0),
+			ForwardTraceID: trace.ForwardTraceId,
+		}
+		if trace.EndpointInfo != nil {
+			t.EndpointInfo = c.convertEndpointInfo(trace.EndpointInfo)
+		}
+
+		for _, step := range trace.Steps {
+			t.Steps = append(t.Steps, c.convertTraceStep(step))
+		}
+
+		result.Traces = append(result.Traces, t)
 	}
 
 	return result
@@ -455,15 +475,5 @@ func extractTestName(fullName string) string {
 
 // splitResourceName splits a resource name by '/'.
 func splitResourceName(name string) []string {
-	var parts []string
-
-	for _, part := range []byte(name) {
-		if part == '/' {
-			continue
-		}
-
-		parts = append(parts, string(part))
-	}
-
-	return parts
+	return strings.Split(name, "/")
 }
