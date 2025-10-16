@@ -15,38 +15,18 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
-const (
-	forwardTableWidth      = 85
-	separatorWidth         = 1
-	leftPaddingWidth       = 4
-	sideBySideSafetyMargin = 40
-)
-
 func detectTerminalWidth() (int, bool) {
-	if width, ok := systemTerminalWidth(); ok {
-		return width, true
-	}
-
 	if raw, ok := os.LookupEnv("COLUMNS"); ok {
 		if width, err := strconv.Atoi(raw); err == nil && width > 0 {
 			return width, true
 		}
 	}
 
-	return 0, false
-}
-
-func canDisplaySideBySide(forwardLines, returnLines []string) bool {
-	width, ok := detectTerminalWidth()
-	if !ok {
-		return false
+	if width, ok := systemTerminalWidth(); ok {
+		return width, true
 	}
 
-	forwardWidth := maxVisibleWidth(forwardLines)
-	returnWidth := maxVisibleWidth(returnLines)
-	required := leftPaddingWidth + forwardWidth + separatorWidth + returnWidth + sideBySideSafetyMargin*2
-
-	return width >= required
+	return 0, false
 }
 
 // DisplayConnectivityTestResult formats and displays a connectivity test result.
@@ -319,173 +299,183 @@ func displayTraces(traces []*gcp.Trace, isReachable bool) {
 
 // displayForwardAndReturnPaths displays forward and return traces, pairing them when possible.
 func displayForwardAndReturnPaths(forwardTraces []*gcp.Trace, returnTraces []*gcp.Trace, isReachable bool) {
-	// If we have both forward and return traces, try to pair them
-	if len(forwardTraces) > 0 && len(returnTraces) > 0 {
-		// For simplicity, pair the first forward with the first return
-		// In more complex scenarios, you might want to match by endpoint or other criteria
-		total := len(forwardTraces)
-		for i := 0; i < total && i < len(returnTraces); i++ {
-			if i > 0 {
-				fmt.Println()
-			}
+	pairs := len(forwardTraces)
+	if len(returnTraces) < pairs {
+		pairs = len(returnTraces)
+	}
 
-			if displayed := displayForwardAndReturnSideBySide(forwardTraces[i], returnTraces[i], total, i); !displayed {
-				forwardTitle := "Forward Path"
-				if total > 1 {
-					forwardTitle = fmt.Sprintf("Forward Path %d of %d", i+1, total)
-				}
-
-				returnTitle := "Return Path"
-				if len(returnTraces) > 1 {
-					returnTitle = fmt.Sprintf("Return Path %d of %d", i+1, len(returnTraces))
-				}
-
-				displaySingleTrace(forwardTraces[i], forwardTitle)
-				fmt.Println()
-				displaySingleTrace(returnTraces[i], returnTitle)
-			}
+	displayCombined := func(forward, backward *gcp.Trace, index int) bool {
+		combined := renderCombinedTrace(forward, backward, index, pairs)
+		if combined == "" {
+			return false
 		}
 
-		// Display any extra forward traces without return
-		for i := len(returnTraces); i < len(forwardTraces); i++ {
-			if i > 0 {
-				fmt.Println()
-			}
-
-			fmt.Printf("    Path %d of %d:\n", i+1, len(forwardTraces))
-			displaySingleTrace(forwardTraces[i], "Forward Path (no return path)")
+		if fitsTerminalWidth(combined) {
+			fmt.Print(combined)
+			return true
 		}
 
-		// Display any extra return traces without forward
-		for i := len(forwardTraces); i < len(returnTraces); i++ {
-			if i > 0 {
-				fmt.Println()
-			}
+		return false
+	}
 
-			displaySingleTrace(returnTraces[i], "Return Path (no forward path)")
+	for i := 0; i < pairs; i++ {
+		if i > 0 {
+			fmt.Println()
 		}
-	} else if len(forwardTraces) > 0 {
-		// Only forward traces
+
+		if displayCombined(forwardTraces[i], returnTraces[i], i) {
+			continue
+		}
+
+		forwardTitle := "Forward Path"
+		if pairs > 1 {
+			forwardTitle = fmt.Sprintf("Forward Path %d of %d", i+1, pairs)
+		}
+
+		returnTitle := "Return Path"
+		if len(returnTraces) > 1 {
+			returnTitle = fmt.Sprintf("Return Path %d of %d", i+1, len(returnTraces))
+		}
+
+		displaySingleTrace(forwardTraces[i], forwardTitle)
+		fmt.Println()
+		displaySingleTrace(returnTraces[i], returnTitle)
+	}
+
+	for i := pairs; i < len(forwardTraces); i++ {
+		fmt.Println()
+		displaySingleTrace(forwardTraces[i], fmt.Sprintf("Forward Path %d of %d (no return path)", i+1, len(forwardTraces)))
+	}
+
+	for i := pairs; i < len(returnTraces); i++ {
+		fmt.Println()
+		displaySingleTrace(returnTraces[i], fmt.Sprintf("Return Path %d of %d (no forward path)", i+1, len(returnTraces)))
+	}
+
+	if pairs > 0 {
+		return
+	}
+
+	if len(forwardTraces) > 0 {
 		for i, trace := range forwardTraces {
 			if i > 0 {
 				fmt.Println()
 			}
 
+			title := "Forward Path"
 			if len(forwardTraces) > 1 {
-				fmt.Printf("    Path %d of %d:\n", i+1, len(forwardTraces))
+				title = fmt.Sprintf("Forward Path %d of %d", i+1, len(forwardTraces))
 			}
 
-			displaySingleTrace(trace, "Forward Path")
+			displaySingleTrace(trace, title)
 		}
-	} else if len(returnTraces) > 0 {
-		// Only return traces (unusual)
-		for i, trace := range returnTraces {
-			if i > 0 {
-				fmt.Println()
-			}
 
-			if len(returnTraces) > 1 {
-				fmt.Printf("    Path %d of %d:\n", i+1, len(returnTraces))
-			}
+		return
+	}
 
-			displaySingleTrace(trace, "Return Path")
+	for i, trace := range returnTraces {
+		if i > 0 {
+			fmt.Println()
 		}
+
+		title := "Return Path"
+		if len(returnTraces) > 1 {
+			title = fmt.Sprintf("Return Path %d of %d", i+1, len(returnTraces))
+		}
+
+		displaySingleTrace(trace, title)
 	}
 }
 
 // displayForwardAndReturnSideBySide displays forward and return traces in two columns.
-func displayForwardAndReturnSideBySide(forward *gcp.Trace, returnTrace *gcp.Trace, total int, index int) bool {
-	// Create two tables side by side
-	forwardTable := table.NewWriter()
-	forwardTable.SetStyle(table.StyleLight)
-	forwardTable.Style().Options.SeparateRows = true
-	forwardTable.AppendHeader(table.Row{"#", "Step", "Type", "Resource", "Status"})
 
-	returnTable := table.NewWriter()
-	returnTable.SetStyle(table.StyleLight)
-	returnTable.Style().Options.SeparateRows = true
-	returnTable.AppendHeader(table.Row{"#", "Step", "Type", "Resource", "Status"})
-
-	// Populate forward table
-	for i, step := range forward.Steps {
-		stepNum := fmt.Sprintf("%d", i+1)
-		stepType, resource, status := formatTraceStepForTable(step)
-
-		if step.CausesDrop {
-			stepNum = text.Bold.Sprint(text.FgRed.Sprint(stepNum))
-			stepType = text.Bold.Sprint(text.FgRed.Sprint(stepType))
-			resource = text.Bold.Sprint(text.FgRed.Sprint(resource))
-			status = text.Bold.Sprint(text.FgRed.Sprint(status))
-		} else {
-			status = text.FgGreen.Sprint(status)
-		}
-
-		forwardTable.AppendRow(table.Row{stepNum, getStepIcon(i, len(forward.Steps), step.CausesDrop), stepType, resource, status})
+func renderCombinedTrace(forward, backward *gcp.Trace, index, total int) string {
+	if forward == nil || backward == nil {
+		return ""
 	}
 
-	// Populate return table
-	for i, step := range returnTrace.Steps {
-		stepNum := fmt.Sprintf("%d", i+1)
-		stepType, resource, status := formatTraceStepForTable(step)
+	t := table.NewWriter()
+	t.SetStyle(table.StyleLight)
+	t.Style().Options.SeparateRows = true
+	t.SuppressEmptyColumns()
 
-		if step.CausesDrop {
-			stepNum = text.Bold.Sprint(text.FgRed.Sprint(stepNum))
-			stepType = text.Bold.Sprint(text.FgRed.Sprint(stepType))
-			resource = text.Bold.Sprint(text.FgRed.Sprint(resource))
-			status = text.Bold.Sprint(text.FgRed.Sprint(status))
-		} else {
-			status = text.FgGreen.Sprint(status)
-		}
+	t.AppendRow(table.Row{
+		text.Bold.Sprint("Forward Path"), "", "", "", "",
+		text.Bold.Sprint("Return Path"), "", "", "", "",
+	}, table.RowConfig{AutoMerge: true})
 
-		returnTable.AppendRow(table.Row{stepNum, getStepIcon(i, len(returnTrace.Steps), step.CausesDrop), stepType, resource, status})
+	t.AppendRow(table.Row{"#", "Step", "Type", "Resource", "Status", "#", "Step", "Type", "Resource", "Status"})
+
+	maxSteps := len(forward.Steps)
+	if len(backward.Steps) > maxSteps {
+		maxSteps = len(backward.Steps)
 	}
 
-	forwardLines := strings.Split(forwardTable.Render(), "\n")
-	returnLines := strings.Split(returnTable.Render(), "\n")
-
-	if !canDisplaySideBySide(forwardLines, returnLines) {
-		return false
+	for i := 0; i < maxSteps; i++ {
+		f := traceStepCells(forward, i)
+		r := traceStepCells(backward, i)
+		t.AppendRow(table.Row{f[0], f[1], f[2], f[3], f[4], r[0], r[1], r[2], r[3], r[4]})
 	}
 
-	forwardWidth := maxVisibleWidth(forwardLines)
+	lines := strings.Split(t.Render(), "\n")
+	var builder strings.Builder
 
 	if total > 1 {
-		fmt.Printf("    Path %d of %d:\n", index+1, total)
+		builder.WriteString(fmt.Sprintf("    Path %d of %d:\n", index+1, total))
 	}
 
-	// Print headers - pad the forward header to align with the return header
-	forwardHeader := text.Bold.Sprint("Forward Path")
-	returnHeader := text.Bold.Sprint("Return Path")
-
-	paddingNeeded := forwardWidth - len(stripAnsiCodes(forwardHeader)) + separatorWidth
-	if paddingNeeded < 1 {
-		paddingNeeded = 1
-	}
-
-	fmt.Println("     " + forwardHeader + strings.Repeat(" ", paddingNeeded) + returnHeader)
-
-	// Print tables side by side
-	maxLines := len(forwardLines)
-	if len(returnLines) > maxLines {
-		maxLines = len(returnLines)
-	}
-
-	for i := 0; i < maxLines; i++ {
-		forwardLine := ""
-		if i < len(forwardLines) {
-			forwardLine = forwardLines[i]
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
 		}
 
-		returnLine := ""
-		if i < len(returnLines) {
-			returnLine = returnLines[i]
-		}
-
-		forwardLine = padRight(forwardLine, forwardWidth)
-		fmt.Printf("    %s %s\n", forwardLine, returnLine)
+		builder.WriteString("    ")
+		builder.WriteString(line)
+		builder.WriteByte('\n')
 	}
 
-	return true
+	return builder.String()
+}
+
+func traceStepCells(trace *gcp.Trace, index int) [5]string {
+	if trace == nil || index >= len(trace.Steps) {
+		return [5]string{"", "", "", "", ""}
+	}
+
+	step := trace.Steps[index]
+	stepNum := fmt.Sprintf("%d", index+1)
+	stepType, resource, status := formatTraceStepForTable(step)
+
+	if step.CausesDrop {
+		stepNum = text.Bold.Sprint(text.FgRed.Sprint(stepNum))
+		stepType = text.Bold.Sprint(text.FgRed.Sprint(stepType))
+		resource = text.Bold.Sprint(text.FgRed.Sprint(resource))
+		status = text.Bold.Sprint(text.FgRed.Sprint(status))
+	} else {
+		status = text.FgGreen.Sprint(status)
+	}
+
+	return [5]string{stepNum, getStepIcon(index, len(trace.Steps), step.CausesDrop), stepType, resource, status}
+}
+
+func fitsTerminalWidth(block string) bool {
+	width, ok := detectTerminalWidth()
+	if !ok {
+		return true
+	}
+
+	maxWidth := 0
+	for _, line := range strings.Split(block, "\n") {
+		if line == "" {
+			continue
+		}
+
+		if w := visibleWidth(line); w > maxWidth {
+			maxWidth = w
+		}
+	}
+
+	return maxWidth <= width
 }
 
 // displaySingleTrace displays a single trace with a title.
@@ -517,27 +507,7 @@ func displaySingleTrace(trace *gcp.Trace, title string) {
 	t.Render()
 }
 
-func maxVisibleWidth(lines []string) int {
-	max := 0
-	for _, line := range lines {
-		if width := visibleWidth(line); width > max {
-			max = width
-		}
-	}
-
-	return max
-}
-
 // padRight pads a string to the right with spaces, accounting for ANSI color codes.
-func padRight(s string, length int) string {
-	// Remove ANSI codes to calculate visible length
-	visibleLen := visibleWidth(s)
-	if visibleLen >= length {
-		return s
-	}
-
-	return s + strings.Repeat(" ", length-visibleLen)
-}
 
 func visibleWidth(s string) int {
 	return runewidth.StringWidth(stripAnsiCodes(s))

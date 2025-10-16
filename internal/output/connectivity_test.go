@@ -9,8 +9,7 @@ import (
 	"testing"
 
 	"cx/internal/gcp"
-	"github.com/jedib0t/go-pretty/v6/table"
-	"github.com/jedib0t/go-pretty/v6/text"
+	"github.com/mattn/go-runewidth"
 )
 
 func captureStdout(t *testing.T, fn func()) string {
@@ -63,7 +62,15 @@ func TestDisplayForwardAndReturnPaths_RespectsTerminalWidth(t *testing.T) {
 	forward := makeTrace("forward")
 	backward := makeTrace("return")
 
-	t.Setenv("COLUMNS", "175")
+	combined := renderCombinedTrace(forward, backward, 0, 1)
+	required := maximumLineWidth(combined)
+
+	narrow := required - 1
+	if narrow < 1 {
+		narrow = 1
+	}
+
+	t.Setenv("COLUMNS", fmt.Sprintf("%d", narrow))
 	sequential := captureStdout(t, func() {
 		displayForwardAndReturnPaths([]*gcp.Trace{forward}, []*gcp.Trace{backward}, true)
 	})
@@ -72,45 +79,85 @@ func TestDisplayForwardAndReturnPaths_RespectsTerminalWidth(t *testing.T) {
 		t.Fatalf("expected sequential layout on narrow terminal, got:\n%s", sequential)
 	}
 
-	t.Setenv("COLUMNS", "260")
-	if width, ok := detectTerminalWidth(); !ok || width != 260 {
-		t.Fatalf("expected terminal width 260, got %d (ok=%v)", width, ok)
+	wide := required + 10
+	t.Setenv("COLUMNS", fmt.Sprintf("%d", wide))
+	if width, ok := detectTerminalWidth(); !ok || width != wide {
+		t.Fatalf("expected terminal width %d, got %d (ok=%v)", wide, width, ok)
 	}
 
-	forwardLines := renderTraceLines(forward)
-	returnLines := renderTraceLines(backward)
-	required := leftPaddingWidth + maxVisibleWidth(forwardLines) + separatorWidth + maxVisibleWidth(returnLines) + sideBySideSafetyMargin*2
-	t.Logf("required width %d", required)
 	sideBySide := captureStdout(t, func() {
 		displayForwardAndReturnPaths([]*gcp.Trace{forward}, []*gcp.Trace{backward}, true)
 	})
 
 	if !lineWithForwardAndReturn(sideBySide) {
-		t.Fatalf("expected side-by-side layout on wide terminal, got:\n%s", sideBySide)
+		t.Fatalf("expected combined layout on wide terminal, got:\n%s", sideBySide)
 	}
 }
 
-func renderTraceLines(trace *gcp.Trace) []string {
-	tw := table.NewWriter()
-	tw.SetStyle(table.StyleLight)
-	tw.Style().Options.SeparateRows = true
-	tw.AppendHeader(table.Row{"#", "Step", "Type", "Resource", "Status"})
+func TestRenderCombinedTraceAlignment(t *testing.T) {
+	forward := makeTrace("forward")
+	forward.Steps = append(forward.Steps, []*gcp.TraceStep{
+		{Description: "Forwarding state: arriving at a VPC VPN tunnel.", State: "ARRIVE_AT_VPN_TUNNEL"},
+		{Description: "Forwarding state: arriving at a VPC VPN gateway.", State: "ARRIVE_AT_VPN_GATEWAY"},
+		{Description: "Config checking state: analyze load balancer backend.", State: "ANALYZE_LOAD_BALANCER_BACKEND"},
+		{Description: "Config checking state: match forwarding rule.", State: "APPLY_FORWARDING_RULE"},
+	}...)
 
-	for i, step := range trace.Steps {
-		stepNum := fmt.Sprintf("%d", i+1)
-		stepType, resource, status := formatTraceStepForTable(step)
+	backward := makeTrace("return")
+	backward.Steps = append(backward.Steps, []*gcp.TraceStep{
+		{Description: "Forwarding state: arriving at a VPC VPN tunnel.", State: "ARRIVE_AT_VPN_TUNNEL"},
+		{Description: "Config checking state: verify INGRESS firewall rule.", State: "APPLY_INGRESS_FIREWALL_RULE"},
+		{Description: "Final state: packet delivered to instance.", State: "DELIVER"},
+	}...)
 
-		if step.CausesDrop {
-			stepNum = text.Bold.Sprint(text.FgRed.Sprint(stepNum))
-			stepType = text.Bold.Sprint(text.FgRed.Sprint(stepType))
-			resource = text.Bold.Sprint(text.FgRed.Sprint(resource))
-			status = text.Bold.Sprint(text.FgRed.Sprint(status))
-		} else {
-			status = text.FgGreen.Sprint(status)
+	combined := renderCombinedTrace(forward, backward, 0, 1)
+	t.Setenv("COLUMNS", fmt.Sprintf("%d", maximumLineWidth(combined)+10))
+
+	out := captureStdout(t, func() {
+		fmt.Print(combined)
+	})
+
+	lines := strings.Split(out, "\n")
+	column := -1
+	for _, line := range lines {
+		idx := firstTableColumn(line)
+		if idx == -1 {
+			continue
 		}
 
-		tw.AppendRow(table.Row{stepNum, getStepIcon(i, len(trace.Steps), step.CausesDrop), stepType, resource, status})
+		if column == -1 {
+			column = idx
+			continue
+		}
+
+		if column != idx {
+			t.Fatalf("expected consistent column start %d, got %d on line %q", column, idx, line)
+		}
 	}
 
-	return strings.Split(tw.Render(), "\n")
+	if column == -1 {
+		t.Fatal("failed to detect right table column")
+	}
+}
+
+func firstTableColumn(line string) int {
+	for i, r := range line {
+		switch r {
+		case '┌', '└', '┴', '┬', '┼', '│', '├', '┤':
+			return runewidth.StringWidth(stripAnsiCodes(line[:i]))
+		}
+	}
+
+	return -1
+}
+
+func maximumLineWidth(s string) int {
+	max := 0
+	for _, line := range strings.Split(s, "\n") {
+		if w := runewidth.StringWidth(stripAnsiCodes(line)); w > max {
+			max = w
+		}
+	}
+
+	return max
 }
