@@ -36,6 +36,8 @@ func stubLookPath(mapping map[string]string) func(string) (string, error) {
 	}
 }
 
+type ctxKey string
+
 func TestNewClient(t *testing.T) {
 	client := NewClient()
 	if client == nil {
@@ -61,7 +63,7 @@ func TestConnectWithIAP_NoExternalIP(t *testing.T) {
 		CanUseIAP:  false,
 	}
 
-	err := client.ConnectWithIAP(instance, "test-project", nil)
+	err := client.ConnectWithIAP(context.Background(), instance, "test-project", nil)
 	if err == nil {
 		t.Fatal("expected error for instance without external IP and IAP disabled")
 	}
@@ -87,7 +89,9 @@ func TestConnectWithIAP_UsesDirectCommand(t *testing.T) {
 	}
 
 	sshFlags := []string{"-i", "~/.ssh/id_rsa"}
-	if err := client.ConnectWithIAP(instance, "test-project", sshFlags); err != nil {
+	ctx := context.WithValue(context.Background(), ctxKey("runner"), "direct")
+
+	if err := client.ConnectWithIAP(ctx, instance, "test-project", sshFlags); err != nil {
 		t.Fatalf("ConnectWithIAP returned error: %v", err)
 	}
 
@@ -100,8 +104,8 @@ func TestConnectWithIAP_UsesDirectCommand(t *testing.T) {
 		t.Fatalf("unexpected args: got %v want %v", runner.args, expectedArgs)
 	}
 
-	if runner.ctx == nil {
-		t.Fatal("expected context to be provided to runner")
+	if runner.ctx != ctx {
+		t.Fatal("expected provided context to be forwarded to runner")
 	}
 }
 
@@ -120,7 +124,9 @@ func TestConnectWithIAP_UsesIAPCommand(t *testing.T) {
 	}
 
 	flags := []string{"-L 8080:localhost:8080"}
-	if err := client.ConnectWithIAP(instance, "demo-project", flags); err != nil {
+	ctx := context.WithValue(context.Background(), ctxKey("runner"), "iap")
+
+	if err := client.ConnectWithIAP(ctx, instance, "demo-project", flags); err != nil {
 		t.Fatalf("ConnectWithIAP returned error: %v", err)
 	}
 
@@ -141,8 +147,8 @@ func TestConnectWithIAP_UsesIAPCommand(t *testing.T) {
 		t.Fatalf("unexpected args: got %v want %v", runner.args, expectedArgs)
 	}
 
-	if runner.ctx == nil {
-		t.Fatal("expected context to be provided to runner")
+	if runner.ctx != ctx {
+		t.Fatal("expected provided context to be forwarded to runner")
 	}
 }
 
@@ -160,7 +166,7 @@ func TestConnectWithIAP_PropagatesRunnerError(t *testing.T) {
 		CanUseIAP: true,
 	}
 
-	err := client.ConnectWithIAP(instance, "demo-project", nil)
+	err := client.ConnectWithIAP(context.Background(), instance, "demo-project", nil)
 	if err == nil {
 		t.Fatal("expected error when runner fails")
 	}

@@ -41,19 +41,23 @@ func NewClient() *Client {
 	}
 }
 
-func (c *Client) ConnectWithIAP(instance *gcp.Instance, project string, sshFlags []string) error {
+func (c *Client) ConnectWithIAP(ctx context.Context, instance *gcp.Instance, project string, sshFlags []string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	if !instance.CanUseIAP {
 		logger.Log.Debug("IAP not available, using direct connection")
 
-		return c.connectDirect(instance, sshFlags)
+		return c.connectDirect(ctx, instance, sshFlags)
 	}
 
 	logger.Log.Debug("Using IAP tunnel for connection")
 
-	return c.connectViaIAP(instance, project, sshFlags)
+	return c.connectViaIAP(ctx, instance, project, sshFlags)
 }
 
-func (c *Client) connectViaIAP(instance *gcp.Instance, project string, sshFlags []string) error {
+func (c *Client) connectViaIAP(ctx context.Context, instance *gcp.Instance, project string, sshFlags []string) error {
 	gcloudPath, err := c.lookPath("gcloud")
 	if err != nil {
 		logger.Log.Errorf("gcloud binary not found in PATH: %v", err)
@@ -79,14 +83,14 @@ func (c *Client) connectViaIAP(instance *gcp.Instance, project string, sshFlags 
 
 	logger.Log.Info("Establishing SSH connection via IAP tunnel...")
 
-	if err := c.runner.Run(context.Background(), gcloudPath, cmdArgs); err != nil {
+	if err := c.runner.Run(ctx, gcloudPath, cmdArgs); err != nil {
 		return fmt.Errorf("gcloud ssh command failed: %w", err)
 	}
 
 	return nil
 }
 
-func (c *Client) connectDirect(instance *gcp.Instance, sshFlags []string) error {
+func (c *Client) connectDirect(ctx context.Context, instance *gcp.Instance, sshFlags []string) error {
 	logger.Log.Debug("Attempting direct SSH connection")
 
 	if instance.ExternalIP == "" {
@@ -113,7 +117,7 @@ func (c *Client) connectDirect(instance *gcp.Instance, sshFlags []string) error 
 
 	logger.Log.Info("Establishing direct SSH connection...")
 
-	if err := c.runner.Run(context.Background(), sshPath, cmdArgs); err != nil {
+	if err := c.runner.Run(ctx, sshPath, cmdArgs); err != nil {
 		return fmt.Errorf("ssh command failed: %w", err)
 	}
 

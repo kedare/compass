@@ -2,6 +2,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -25,7 +26,15 @@ var rootCmd = &cobra.Command{
 }
 
 func Execute() error {
-	return rootCmd.Execute()
+	return ExecuteContext(context.Background())
+}
+
+func ExecuteContext(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	return rootCmd.ExecuteContext(ctx)
 }
 
 func init() {

@@ -60,7 +60,10 @@ Examples:
 			logger.Log.Fatalf("Invalid resource type '%s'. Must be 'instance' or 'mig'", resourceType)
 		}
 
-		ctx := context.Background()
+		ctx := cmd.Context()
+		if ctx == nil {
+			ctx = context.Background()
+		}
 
 		// If project or resource type is not specified, try to get it from cache
 		var cachedResourceType string
@@ -127,7 +130,7 @@ Examples:
 
 		// Connect via SSH with IAP tunnel
 		sshClient := ssh.NewClient()
-		if err := sshClient.ConnectWithIAP(instance, project, sshFlags); err != nil {
+		if err := sshClient.ConnectWithIAP(ctx, instance, project, sshFlags); err != nil {
 			logger.Log.Fatalf("Failed to connect via SSH: %v", err)
 		}
 	},
