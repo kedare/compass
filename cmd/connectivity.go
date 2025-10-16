@@ -5,8 +5,9 @@ import (
 )
 
 var connectivityTestCmd = &cobra.Command{
-	Use:   "connectivity-test",
-	Short: "Manage GCP connectivity tests",
+	Use:     "connectivity-test",
+	Aliases: []string{"ct"},
+	Short:   "Manage GCP connectivity tests",
 	Long: `Create and manage Google Cloud Network Connectivity Tests to validate network paths between resources.
 
 Connectivity tests help you diagnose network connectivity issues by simulating traffic and analyzing

@@ -9,9 +9,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	runOutputFormat string
-)
+var runOutputFormat string
 
 var runCmd = &cobra.Command{
 	Use:   "run <test-name>",
@@ -48,6 +46,7 @@ func runRunTest(ctx context.Context, testName string) {
 
 	// Run the test
 	logger.Log.Info("Running connectivity test (this may take a minute)...")
+
 	result, err := connClient.RunTest(ctx, testName)
 	if err != nil {
 		logger.Log.Fatalf("Failed to run connectivity test: %v", err)

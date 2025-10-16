@@ -3,6 +3,7 @@ package gcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -11,84 +12,84 @@ import (
 	"google.golang.org/api/option"
 )
 
-// ConnectivityClient handles GCP Network Connectivity Test operations
+// ConnectivityClient handles GCP Network Connectivity Test operations.
 type ConnectivityClient struct {
 	service *networkmanagement.Service
 	project string
 }
 
-// ConnectivityTestConfig holds configuration for creating a connectivity test
+// ConnectivityTestConfig holds configuration for creating a connectivity test.
 type ConnectivityTestConfig struct {
-	Name                string
-	Description         string
-	SourceInstance      string
+	Labels              map[string]string
+	SourceProject       string
+	DestinationZone     string
 	SourceZone          string
 	SourceIP            string
 	SourceNetwork       string
-	SourceProject       string
+	Name                string
 	DestinationInstance string
-	DestinationZone     string
+	SourceInstance      string
 	DestinationIP       string
-	DestinationPort     int64
+	Description         string
 	DestinationNetwork  string
 	DestinationProject  string
 	Protocol            string
-	Labels              map[string]string
+	DestinationPort     int64
 }
 
-// ConnectivityTestResult represents the result of a connectivity test
+// ConnectivityTestResult represents the result of a connectivity test.
 type ConnectivityTestResult struct {
+	CreateTime          time.Time
+	UpdateTime          time.Time
+	Source              *EndpointInfo
+	Destination         *EndpointInfo
+	ReachabilityDetails *ReachabilityDetails
 	Name                string
 	DisplayName         string
 	Description         string
-	Source              *EndpointInfo
-	Destination         *EndpointInfo
 	Protocol            string
 	State               string
 	Result              string
-	ReachabilityDetails *ReachabilityDetails
-	CreateTime          time.Time
-	UpdateTime          time.Time
 }
 
-// EndpointInfo represents source or destination endpoint information
+// EndpointInfo represents source or destination endpoint information.
 type EndpointInfo struct {
 	Instance    string
 	IPAddress   string
-	Port        int64
 	Network     string
 	ProjectID   string
 	CloudRegion string
+	Port        int64
 }
 
-// ReachabilityDetails contains detailed information about reachability
+// ReachabilityDetails contains detailed information about reachability.
 type ReachabilityDetails struct {
-	Result      string
-	VerifyTime  time.Time
-	Error       string
-	Traces      []*Trace
+	Result     string
+	VerifyTime time.Time
+	Error      string
+	Traces     []*Trace
 }
 
-// Trace represents a network trace
+// Trace represents a network trace.
 type Trace struct {
-	Steps       []*TraceStep
 	EndpointInfo *EndpointInfo
+	Steps        []*TraceStep
 }
 
-// TraceStep represents a single step in the network trace
+// TraceStep represents a single step in the network trace.
 type TraceStep struct {
-	Description   string
-	State         string
-	CausesDrop    bool
-	ProjectID     string
-	Instance      string
-	Firewall      string
-	Route         string
-	VPC           string
-	LoadBalancer  string
+	Description  string
+	State        string
+	ProjectID    string
+	Instance     string
+	Firewall     string
+	Route        string
+	VPC          string
+	LoadBalancer string
+	CausesDrop   bool
 }
 
-// NewConnectivityClient creates a new connectivity test client
+// NewConnectivityClient creates a new connectivity test client.
 func NewConnectivityClient(ctx context.Context, project string) (*ConnectivityClient, error) {
 	logger.Log.Debug("Creating new GCP connectivity test client")
 
@@ -97,6 +98,7 @@ func NewConnectivityClient(ctx context.Context, project string) (*ConnectivityCl
 		if project == "" {
 			return nil, ErrProjectRequired
 		}
+
 		logger.Log.Debugf("Using default project: %s", project)
 	}
 
@@ -105,6 +107,7 @@ func NewConnectivityClient(ctx context.Context, project string) (*ConnectivityCl
 	))
 	if err != nil {
 		logger.Log.Errorf("Failed to create network management service: %v", err)
+
 		return nil, fmt.Errorf("failed to create network management service: %w", err)
 	}
 
@@ -116,7 +119,7 @@ func NewConnectivityClient(ctx context.Context, project string) (*ConnectivityCl
 	}, nil
 }
 
-// CreateTest creates a new connectivity test
+// CreateTest creates a new connectivity test.
 func (c *ConnectivityClient) CreateTest(ctx context.Context, config *ConnectivityTestConfig) (*ConnectivityTestResult, error) {
 	logger.Log.Debugf("Creating connectivity test: %s", config.Name)
 
@@ -134,9 +137,11 @@ func (c *ConnectivityClient) CreateTest(ctx context.Context, config *Connectivit
 		test.Source.Instance = fmt.Sprintf("projects/%s/zones/%s/instances/%s",
 			c.getProject(config.SourceProject), config.SourceZone, config.SourceInstance)
 	}
+
 	if config.SourceIP != "" {
 		test.Source.IpAddress = config.SourceIP
 	}
+
 	if config.SourceNetwork != "" {
 		test.Source.Network = fmt.Sprintf("projects/%s/global/networks/%s",
 			c.getProject(config.SourceProject), config.SourceNetwork)
@@ -147,24 +152,29 @@ func (c *ConnectivityClient) CreateTest(ctx context.Context, config *Connectivit
 		test.Destination.Instance = fmt.Sprintf("projects/%s/zones/%s/instances/%s",
 			c.getProject(config.DestinationProject), config.DestinationZone, config.DestinationInstance)
 	}
+
 	if config.DestinationIP != "" {
 		test.Destination.IpAddress = config.DestinationIP
 	}
+
 	if config.DestinationPort > 0 {
 		test.Destination.Port = config.DestinationPort
 	}
+
 	if config.DestinationNetwork != "" {
 		test.Destination.Network = fmt.Sprintf("projects/%s/global/networks/%s",
 			c.getProject(config.DestinationProject), config.DestinationNetwork)
 	}
 
 	parent := fmt.Sprintf("projects/%s/locations/global", c.project)
+
 	op, err := c.service.Projects.Locations.Global.ConnectivityTests.Create(parent, test).
 		TestId(config.Name).
 		Context(ctx).
 		Do()
 	if err != nil {
 		logger.Log.Errorf("Failed to create connectivity test: %v", err)
+
 		return nil, fmt.Errorf("failed to create connectivity test: %w", err)
 	}
 
@@ -179,30 +189,34 @@ func (c *ConnectivityClient) CreateTest(ctx context.Context, config *Connectivit
 	return c.GetTest(ctx, config.Name)
 }
 
-// GetTest retrieves a connectivity test and its results
+// GetTest retrieves a connectivity test and its results.
 func (c *ConnectivityClient) GetTest(ctx context.Context, testName string) (*ConnectivityTestResult, error) {
 	logger.Log.Debugf("Getting connectivity test: %s", testName)
 
 	name := fmt.Sprintf("projects/%s/locations/global/connectivityTests/%s", c.project, testName)
+
 	test, err := c.service.Projects.Locations.Global.ConnectivityTests.Get(name).Context(ctx).Do()
 	if err != nil {
 		logger.Log.Errorf("Failed to get connectivity test: %v", err)
+
 		return nil, fmt.Errorf("failed to get connectivity test: %w", err)
 	}
 
 	return c.convertTestResult(test), nil
 }
 
-// RunTest reruns an existing connectivity test
+// RunTest reruns an existing connectivity test.
 func (c *ConnectivityClient) RunTest(ctx context.Context, testName string) (*ConnectivityTestResult, error) {
 	logger.Log.Debugf("Running connectivity test: %s", testName)
 
 	name := fmt.Sprintf("projects/%s/locations/global/connectivityTests/%s", c.project, testName)
+
 	op, err := c.service.Projects.Locations.Global.ConnectivityTests.Rerun(name, &networkmanagement.RerunConnectivityTestRequest{}).
 		Context(ctx).
 		Do()
 	if err != nil {
 		logger.Log.Errorf("Failed to run connectivity test: %v", err)
+
 		return nil, fmt.Errorf("failed to run connectivity test: %w", err)
 	}
 
@@ -217,7 +231,7 @@ func (c *ConnectivityClient) RunTest(ctx context.Context, testName string) (*Con
 	return c.GetTest(ctx, testName)
 }
 
-// ListTests lists all connectivity tests in the project
+// ListTests lists all connectivity tests in the project.
 func (c *ConnectivityClient) ListTests(ctx context.Context, filter string) ([]*ConnectivityTestResult, error) {
 	logger.Log.Debug("Listing connectivity tests")
 
@@ -229,29 +243,35 @@ func (c *ConnectivityClient) ListTests(ctx context.Context, filter string) ([]*C
 	}
 
 	var results []*ConnectivityTestResult
+
 	err := call.Pages(ctx, func(page *networkmanagement.ListConnectivityTestsResponse) error {
 		for _, test := range page.Resources {
 			results = append(results, c.convertTestResult(test))
 		}
+
 		return nil
 	})
 	if err != nil {
 		logger.Log.Errorf("Failed to list connectivity tests: %v", err)
+
 		return nil, fmt.Errorf("failed to list connectivity tests: %w", err)
 	}
 
 	logger.Log.Debugf("Found %d connectivity tests", len(results))
+
 	return results, nil
 }
 
-// DeleteTest deletes a connectivity test
+// DeleteTest deletes a connectivity test.
 func (c *ConnectivityClient) DeleteTest(ctx context.Context, testName string) error {
 	logger.Log.Debugf("Deleting connectivity test: %s", testName)
 
 	name := fmt.Sprintf("projects/%s/locations/global/connectivityTests/%s", c.project, testName)
+
 	op, err := c.service.Projects.Locations.Global.ConnectivityTests.Delete(name).Context(ctx).Do()
 	if err != nil {
 		logger.Log.Errorf("Failed to delete connectivity test: %v", err)
+
 		return fmt.Errorf("failed to delete connectivity test: %w", err)
 	}
 
@@ -261,12 +281,12 @@ func (c *ConnectivityClient) DeleteTest(ctx context.Context, testName string) er
 	return c.waitForOperation(ctx, op.Name)
 }
 
-// waitForOperation waits for a long-running operation to complete
+// waitForOperation waits for a long-running operation to complete.
 func (c *ConnectivityClient) waitForOperation(ctx context.Context, opName string) error {
 	logger.Log.Debugf("Waiting for operation: %s", opName)
 
 	maxAttempts := 60 // 5 minutes with 5 second intervals
-	for i := 0; i < maxAttempts; i++ {
+	for i := range maxAttempts {
 		op, err := c.service.Projects.Locations.Global.Operations.Get(opName).Context(ctx).Do()
 		if err != nil {
 			return fmt.Errorf("failed to get operation status: %w", err)
@@ -276,7 +296,9 @@ func (c *ConnectivityClient) waitForOperation(ctx context.Context, opName string
 			if op.Error != nil {
 				return fmt.Errorf("operation failed: %s", op.Error.Message)
 			}
+
 			logger.Log.Debug("Operation completed successfully")
+
 			return nil
 		}
 
@@ -284,10 +306,10 @@ func (c *ConnectivityClient) waitForOperation(ctx context.Context, opName string
 		time.Sleep(5 * time.Second)
 	}
 
-	return fmt.Errorf("operation timed out after 5 minutes")
+	return errors.New("operation timed out after 5 minutes")
 }
 
-// convertTestResult converts API test result to our internal format
+// convertTestResult converts API test result to our internal format.
 func (c *ConnectivityClient) convertTestResult(test *networkmanagement.ConnectivityTest) *ConnectivityTestResult {
 	result := &ConnectivityTestResult{
 		Name:        extractTestName(test.Name),
@@ -322,9 +344,11 @@ func (c *ConnectivityClient) convertTestResult(test *networkmanagement.Connectiv
 			if trace.EndpointInfo != nil {
 				t.EndpointInfo = c.convertEndpointInfo(trace.EndpointInfo)
 			}
+
 			for _, step := range trace.Steps {
 				t.Steps = append(t.Steps, c.convertTraceStep(step))
 			}
+
 			result.ReachabilityDetails.Traces = append(result.ReachabilityDetails.Traces, t)
 		}
 	}
@@ -334,6 +358,7 @@ func (c *ConnectivityClient) convertTestResult(test *networkmanagement.Connectiv
 			result.CreateTime = t
 		}
 	}
+
 	if test.UpdateTime != "" {
 		if t, err := time.Parse(time.RFC3339, test.UpdateTime); err == nil {
 			result.UpdateTime = t
@@ -343,11 +368,12 @@ func (c *ConnectivityClient) convertTestResult(test *networkmanagement.Connectiv
 	return result
 }
 
-// convertEndpoint converts API endpoint to our internal format
+// convertEndpoint converts API endpoint to our internal format.
 func (c *ConnectivityClient) convertEndpoint(endpoint *networkmanagement.Endpoint) *EndpointInfo {
 	if endpoint == nil {
 		return nil
 	}
+
 	return &EndpointInfo{
 		Instance:  endpoint.Instance,
 		IPAddress: endpoint.IpAddress,
@@ -357,11 +383,12 @@ func (c *ConnectivityClient) convertEndpoint(endpoint *networkmanagement.Endpoin
 	}
 }
 
-// convertEndpointInfo converts API EndpointInfo to our internal format
+// convertEndpointInfo converts API EndpointInfo to our internal format.
 func (c *ConnectivityClient) convertEndpointInfo(endpointInfo *networkmanagement.EndpointInfo) *EndpointInfo {
 	if endpointInfo == nil {
 		return nil
 	}
+
 	return &EndpointInfo{
 		IPAddress: endpointInfo.DestinationIp,
 		Port:      endpointInfo.DestinationPort,
@@ -369,7 +396,7 @@ func (c *ConnectivityClient) convertEndpointInfo(endpointInfo *networkmanagement
 	}
 }
 
-// convertTraceStep converts API trace step to our internal format
+// convertTraceStep converts API trace step to our internal format.
 func (c *ConnectivityClient) convertTraceStep(step *networkmanagement.Step) *TraceStep {
 	if step == nil {
 		return nil
@@ -386,15 +413,19 @@ func (c *ConnectivityClient) convertTraceStep(step *networkmanagement.Step) *Tra
 	if step.Instance != nil {
 		traceStep.Instance = step.Instance.DisplayName
 	}
+
 	if step.Firewall != nil {
 		traceStep.Firewall = step.Firewall.DisplayName
 	}
+
 	if step.Route != nil {
 		traceStep.Route = step.Route.DisplayName
 	}
+
 	if step.Network != nil {
 		traceStep.VPC = step.Network.DisplayName
 	}
+
 	if step.LoadBalancer != nil {
 		traceStep.LoadBalancer = step.LoadBalancer.LoadBalancerType
 	}
@@ -402,32 +433,37 @@ func (c *ConnectivityClient) convertTraceStep(step *networkmanagement.Step) *Tra
 	return traceStep
 }
 
-// getProject returns the project to use (config or default)
+// getProject returns the project to use (config or default).
 func (c *ConnectivityClient) getProject(configProject string) string {
 	if configProject != "" {
 		return configProject
 	}
+
 	return c.project
 }
 
-// extractTestName extracts the test name from the full resource name
+// extractTestName extracts the test name from the full resource name.
 func extractTestName(fullName string) string {
 	// Full name format: projects/{project}/locations/global/connectivityTests/{test}
 	parts := splitResourceName(fullName)
 	if len(parts) > 0 {
 		return parts[len(parts)-1]
 	}
+
 	return fullName
 }
 
-// splitResourceName splits a resource name by '/'
+// splitResourceName splits a resource name by '/'.
 func splitResourceName(name string) []string {
 	var parts []string
+
 	for _, part := range []byte(name) {
 		if part == '/' {
 			continue
 		}
+
 		parts = append(parts, string(part))
 	}
+
 	return parts
 }

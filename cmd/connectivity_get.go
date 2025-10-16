@@ -93,6 +93,7 @@ func watchTest(ctx context.Context, client *gcp.ConnectivityClient, testName str
 
 	if isTestComplete(result) {
 		logger.Log.Info("Test already completed")
+
 		return result, nil
 	}
 
@@ -105,17 +106,20 @@ func watchTest(ctx context.Context, client *gcp.ConnectivityClient, testName str
 			result, err := client.GetTest(ctx, testName)
 			if err != nil {
 				logger.Log.Warnf("Error checking test status: %v", err)
+
 				continue
 			}
 
 			if isTestComplete(result) {
 				logger.Log.Info("Test completed")
+
 				return result, nil
 			}
 
 			elapsed := time.Since(startTime)
 			if elapsed >= timeout {
 				logger.Log.Warn("Watch timeout reached")
+
 				return result, fmt.Errorf("watch timeout after %v", elapsed)
 			}
 

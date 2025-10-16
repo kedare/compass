@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,24 +13,24 @@ import (
 )
 
 var (
-	createTestName              string
-	createDescription           string
-	createSourceInstance        string
-	createSourceZone            string
-	createSourceType            string
-	createSourceIP              string
-	createSourceNetwork         string
-	createSourceProject         string
-	createDestinationInstance   string
-	createDestinationZone       string
-	createDestinationType       string
-	createDestinationIP         string
-	createDestinationPort       int64
-	createDestinationNetwork    string
-	createDestinationProject    string
-	createProtocol              string
-	createLabels                string
-	createOutputFormat          string
+	createTestName            string
+	createDescription         string
+	createSourceInstance      string
+	createSourceZone          string
+	createSourceType          string
+	createSourceIP            string
+	createSourceNetwork       string
+	createSourceProject       string
+	createDestinationInstance string
+	createDestinationZone     string
+	createDestinationType     string
+	createDestinationIP       string
+	createDestinationPort     int64
+	createDestinationNetwork  string
+	createDestinationProject  string
+	createProtocol            string
+	createLabels              string
+	createOutputFormat        string
 )
 
 var createCmd = &cobra.Command{
@@ -114,6 +115,7 @@ func runCreateTest(ctx context.Context) {
 
 	// Create the test
 	logger.Log.Info("Creating connectivity test (this may take a minute)...")
+
 	result, err := connClient.CreateTest(ctx, config)
 	if err != nil {
 		logger.Log.Fatalf("Failed to create connectivity test: %v", err)
@@ -130,12 +132,12 @@ func runCreateTest(ctx context.Context) {
 func validateCreateInputs() error {
 	// Must have either source instance or source IP
 	if createSourceInstance == "" && createSourceIP == "" {
-		return fmt.Errorf("either --source-instance or --source-ip must be specified")
+		return errors.New("either --source-instance or --source-ip must be specified")
 	}
 
 	// Must have either destination instance or destination IP
 	if createDestinationInstance == "" && createDestinationIP == "" {
-		return fmt.Errorf("either --destination-instance or --destination-ip must be specified")
+		return errors.New("either --destination-instance or --destination-ip must be specified")
 	}
 
 	// If source instance is specified but no zone, we'll auto-discover
@@ -146,15 +148,19 @@ func validateCreateInputs() error {
 
 	// Validate protocol
 	validProtocols := []string{"TCP", "UDP", "ICMP", "ESP", "AH", "SCTP", "GRE"}
+
 	if createProtocol != "" {
 		createProtocol = strings.ToUpper(createProtocol)
 		valid := false
+
 		for _, p := range validProtocols {
 			if createProtocol == p {
 				valid = true
+
 				break
 			}
 		}
+
 		if !valid {
 			return fmt.Errorf("invalid protocol '%s', must be one of: %s", createProtocol, strings.Join(validProtocols, ", "))
 		}
@@ -193,6 +199,7 @@ func resolveSource(ctx context.Context, gcpClient *gcp.Client, config *gcp.Conne
 
 		config.SourceInstance = instance.Name
 		config.SourceZone = instance.Zone
+
 		if createSourceIP == "" {
 			config.SourceIP = instance.InternalIP
 		} else {
@@ -235,6 +242,7 @@ func resolveDestination(ctx context.Context, gcpClient *gcp.Client, config *gcp.
 
 		config.DestinationInstance = instance.Name
 		config.DestinationZone = instance.Zone
+
 		if createDestinationIP == "" {
 			config.DestinationIP = instance.InternalIP
 		} else {
@@ -255,6 +263,7 @@ func parseLabels(labelStr string) map[string]string {
 	}
 
 	labels := make(map[string]string)
+
 	pairs := strings.Split(labelStr, ",")
 	for _, pair := range pairs {
 		kv := strings.SplitN(strings.TrimSpace(pair), "=", 2)
@@ -262,6 +271,7 @@ func parseLabels(labelStr string) map[string]string {
 			labels[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
 		}
 	}
+
 	return labels
 }
 

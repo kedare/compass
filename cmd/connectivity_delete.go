@@ -49,8 +49,10 @@ func runDeleteTest(ctx context.Context, testName string) {
 		if !confirmed {
 			confirmed = confirmDeletion(testName)
 		}
+
 		if !confirmed {
-			logger.Log.Info("Deletion cancelled")
+			logger.Log.Info("Deletion canceled")
+
 			return
 		}
 	}
@@ -63,6 +65,7 @@ func runDeleteTest(ctx context.Context, testName string) {
 
 	// Delete the test
 	logger.Log.Infof("Deleting connectivity test: %s", testName)
+
 	if err := connClient.DeleteTest(ctx, testName); err != nil {
 		logger.Log.Fatalf("Failed to delete connectivity test: %v", err)
 	}
@@ -72,15 +75,18 @@ func runDeleteTest(ctx context.Context, testName string) {
 
 func confirmDeletion(testName string) bool {
 	reader := bufio.NewReader(os.Stdin)
+
 	fmt.Printf("Are you sure you want to delete connectivity test '%s'? (y/N): ", testName)
 
 	response, err := reader.ReadString('\n')
 	if err != nil {
 		logger.Log.Errorf("Failed to read input: %v", err)
+
 		return false
 	}
 
 	response = strings.ToLower(strings.TrimSpace(response))
+
 	return response == "y" || response == "yes"
 }
 
