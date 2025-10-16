@@ -56,3 +56,6 @@ Thumbs.db
 coverage.txt
 coverage.html
 coverage.out
+
+
+.gocache/
