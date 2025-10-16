@@ -117,9 +117,14 @@ func NewConnectivityClient(ctx context.Context, project string) (*ConnectivityCl
 		logger.Log.Debugf("Using default project: %s", project)
 	}
 
-	service, err := networkmanagement.NewService(ctx, option.WithScopes(
-		"https://www.googleapis.com/auth/cloud-platform",
-	))
+	client, err := newHTTPClientWithLogging(ctx, "https://www.googleapis.com/auth/cloud-platform")
+	if err != nil {
+		logger.Log.Errorf("Failed to create HTTP client: %v", err)
+
+		return nil, fmt.Errorf("failed to create HTTP client: %w", err)
+	}
+
+	service, err := networkmanagement.NewService(ctx, option.WithHTTPClient(client))
 	if err != nil {
 		logger.Log.Errorf("Failed to create network management service: %v", err)
 

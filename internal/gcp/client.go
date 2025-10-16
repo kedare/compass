@@ -70,7 +70,14 @@ func NewClient(ctx context.Context, project string) (*Client, error) {
 
 	logger.Log.Debug("Creating compute service")
 
-	service, err := compute.NewService(ctx, option.WithScopes(compute.ComputeScope))
+	httpClient, err := newHTTPClientWithLogging(ctx, compute.ComputeScope)
+	if err != nil {
+		logger.Log.Errorf("Failed to create HTTP client: %v", err)
+
+		return nil, fmt.Errorf("failed to create HTTP client: %w", err)
+	}
+
+	service, err := compute.NewService(ctx, option.WithHTTPClient(httpClient))
 	if err != nil {
 		logger.Log.Errorf("Failed to create compute service: %v", err)
 
