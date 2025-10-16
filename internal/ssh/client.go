@@ -2,11 +2,11 @@
 package ssh
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"syscall"
 
 	"cx/internal/gcp"
 	"cx/internal/logger"
@@ -14,10 +14,31 @@ import (
 
 var ErrNoExternalIPAndNoIAP = errors.New("instance has no external IP and IAP is not available")
 
-type Client struct{}
+type commandRunner interface {
+	Run(ctx context.Context, name string, args []string) error
+}
+
+type execRunner struct{}
+
+func (execRunner) Run(ctx context.Context, name string, args []string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+
+	return cmd.Run()
+}
+
+type Client struct {
+	runner   commandRunner
+	lookPath func(string) (string, error)
+}
 
 func NewClient() *Client {
-	return &Client{}
+	return &Client{
+		runner:   execRunner{},
+		lookPath: exec.LookPath,
+	}
 }
 
 func (c *Client) ConnectWithIAP(instance *gcp.Instance, project string, sshFlags []string) error {
@@ -33,17 +54,14 @@ func (c *Client) ConnectWithIAP(instance *gcp.Instance, project string, sshFlags
 }
 
 func (c *Client) connectViaIAP(instance *gcp.Instance, project string, sshFlags []string) error {
-	// Find gcloud binary path
-	gcloudPath, err := exec.LookPath("gcloud")
+	gcloudPath, err := c.lookPath("gcloud")
 	if err != nil {
 		logger.Log.Errorf("gcloud binary not found in PATH: %v", err)
 
 		return fmt.Errorf("gcloud binary not found in PATH: %w", err)
 	}
 
-	logger.Log.Debugf("Found gcloud binary at: %s", gcloudPath)
-
-	args := []string{
+	cmdArgs := []string{
 		"compute", "ssh",
 		instance.Name,
 		"--zone", instance.Zone,
@@ -51,18 +69,21 @@ func (c *Client) connectViaIAP(instance *gcp.Instance, project string, sshFlags 
 		"--tunnel-through-iap",
 	}
 
-	// Add SSH flags if provided
 	for _, flag := range sshFlags {
-		args = append(args, "--ssh-flag="+flag)
+		cmdArgs = append(cmdArgs, "--ssh-flag="+flag)
 	}
 
-	logger.Log.Debugf("Executing gcloud command: %s %v", gcloudPath, args)
+	logger.Log.Debugf("Executing gcloud command: %s %v", gcloudPath, cmdArgs)
 	logger.Log.Debugf("Instance details - Name: %s, Zone: %s, Status: %s, Project: %s", instance.Name, instance.Zone, instance.Status, project)
 	logger.Log.Debugf("Instance IPs - Internal: %s, External: %s", instance.InternalIP, instance.ExternalIP)
 
 	logger.Log.Info("Establishing SSH connection via IAP tunnel...")
-	// Replace current process with gcloud ssh command
-	return syscall.Exec(gcloudPath, append([]string{"gcloud"}, args...), os.Environ()) //nolint:gosec // G204: Required for executing gcloud binary
+
+	if err := c.runner.Run(context.Background(), gcloudPath, cmdArgs); err != nil {
+		return fmt.Errorf("gcloud ssh command failed: %w", err)
+	}
+
+	return nil
 }
 
 func (c *Client) connectDirect(instance *gcp.Instance, sshFlags []string) error {
@@ -74,27 +95,27 @@ func (c *Client) connectDirect(instance *gcp.Instance, sshFlags []string) error 
 		return ErrNoExternalIPAndNoIAP
 	}
 
-	// Find ssh binary path
-	sshPath, err := exec.LookPath("ssh")
+	sshPath, err := c.lookPath("ssh")
 	if err != nil {
 		logger.Log.Errorf("ssh binary not found in PATH: %v", err)
 
 		return fmt.Errorf("ssh binary not found in PATH: %w", err)
 	}
 
-	logger.Log.Debugf("Found ssh binary at: %s", sshPath)
-
-	args := []string{
+	cmdArgs := []string{
 		instance.ExternalIP,
 	}
 
-	// Add SSH flags if provided
-	args = append(args, sshFlags...)
+	cmdArgs = append(cmdArgs, sshFlags...)
 
-	logger.Log.Debugf("Executing SSH command: %s %v", sshPath, args)
+	logger.Log.Debugf("Executing SSH command: %s %v", sshPath, cmdArgs)
 	logger.Log.Debugf("Connecting to external IP: %s", instance.ExternalIP)
 
 	logger.Log.Info("Establishing direct SSH connection...")
 
-	return syscall.Exec(sshPath, append([]string{"ssh"}, args...), os.Environ()) //nolint:gosec // G204: Required for executing ssh binary
+	if err := c.runner.Run(context.Background(), sshPath, cmdArgs); err != nil {
+		return fmt.Errorf("ssh command failed: %w", err)
+	}
+
+	return nil
 }
