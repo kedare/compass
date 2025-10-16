@@ -5,13 +5,49 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"cx/internal/gcp"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
+	"github.com/mattn/go-runewidth"
 )
+
+const (
+	forwardTableWidth      = 85
+	separatorWidth         = 1
+	leftPaddingWidth       = 4
+	sideBySideSafetyMargin = 40
+)
+
+func detectTerminalWidth() (int, bool) {
+	if width, ok := systemTerminalWidth(); ok {
+		return width, true
+	}
+
+	if raw, ok := os.LookupEnv("COLUMNS"); ok {
+		if width, err := strconv.Atoi(raw); err == nil && width > 0 {
+			return width, true
+		}
+	}
+
+	return 0, false
+}
+
+func canDisplaySideBySide(forwardLines, returnLines []string) bool {
+	width, ok := detectTerminalWidth()
+	if !ok {
+		return false
+	}
+
+	forwardWidth := maxVisibleWidth(forwardLines)
+	returnWidth := maxVisibleWidth(returnLines)
+	required := leftPaddingWidth + forwardWidth + separatorWidth + returnWidth + sideBySideSafetyMargin*2
+
+	return width >= required
+}
 
 // DisplayConnectivityTestResult formats and displays a connectivity test result.
 func DisplayConnectivityTestResult(result *gcp.ConnectivityTestResult, format string) error {
@@ -287,16 +323,27 @@ func displayForwardAndReturnPaths(forwardTraces []*gcp.Trace, returnTraces []*gc
 	if len(forwardTraces) > 0 && len(returnTraces) > 0 {
 		// For simplicity, pair the first forward with the first return
 		// In more complex scenarios, you might want to match by endpoint or other criteria
-		for i := 0; i < len(forwardTraces) && i < len(returnTraces); i++ {
+		total := len(forwardTraces)
+		for i := 0; i < total && i < len(returnTraces); i++ {
 			if i > 0 {
 				fmt.Println()
 			}
 
-			if len(forwardTraces) > 1 {
-				fmt.Printf("    Path %d of %d:\n", i+1, len(forwardTraces))
-			}
+			if displayed := displayForwardAndReturnSideBySide(forwardTraces[i], returnTraces[i], total, i); !displayed {
+				forwardTitle := "Forward Path"
+				if total > 1 {
+					forwardTitle = fmt.Sprintf("Forward Path %d of %d", i+1, total)
+				}
 
-			displayForwardAndReturnSideBySide(forwardTraces[i], returnTraces[i])
+				returnTitle := "Return Path"
+				if len(returnTraces) > 1 {
+					returnTitle = fmt.Sprintf("Return Path %d of %d", i+1, len(returnTraces))
+				}
+
+				displaySingleTrace(forwardTraces[i], forwardTitle)
+				fmt.Println()
+				displaySingleTrace(returnTraces[i], returnTitle)
+			}
 		}
 
 		// Display any extra forward traces without return
@@ -347,7 +394,7 @@ func displayForwardAndReturnPaths(forwardTraces []*gcp.Trace, returnTraces []*gc
 }
 
 // displayForwardAndReturnSideBySide displays forward and return traces in two columns.
-func displayForwardAndReturnSideBySide(forward *gcp.Trace, returnTrace *gcp.Trace) {
+func displayForwardAndReturnSideBySide(forward *gcp.Trace, returnTrace *gcp.Trace, total int, index int) bool {
 	// Create two tables side by side
 	forwardTable := table.NewWriter()
 	forwardTable.SetStyle(table.StyleLight)
@@ -393,20 +440,24 @@ func displayForwardAndReturnSideBySide(forward *gcp.Trace, returnTrace *gcp.Trac
 		returnTable.AppendRow(table.Row{stepNum, getStepIcon(i, len(returnTrace.Steps), step.CausesDrop), stepType, resource, status})
 	}
 
-	// Render tables side by side
 	forwardLines := strings.Split(forwardTable.Render(), "\n")
 	returnLines := strings.Split(returnTable.Render(), "\n")
+
+	if !canDisplaySideBySide(forwardLines, returnLines) {
+		return false
+	}
+
+	forwardWidth := maxVisibleWidth(forwardLines)
+
+	if total > 1 {
+		fmt.Printf("    Path %d of %d:\n", index+1, total)
+	}
 
 	// Print headers - pad the forward header to align with the return header
 	forwardHeader := text.Bold.Sprint("Forward Path")
 	returnHeader := text.Bold.Sprint("Return Path")
 
-	// Calculate padding: we want the return header to start where the return table starts
-	// The forward table will be padded to 85 chars, plus 4 for "    " prefix = 89 total
-	// So the return header should be at position 89 + 1 (for the space between tables)
-	forwardHeaderLen := len(stripAnsiCodes(forwardHeader))
-
-	paddingNeeded := 4 + 115 + 1 - 4 - forwardHeaderLen // 4 is prefix, 85 is table width, 1 is separator, -4 is for the actual prefix we'll add
+	paddingNeeded := forwardWidth - len(stripAnsiCodes(forwardHeader)) + separatorWidth
 	if paddingNeeded < 1 {
 		paddingNeeded = 1
 	}
@@ -430,10 +481,11 @@ func displayForwardAndReturnSideBySide(forward *gcp.Trace, returnTrace *gcp.Trac
 			returnLine = returnLines[i]
 		}
 
-		// Pad forward line to consistent width
-		forwardLine = padRight(forwardLine, 85)
+		forwardLine = padRight(forwardLine, forwardWidth)
 		fmt.Printf("    %s %s\n", forwardLine, returnLine)
 	}
+
+	return true
 }
 
 // displaySingleTrace displays a single trace with a title.
@@ -465,15 +517,30 @@ func displaySingleTrace(trace *gcp.Trace, title string) {
 	t.Render()
 }
 
+func maxVisibleWidth(lines []string) int {
+	max := 0
+	for _, line := range lines {
+		if width := visibleWidth(line); width > max {
+			max = width
+		}
+	}
+
+	return max
+}
+
 // padRight pads a string to the right with spaces, accounting for ANSI color codes.
 func padRight(s string, length int) string {
 	// Remove ANSI codes to calculate visible length
-	visibleLen := len(stripAnsiCodes(s))
+	visibleLen := visibleWidth(s)
 	if visibleLen >= length {
 		return s
 	}
 
 	return s + strings.Repeat(" ", length-visibleLen)
+}
+
+func visibleWidth(s string) int {
+	return runewidth.StringWidth(stripAnsiCodes(s))
 }
 
 // stripAnsiCodes removes ANSI escape codes from a string for length calculation.
