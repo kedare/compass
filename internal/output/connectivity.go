@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"cx/internal/gcp"
-
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
 )
@@ -52,12 +51,17 @@ func displayText(result *gcp.ConnectivityTestResult) error {
 
 	// Print header with status icon
 	statusIcon := "✓"
+	var formattedStatus string
+
 	if !isReachable {
 		statusIcon = "✗"
+		formattedStatus = text.Colors{text.Bold, text.FgRed}.Sprint(status)
+	} else {
+		formattedStatus = text.Colors{text.Bold, text.FgGreen}.Sprint(status)
 	}
 
 	fmt.Printf("%s Connectivity Test: %s\n", statusIcon, result.DisplayName)
-	fmt.Printf("  Status:        %s\n", status)
+	fmt.Printf("  Status:        %s\n", formattedStatus)
 
 	// Display source
 	if result.Source != nil {
@@ -81,6 +85,7 @@ func displayText(result *gcp.ConnectivityTestResult) error {
 		fmt.Println("\n  Path Analysis:")
 
 		forwardTraces := result.ReachabilityDetails.Traces
+
 		var returnTraces []*gcp.Trace
 		if result.ReturnReachabilityDetails != nil {
 			returnTraces = result.ReturnReachabilityDetails.Traces
@@ -156,19 +161,24 @@ func displayListText(results []*gcp.ConnectivityTestResult) error {
 	for _, result := range results {
 		status := "UNKNOWN"
 		statusIcon := "?"
+		var formattedStatus string
 
 		if result.ReachabilityDetails != nil {
 			status = result.ReachabilityDetails.Result
 			if strings.Contains(strings.ToUpper(status), "REACHABLE") &&
 				!strings.Contains(strings.ToUpper(status), "UNREACHABLE") {
 				statusIcon = "✓"
+				formattedStatus = text.Colors{text.Bold, text.FgGreen}.Sprint(status)
 			} else {
 				statusIcon = "✗"
+				formattedStatus = text.Colors{text.Bold, text.FgRed}.Sprint(status)
 			}
+		} else {
+			formattedStatus = text.Bold.Sprint(status)
 		}
 
 		fmt.Printf("%s %s\n", statusIcon, result.DisplayName)
-		fmt.Printf("  Status: %s\n", status)
+		fmt.Printf("  Status: %s\n", formattedStatus)
 
 		if result.Source != nil {
 			fmt.Printf("  Source: %s\n", formatEndpoint(result.Source, false))
@@ -234,6 +244,7 @@ func displayTraces(traces []*gcp.Trace, isReachable bool) {
 			if traceIdx > 0 {
 				fmt.Println() // Add spacing between traces
 			}
+
 			fmt.Printf("    Path %d of %d:\n", traceIdx+1, len(traces))
 		}
 
@@ -280,9 +291,11 @@ func displayForwardAndReturnPaths(forwardTraces []*gcp.Trace, returnTraces []*gc
 			if i > 0 {
 				fmt.Println()
 			}
+
 			if len(forwardTraces) > 1 {
 				fmt.Printf("    Path %d of %d:\n", i+1, len(forwardTraces))
 			}
+
 			displayForwardAndReturnSideBySide(forwardTraces[i], returnTraces[i])
 		}
 
@@ -291,6 +304,7 @@ func displayForwardAndReturnPaths(forwardTraces []*gcp.Trace, returnTraces []*gc
 			if i > 0 {
 				fmt.Println()
 			}
+
 			fmt.Printf("    Path %d of %d:\n", i+1, len(forwardTraces))
 			displaySingleTrace(forwardTraces[i], "Forward Path (no return path)")
 		}
@@ -300,6 +314,7 @@ func displayForwardAndReturnPaths(forwardTraces []*gcp.Trace, returnTraces []*gc
 			if i > 0 {
 				fmt.Println()
 			}
+
 			displaySingleTrace(returnTraces[i], "Return Path (no forward path)")
 		}
 	} else if len(forwardTraces) > 0 {
@@ -308,9 +323,11 @@ func displayForwardAndReturnPaths(forwardTraces []*gcp.Trace, returnTraces []*gc
 			if i > 0 {
 				fmt.Println()
 			}
+
 			if len(forwardTraces) > 1 {
 				fmt.Printf("    Path %d of %d:\n", i+1, len(forwardTraces))
 			}
+
 			displaySingleTrace(trace, "Forward Path")
 		}
 	} else if len(returnTraces) > 0 {
@@ -319,9 +336,11 @@ func displayForwardAndReturnPaths(forwardTraces []*gcp.Trace, returnTraces []*gc
 			if i > 0 {
 				fmt.Println()
 			}
+
 			if len(returnTraces) > 1 {
 				fmt.Printf("    Path %d of %d:\n", i+1, len(returnTraces))
 			}
+
 			displaySingleTrace(trace, "Return Path")
 		}
 	}
@@ -378,19 +397,21 @@ func displayForwardAndReturnSideBySide(forward *gcp.Trace, returnTrace *gcp.Trac
 	forwardLines := strings.Split(forwardTable.Render(), "\n")
 	returnLines := strings.Split(returnTable.Render(), "\n")
 
-	// Calculate the width of the forward table (using the first line which is typically the widest)
-	forwardWidth := 0
-	if len(forwardLines) > 0 {
-		forwardWidth = len(stripAnsiCodes(forwardLines[0]))
+	// Print headers - pad the forward header to align with the return header
+	forwardHeader := text.Bold.Sprint("Forward Path")
+	returnHeader := text.Bold.Sprint("Return Path")
+
+	// Calculate padding: we want the return header to start where the return table starts
+	// The forward table will be padded to 85 chars, plus 4 for "    " prefix = 89 total
+	// So the return header should be at position 89 + 1 (for the space between tables)
+	forwardHeaderLen := len(stripAnsiCodes(forwardHeader))
+
+	paddingNeeded := 4 + 115 + 1 - 4 - forwardHeaderLen // 4 is prefix, 85 is table width, 1 is separator, -4 is for the actual prefix we'll add
+	if paddingNeeded < 1 {
+		paddingNeeded = 1
 	}
 
-	// Print headers - pad the forward header to align with the return header
-	forwardHeader := "    " + text.Bold.Sprint("Forward Path")
-	forwardHeaderPadding := forwardWidth - len(stripAnsiCodes(forwardHeader))
-	if forwardHeaderPadding < 0 {
-		forwardHeaderPadding = 0
-	}
-	fmt.Println(forwardHeader + strings.Repeat(" ", forwardHeaderPadding) + " " + text.Bold.Sprint("Return Path"))
+	fmt.Println("     " + forwardHeader + strings.Repeat(" ", paddingNeeded) + returnHeader)
 
 	// Print tables side by side
 	maxLines := len(forwardLines)
@@ -451,6 +472,7 @@ func padRight(s string, length int) string {
 	if visibleLen >= length {
 		return s
 	}
+
 	return s + strings.Repeat(" ", length-visibleLen)
 }
 
@@ -459,20 +481,25 @@ func stripAnsiCodes(s string) string {
 	// Simple regex to strip ANSI codes: \x1b\[[0-9;]*m
 	result := ""
 	inEscape := false
+
 	for i := 0; i < len(s); i++ {
 		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
 			inEscape = true
 			i++ // skip '['
+
 			continue
 		}
+
 		if inEscape {
 			if (s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z') {
 				inEscape = false
 			}
+
 			continue
 		}
 		result += string(s[i])
 	}
+
 	return result
 }
 
@@ -481,12 +508,15 @@ func getStepIcon(index, total int, causesDrop bool) string {
 	if causesDrop {
 		return "✗"
 	}
+
 	if index == 0 {
 		return "→"
 	}
+
 	if index == total-1 {
 		return "✓"
 	}
+
 	return "→"
 }
 
@@ -534,6 +564,7 @@ func formatTraceStepForTable(step *gcp.TraceStep) (stepType string, resource str
 		if step.CausesDrop {
 			return "Firewall", step.Firewall, "BLOCKED"
 		}
+
 		return "Firewall", step.Firewall, "ALLOWED"
 	}
 
