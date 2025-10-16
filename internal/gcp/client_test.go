@@ -241,8 +241,8 @@ func TestConvertInstance(t *testing.T) {
 		t.Errorf("convertInstance().ExternalIP = %v, want %v", result.ExternalIP, "203.0.113.1")
 	}
 
-	if result.CanUseIAP != true {
-		t.Errorf("convertInstance().CanUseIAP = %v, want %v", result.CanUseIAP, true)
+	if result.CanUseIAP {
+		t.Errorf("convertInstance().CanUseIAP = %v, want %v", result.CanUseIAP, false)
 	}
 }
 
@@ -270,6 +270,10 @@ func TestConvertInstanceNoExternalIP(t *testing.T) {
 
 	if result.ExternalIP != "" {
 		t.Errorf("convertInstance().ExternalIP = %v, want %v", result.ExternalIP, "")
+	}
+
+	if !result.CanUseIAP {
+		t.Errorf("convertInstance().CanUseIAP = %v, want %v", result.CanUseIAP, true)
 	}
 }
 

@@ -479,10 +479,10 @@ func (c *Client) convertInstance(instance *compute.Instance) *Instance {
 		Zone:        extractZoneName(instance.Zone),
 		Status:      instance.Status,
 		MachineType: extractMachineType(instance.MachineType),
-		CanUseIAP:   true, // Assume IAP is available for GCP instances
 	}
 
 	// Extract IP addresses
+	hasExternalIP := false
 	for _, networkInterface := range instance.NetworkInterfaces {
 		if networkInterface.NetworkIP != "" {
 			result.InternalIP = networkInterface.NetworkIP
@@ -491,9 +491,13 @@ func (c *Client) convertInstance(instance *compute.Instance) *Instance {
 		for _, accessConfig := range networkInterface.AccessConfigs {
 			if accessConfig.NatIP != "" {
 				result.ExternalIP = accessConfig.NatIP
+				hasExternalIP = true
 			}
 		}
 	}
+
+	// Prefer IAP only when no external IP is available.
+	result.CanUseIAP = !hasExternalIP
 
 	return result
 }
