@@ -148,16 +148,16 @@ func formatSingleStatus(status string, reachable bool, colorize bool) string {
 	return text.Colors{text.Bold, text.FgRed}.Sprint(display)
 }
 
-func formatStatusSummary(status connectivityStatus, colorize bool) string {
-	forward := formatSingleStatus(status.forwardStatus, status.forwardReachable, colorize)
+func formatForwardStatus(status connectivityStatus, colorize bool) string {
+	return formatSingleStatus(status.forwardStatus, status.forwardReachable, colorize)
+}
+
+func formatReturnStatus(status connectivityStatus, colorize bool) string {
 	if !status.hasReturn {
-		return fmt.Sprintf("Forward: %s", forward)
+		return formatSingleStatus("N/A", false, colorize)
 	}
 
-	return fmt.Sprintf("Forward: %s, Return: %s",
-		forward,
-		formatSingleStatus(status.returnStatus, status.returnReachable, colorize),
-	)
+	return formatSingleStatus(status.returnStatus, status.returnReachable, colorize)
 }
 
 // displayText displays a connectivity test result in human-readable format.
@@ -178,7 +178,8 @@ func displayText(result *gcp.ConnectivityTestResult) error {
 		fmt.Printf("  Console URL:   %s\n", consoleURL)
 	}
 
-	fmt.Printf("  Status:        %s\n", formatStatusSummary(statusInfo, true))
+	fmt.Printf("  %-15s %s\n", "Forward Status:", formatForwardStatus(statusInfo, true))
+	fmt.Printf("  %-15s %s\n", "Return Status:", formatReturnStatus(statusInfo, true))
 
 	// Display source
 	if result.Source != nil {
@@ -293,7 +294,8 @@ func displayListText(results []*gcp.ConnectivityTestResult) error {
 		}
 
 		fmt.Printf("%s %s\n", statusIcon, result.DisplayName)
-		fmt.Printf("  Status: %s\n", formatStatusSummary(statusInfo, true))
+		fmt.Printf("  %-15s %s\n", "Forward Status:", formatForwardStatus(statusInfo, true))
+		fmt.Printf("  %-15s %s\n", "Return Status:", formatReturnStatus(statusInfo, true))
 
 		if result.Source != nil {
 			fmt.Printf("  Source: %s\n", formatEndpoint(result.Source, false))
@@ -318,8 +320,9 @@ func displayTable(results []*gcp.ConnectivityTestResult) error {
 	}
 
 	// Print header
-	fmt.Printf("%-3s %-30s %-40s %-30s %-30s\n", "ST", "NAME", "STATUS", "SOURCE", "DESTINATION")
-	fmt.Println(strings.Repeat("-", 133))
+	fmt.Printf("%-3s %-30s %-25s %-25s %-30s %-30s\n",
+		"ST", "NAME", "FORWARD STATUS", "RETURN STATUS", "SOURCE", "DESTINATION")
+	fmt.Println(strings.Repeat("-", 147))
 
 	// Print rows
 	for _, result := range results {
@@ -331,11 +334,13 @@ func displayTable(results []*gcp.ConnectivityTestResult) error {
 		}
 
 		name := truncate(result.DisplayName, 30)
-		statusStr := truncate(formatStatusSummary(statusInfo, false), 40)
+		forwardStr := truncate(formatForwardStatus(statusInfo, false), 25)
+		returnStr := truncate(formatReturnStatus(statusInfo, false), 25)
 		source := truncate(formatEndpoint(result.Source, false), 30)
 		dest := truncate(formatEndpoint(result.Destination, true), 30)
 
-		fmt.Printf("%-3s %-30s %-40s %-30s %-30s\n", statusIcon, name, statusStr, source, dest)
+		fmt.Printf("%-3s %-30s %-25s %-25s %-30s %-30s\n",
+			statusIcon, name, forwardStr, returnStr, source, dest)
 	}
 
 	return nil
