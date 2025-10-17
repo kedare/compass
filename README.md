@@ -95,6 +95,9 @@ compass gcp my-mig-name --project my-gcp-project
 
 # Establish a tunnel through IAP
 compass gcp my-instance --project my-gcp-project --ssh-flag "-L 8080:localhost:8080"
+
+# Display build metadata
+compass version
 ```
 
 ## Usage

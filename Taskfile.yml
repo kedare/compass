@@ -10,6 +10,12 @@ vars:
     sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
   BUILD_DATE:
     sh: date -u +"%Y-%m-%dT%H:%M:%SZ"
+  BUILD_USER:
+    sh: whoami 2>/dev/null || echo "unknown"
+  BUILD_HOST:
+    sh: hostname 2>/dev/null || echo "unknown"
+  BUILD_ARCH:
+    sh: echo "$(go env GOOS)/$(go env GOARCH)"
 
 tasks:
   default:
@@ -20,7 +26,7 @@ tasks:
   build:
     desc: Build the application
     cmds:
-      - go build -ldflags="-X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.BUILD_DATE}}" -o {{.BINARY_NAME}} {{.MAIN_PATH}}
+      - go build -ldflags="-X compass/internal/version.Version={{.VERSION}} -X compass/internal/version.Commit={{.COMMIT}} -X compass/internal/version.BuildDate={{.BUILD_DATE}} -X compass/internal/version.BuildUser={{.BUILD_USER}} -X compass/internal/version.BuildHost={{.BUILD_HOST}} -X compass/internal/version.BuildArch={{.BUILD_ARCH}}" -o {{.BINARY_NAME}} {{.MAIN_PATH}}
 
   build-all:
     desc: Build for multiple platforms
@@ -35,7 +41,7 @@ tasks:
       GOOS: linux
       GOARCH: amd64
     cmds:
-      - go build -ldflags="-X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.BUILD_DATE}}" -o {{.BINARY_NAME}}-linux-amd64 {{.MAIN_PATH}}
+      - go build -ldflags="-X compass/internal/version.Version={{.VERSION}} -X compass/internal/version.Commit={{.COMMIT}} -X compass/internal/version.BuildDate={{.BUILD_DATE}} -X compass/internal/version.BuildUser={{.BUILD_USER}} -X compass/internal/version.BuildHost={{.BUILD_HOST}} -X compass/internal/version.BuildArch={{.BUILD_ARCH}}" -o {{.BINARY_NAME}}-linux-amd64 {{.MAIN_PATH}}
 
   build-darwin:
     desc: Build for macOS
@@ -43,7 +49,7 @@ tasks:
       GOOS: darwin
       GOARCH: amd64
     cmds:
-      - go build -ldflags="-X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.BUILD_DATE}}" -o {{.BINARY_NAME}}-darwin-amd64 {{.MAIN_PATH}}
+      - go build -ldflags="-X compass/internal/version.Version={{.VERSION}} -X compass/internal/version.Commit={{.COMMIT}} -X compass/internal/version.BuildDate={{.BUILD_DATE}} -X compass/internal/version.BuildUser={{.BUILD_USER}} -X compass/internal/version.BuildHost={{.BUILD_HOST}} -X compass/internal/version.BuildArch={{.BUILD_ARCH}}" -o {{.BINARY_NAME}}-darwin-amd64 {{.MAIN_PATH}}
 
   build-darwin-arm64:
     desc: Build for macOS ARM64
@@ -51,7 +57,7 @@ tasks:
       GOOS: darwin
       GOARCH: arm64
     cmds:
-      - go build -ldflags="-X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.BUILD_DATE}}" -o {{.BINARY_NAME}}-darwin-arm64 {{.MAIN_PATH}}
+      - go build -ldflags="-X compass/internal/version.Version={{.VERSION}} -X compass/internal/version.Commit={{.COMMIT}} -X compass/internal/version.BuildDate={{.BUILD_DATE}} -X compass/internal/version.BuildUser={{.BUILD_USER}} -X compass/internal/version.BuildHost={{.BUILD_HOST}} -X compass/internal/version.BuildArch={{.BUILD_ARCH}}" -o {{.BINARY_NAME}}-darwin-arm64 {{.MAIN_PATH}}
 
   build-windows:
     desc: Build for Windows
@@ -59,7 +65,7 @@ tasks:
       GOOS: windows
       GOARCH: amd64
     cmds:
-      - go build -ldflags="-X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.BUILD_DATE}}" -o {{.BINARY_NAME}}-windows-amd64.exe {{.MAIN_PATH}}
+      - go build -ldflags="-X compass/internal/version.Version={{.VERSION}} -X compass/internal/version.Commit={{.COMMIT}} -X compass/internal/version.BuildDate={{.BUILD_DATE}} -X compass/internal/version.BuildUser={{.BUILD_USER}} -X compass/internal/version.BuildHost={{.BUILD_HOST}} -X compass/internal/version.BuildArch={{.BUILD_ARCH}}" -o {{.BINARY_NAME}}-windows-amd64.exe {{.MAIN_PATH}}
 
   test:
     desc: Run tests
