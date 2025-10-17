@@ -128,10 +128,10 @@ func renderTunnelText(tunnel *gcp.VPNTunnelInfo) error {
 	fmt.Printf("🔗 Tunnel: %s (%s)\n", colorTunnelName(tunnel), tunnel.Region)
 
 	if tunnel.Description != "" {
-		fmt.Printf("  Description:  %s\n", tunnel.Description)
+		indentPrintf("", 1, "Description:  %s\n", tunnel.Description)
 	}
 
-	renderTunnelDetailsBody(tunnel, "  ", true, true)
+	renderTunnelDetailsBody(tunnel, "", 1, true, true)
 
 	return nil
 }
@@ -528,6 +528,18 @@ func formatPeerDetail(peer *gcp.BGPSessionInfo) string {
 	)
 }
 
+// indentPrintf is a helper function that prints formatted output with additional indentation.
+// It combines a base indent string with additional indent levels (each level adds 2 spaces)
+// before formatting and printing the output.
+//
+// Example:
+//   indentPrintf("  ", 2, "Status: %s\n", "UP")  // prints "      Status: UP\n"
+//   indentPrintf("", 1, "Name: %s\n", "foo")      // prints "  Name: foo\n"
+func indentPrintf(baseIndent string, levels int, format string, args ...interface{}) {
+	indent := baseIndent + strings.Repeat("  ", levels)
+	fmt.Printf(indent+format, args...)
+}
+
 // renderBGPPeers renders BGP peer information with the specified indentation.
 // For each peer, it displays session status, endpoint IPs, ASN, and route counts.
 // If available, it also shows the specific advertised and learned route prefixes.
@@ -536,17 +548,17 @@ func renderBGPPeers(peers []*gcp.BGPSessionInfo, indent string) {
 		return
 	}
 
-	fmt.Printf("%sBGP Peers:\n", indent)
+	indentPrintf(indent, 0, "BGP Peers:\n")
 
 	for _, peer := range sortedPeers(peers) {
-		fmt.Printf("%s  - %s\n", indent, formatPeerDetail(peer))
+		indentPrintf(indent, 1, "- %s\n", formatPeerDetail(peer))
 
 		if len(peer.AdvertisedPrefixes) > 0 {
-			fmt.Printf("%s      Advertised: %s\n", indent, strings.Join(peer.AdvertisedPrefixes, ", "))
+			indentPrintf(indent, 3, "Advertised: %s\n", strings.Join(peer.AdvertisedPrefixes, ", "))
 		}
 
 		if len(peer.LearnedPrefixes) > 0 {
-			fmt.Printf("%s      Learned:    %s\n", indent, strings.Join(peer.LearnedPrefixes, ", "))
+			indentPrintf(indent, 3, "Learned:    %s\n", strings.Join(peer.LearnedPrefixes, ", "))
 		}
 	}
 }
@@ -559,29 +571,29 @@ func renderGatewayHeader(gw *gcp.VPNGatewayInfo, indent string) {
 		return
 	}
 
-	fmt.Printf("%s🔐 Gateway: %s (%s)\n", indent, gw.Name, gw.Region)
+	indentPrintf(indent, 0, "🔐 Gateway: %s (%s)\n", gw.Name, gw.Region)
 
 	if gw.Description != "" {
-		fmt.Printf("%s  Description: %s\n", indent, gw.Description)
+		indentPrintf(indent, 1, "Description: %s\n", gw.Description)
 	}
 
 	if gw.Network != "" {
-		fmt.Printf("%s  Network:     %s\n", indent, resourceName(gw.Network))
+		indentPrintf(indent, 1, "Network:     %s\n", resourceName(gw.Network))
 	}
 
 	if len(gw.Interfaces) > 0 {
-		fmt.Printf("%s  Interfaces:\n", indent)
+		indentPrintf(indent, 1, "Interfaces:\n")
 
 		for _, iface := range gw.Interfaces {
-			fmt.Printf("%s    - #%d IP: %s\n", indent, iface.Id, iface.IpAddress)
+			indentPrintf(indent, 2, "- #%d IP: %s\n", iface.Id, iface.IpAddress)
 		}
 	}
 
 	if len(gw.Labels) > 0 {
-		fmt.Printf("%s  Labels:\n", indent)
+		indentPrintf(indent, 1, "Labels:\n")
 
 		for k, v := range gw.Labels {
-			fmt.Printf("%s    %s: %s\n", indent, k, v)
+			indentPrintf(indent, 2, "%s: %s\n", k, v)
 		}
 	}
 }
@@ -595,54 +607,55 @@ func renderTunnelDetails(tunnel *gcp.VPNTunnelInfo, indent string, showRegion bo
 	}
 
 	if showRegion {
-		fmt.Printf("%s• %s (%s)\n", indent, colorTunnelName(tunnel), tunnel.Region)
+		indentPrintf(indent, 0, "• %s (%s)\n", colorTunnelName(tunnel), tunnel.Region)
 	} else {
-		fmt.Printf("%s• %s [%s]\n", indent, colorTunnelName(tunnel), colorStatus(tunnel.Status))
+		indentPrintf(indent, 0, "• %s [%s]\n", colorTunnelName(tunnel), colorStatus(tunnel.Status))
 	}
 
-	renderTunnelDetailsBody(tunnel, indent+"  ", showRegion, false)
+	renderTunnelDetailsBody(tunnel, indent, 1, showRegion, false)
 }
 
 // renderTunnelDetailsBody renders the body of tunnel details (without the header).
+// The levels parameter specifies how many indentation levels to add beyond the base indent.
 // The showStatus parameter controls whether to display the tunnel status field.
 // The showSecretHash parameter controls whether to display the pre-shared key hash.
 // This function is called by both renderTunnelDetails and renderTunnelText to avoid code duplication.
-func renderTunnelDetailsBody(tunnel *gcp.VPNTunnelInfo, indent string, showStatus bool, showSecretHash bool) {
+func renderTunnelDetailsBody(tunnel *gcp.VPNTunnelInfo, indent string, levels int, showStatus bool, showSecretHash bool) {
 	if tunnel == nil {
 		return
 	}
 
 	if tunnel.PeerIP != "" {
-		fmt.Printf("%sIPSec Peers:  %s\n", indent, formatIPSecPeers(tunnel))
+		indentPrintf(indent, levels, "IPSec Peers:  %s\n", formatIPSecPeers(tunnel))
 	}
 
 	if tunnel.PeerGateway != "" {
-		fmt.Printf("%sPeer Gateway: %s\n", indent, resourceName(tunnel.PeerGateway))
+		indentPrintf(indent, levels, "Peer Gateway: %s\n", resourceName(tunnel.PeerGateway))
 	}
 
 	if tunnel.PeerExternal != "" {
-		fmt.Printf("%sPeer External:%s\n", indent, resourceName(tunnel.PeerExternal))
+		indentPrintf(indent, levels, "Peer External:%s\n", resourceName(tunnel.PeerExternal))
 	}
 
 	if tunnel.RouterName != "" {
-		fmt.Printf("%sRouter:       %s\n", indent, tunnel.RouterName)
+		indentPrintf(indent, levels, "Router:       %s\n", tunnel.RouterName)
 	}
 
 	if showStatus && tunnel.Status != "" {
-		fmt.Printf("%sStatus:       %s\n", indent, colorStatus(tunnel.Status))
+		indentPrintf(indent, levels, "Status:       %s\n", colorStatus(tunnel.Status))
 	}
 
 	if tunnel.DetailedStatus != "" {
-		fmt.Printf("%sDetail:       %s\n", indent, tunnel.DetailedStatus)
+		indentPrintf(indent, levels, "Detail:       %s\n", tunnel.DetailedStatus)
 	}
 
 	if tunnel.IkeVersion != 0 {
-		fmt.Printf("%sIKE Version:  %d\n", indent, tunnel.IkeVersion)
+		indentPrintf(indent, levels, "IKE Version:  %d\n", tunnel.IkeVersion)
 	}
 
 	if showSecretHash && tunnel.SharedSecretHash != "" {
-		fmt.Printf("%sSecret Hash:  %s\n", indent, tunnel.SharedSecretHash)
+		indentPrintf(indent, levels, "Secret Hash:  %s\n", tunnel.SharedSecretHash)
 	}
 
-	renderBGPPeers(tunnel.BgpSessions, indent)
+	renderBGPPeers(tunnel.BgpSessions, indent+strings.Repeat("  ", levels))
 }
