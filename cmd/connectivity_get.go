@@ -63,11 +63,16 @@ func runGetTest(ctx context.Context, testName string) {
 			logger.Log.Fatalf("Failed to watch connectivity test: %v", err)
 		}
 	} else {
+		spin := output.NewSpinner("Fetching connectivity test details")
+		spin.Start()
+
 		// Single retrieval
 		result, err = connClient.GetTest(ctx, testName)
 		if err != nil {
+			spin.Fail("Failed to fetch connectivity test")
 			logger.Log.Fatalf("Failed to get connectivity test: %v", err)
 		}
+		spin.Success("Connectivity test details received")
 	}
 
 	// Display results
@@ -86,13 +91,19 @@ func watchTest(ctx context.Context, client *gcp.ConnectivityClient, testName str
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
+	spin := output.NewSpinner("Checking connectivity test status")
+	spin.Start()
+	defer spin.Stop()
+
 	// First immediate check
 	result, err := client.GetTest(ctx, testName)
 	if err != nil {
+		spin.Fail("Failed to fetch connectivity test status")
 		return nil, err
 	}
 
 	if isTestComplete(result) {
+		spin.Success("Connectivity test completed")
 		logger.Log.Info("Test already completed")
 
 		return result, nil
@@ -102,23 +113,29 @@ func watchTest(ctx context.Context, client *gcp.ConnectivityClient, testName str
 	for {
 		select {
 		case <-ctx.Done():
+			spin.Fail("Context cancelled while waiting for connectivity test")
 			return nil, ctx.Err()
 		case <-ticker.C:
+			elapsed := time.Since(startTime)
+			spin.Update(fmt.Sprintf("Waiting for connectivity test completion (elapsed %s)", elapsed.Round(time.Second)))
+
 			result, err := client.GetTest(ctx, testName)
 			if err != nil {
 				logger.Log.Warnf("Error checking test status: %v", err)
+				spin.Update(fmt.Sprintf("Retrying after error (elapsed %s)", elapsed.Round(time.Second)))
 
 				continue
 			}
 
 			if isTestComplete(result) {
+				spin.Success("Connectivity test completed")
 				logger.Log.Info("Test completed")
 
 				return result, nil
 			}
 
-			elapsed := time.Since(startTime)
 			if elapsed >= timeout {
+				spin.Fail("Connectivity test watch timed out")
 				logger.Log.Warn("Watch timeout reached")
 
 				return result, fmt.Errorf("watch timeout after %v", elapsed)

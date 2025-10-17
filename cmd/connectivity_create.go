@@ -116,10 +116,15 @@ func runCreateTest(ctx context.Context) {
 	// Create the test
 	logger.Log.Info("Creating connectivity test (this may take a minute)...")
 
+	spin := output.NewSpinner("Creating connectivity test")
+	spin.Start()
+
 	result, err := connClient.CreateTest(ctx, config)
 	if err != nil {
+		spin.Fail("Failed to create connectivity test")
 		logger.Log.Fatalf("Failed to create connectivity test: %v", err)
 	}
+	spin.Success("Connectivity test created")
 
 	logger.Log.Info("Connectivity test created successfully")
 

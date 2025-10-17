@@ -50,10 +50,15 @@ func runListTests(ctx context.Context) {
 	}
 
 	// List tests
+	spin := output.NewSpinner("Fetching connectivity tests")
+	spin.Start()
+
 	results, err := connClient.ListTests(ctx, listFilter)
 	if err != nil {
+		spin.Fail("Failed to fetch connectivity tests")
 		logger.Log.Fatalf("Failed to list connectivity tests: %v", err)
 	}
+	spin.Success("Connectivity tests retrieved")
 
 	// Apply limit if specified
 	if listLimit > 0 && len(results) > listLimit {

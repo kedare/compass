@@ -9,6 +9,7 @@ import (
 
 	"cx/internal/gcp"
 	"cx/internal/logger"
+	"cx/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -67,9 +68,14 @@ func runDeleteTest(ctx context.Context, testName string) {
 	// Delete the test
 	logger.Log.Infof("Deleting connectivity test: %s", testName)
 
+	spin := output.NewSpinner("Deleting connectivity test")
+	spin.Start()
+
 	if err := connClient.DeleteTest(ctx, testName); err != nil {
+		spin.Fail("Failed to delete connectivity test")
 		logger.Log.Fatalf("Failed to delete connectivity test: %v", err)
 	}
+	spin.Success("Connectivity test deleted")
 
 	logger.Log.Infof("Connectivity test '%s' deleted successfully", testName)
 }

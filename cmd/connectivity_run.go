@@ -48,10 +48,15 @@ func runRunTest(ctx context.Context, testName string) {
 	// Run the test
 	logger.Log.Info("Running connectivity test (this may take a minute)...")
 
+	spin := output.NewSpinner("Running connectivity test")
+	spin.Start()
+
 	result, err := connClient.RunTest(ctx, testName)
 	if err != nil {
+		spin.Fail("Failed to run connectivity test")
 		logger.Log.Fatalf("Failed to run connectivity test: %v", err)
 	}
+	spin.Success("Connectivity test finished")
 
 	logger.Log.Info("Connectivity test completed")
 
