@@ -120,7 +120,19 @@ func renderGatewayText(gw *gcp.VPNGatewayInfo) error {
 			}
 
 			if len(tunnel.BgpSessions) > 0 {
-				fmt.Printf("      BGP Peers: %s\n", tunnelPeerSummary(tunnel))
+				fmt.Println("      BGP Peers:")
+
+				for _, peer := range sortedPeers(tunnel.BgpSessions) {
+					fmt.Printf("        - %s\n", formatPeerDetail(peer))
+
+					if len(peer.AdvertisedPrefixes) > 0 {
+						fmt.Printf("          Advertised: %s\n", strings.Join(peer.AdvertisedPrefixes, ", "))
+					}
+
+					if len(peer.LearnedPrefixes) > 0 {
+						fmt.Printf("          Learned:    %s\n", strings.Join(peer.LearnedPrefixes, ", "))
+					}
+				}
 			}
 		}
 	}
@@ -175,8 +187,17 @@ func renderTunnelText(tunnel *gcp.VPNTunnelInfo) error {
 
 	if len(tunnel.BgpSessions) > 0 {
 		fmt.Println("  BGP Peers:")
+
 		for _, peer := range sortedPeers(tunnel.BgpSessions) {
 			fmt.Printf("    - %s\n", formatPeerDetail(peer))
+
+			if len(peer.AdvertisedPrefixes) > 0 {
+				fmt.Printf("      Advertised: %s\n", strings.Join(peer.AdvertisedPrefixes, ", "))
+			}
+
+			if len(peer.LearnedPrefixes) > 0 {
+				fmt.Printf("      Learned:    %s\n", strings.Join(peer.LearnedPrefixes, ", "))
+			}
 		}
 	}
 
@@ -267,6 +288,12 @@ func displayVPNText(data *gcp.VPNOverview) error {
 
 				for _, peer := range sortedPeers(tunnel.BgpSessions) {
 					fmt.Printf("        - %s\n", formatPeerDetail(peer))
+					if len(peer.AdvertisedPrefixes) > 0 {
+						fmt.Printf("          Advertised: %s\n", strings.Join(peer.AdvertisedPrefixes, ", "))
+					}
+					if len(peer.LearnedPrefixes) > 0 {
+						fmt.Printf("          Learned:    %s\n", strings.Join(peer.LearnedPrefixes, ", "))
+					}
 				}
 			}
 		}

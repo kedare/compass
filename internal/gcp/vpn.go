@@ -73,6 +73,8 @@ type BGPSessionInfo struct {
 	SessionState       string
 	LearnedRoutes      int64
 	AdvertisedCount    int
+	AdvertisedPrefixes []string
+	LearnedPrefixes    []string
 }
 
 type routerRef struct {
@@ -279,7 +281,7 @@ func (c *Client) GetVPNTunnelOverview(ctx context.Context, region, name string, 
 		return nil, err
 	}
 
-	if err := c.populateTunnelBGP(ctx, []*VPNTunnelInfo{info}, progress); err != nil {
+	if err := c.populateTunnelBGP(ctx, []*VPNTunnelInfo{info}, progress, true); err != nil {
 		return nil, err
 	}
 
@@ -483,7 +485,11 @@ func (c *Client) attachTunnelsForGateway(ctx context.Context, gw *VPNGatewayInfo
 		return fmt.Errorf("failed to list tunnels for gateway %s: %w", gw.Name, err)
 	}
 
-	return c.populateTunnelBGP(ctx, gw.Tunnels, progress)
+	if err := c.populateTunnelGatewayIP(ctx, gw.Tunnels, progress); err != nil {
+		return err
+	}
+
+	return c.populateTunnelBGP(ctx, gw.Tunnels, progress, true)
 }
 
 func (c *Client) populateTunnelGatewayIP(ctx context.Context, tunnels []*VPNTunnelInfo, progress func(string)) error {
@@ -519,7 +525,7 @@ func (c *Client) populateTunnelGatewayIP(ctx context.Context, tunnels []*VPNTunn
 	return nil
 }
 
-func (c *Client) populateTunnelBGP(ctx context.Context, tunnels []*VPNTunnelInfo, progress func(string)) error {
+func (c *Client) populateTunnelBGP(ctx context.Context, tunnels []*VPNTunnelInfo, progress func(string), includeRoutes bool) error {
 	if len(tunnels) == 0 {
 		return nil
 	}
@@ -573,6 +579,24 @@ func (c *Client) populateTunnelBGP(ctx context.Context, tunnels []*VPNTunnelInfo
 			}
 		}
 
+		learnedByTunnel := make(map[string][]string)
+		learnedByPeerIP := make(map[string][]string)
+		if includeRoutes && statusResp != nil && statusResp.Result != nil {
+			for _, route := range statusResp.Result.BestRoutesForRouter {
+				if route == nil || strings.TrimSpace(route.DestRange) == "" {
+					continue
+				}
+				prefix := strings.TrimSpace(route.DestRange)
+				if key := normalizeLink(route.NextHopVpnTunnel); key != "" {
+					learnedByTunnel[key] = append(learnedByTunnel[key], prefix)
+					continue
+				}
+				if ip := strings.TrimSpace(route.NextHopIp); ip != "" {
+					learnedByPeerIP[ip] = append(learnedByPeerIP[ip], prefix)
+				}
+			}
+		}
+
 		interfaceToTunnel := map[string]string{}
 		for _, iface := range router.Interfaces {
 			if iface == nil || iface.LinkedVpnTunnel == "" {
@@ -614,6 +638,17 @@ func (c *Client) populateTunnelBGP(ctx context.Context, tunnels []*VPNTunnelInfo
 				info.SessionState = status.State
 				info.LearnedRoutes = status.NumLearnedRoutes
 				info.AdvertisedCount = len(status.AdvertisedRoutes)
+				if includeRoutes {
+					info.AdvertisedPrefixes = extractDestRanges(status.AdvertisedRoutes)
+				}
+			}
+
+			if includeRoutes {
+				if v := learnedByTunnel[link]; len(v) > 0 {
+					info.LearnedPrefixes = append([]string{}, v...)
+				} else if v := learnedByPeerIP[info.PeerIP]; len(v) > 0 {
+					info.LearnedPrefixes = append([]string{}, v...)
+				}
 			}
 
 			tunnel.BgpSessions = append(tunnel.BgpSessions, info)
@@ -777,6 +812,28 @@ func gatewayReference(link, fallbackRegion string) (string, string) {
 	}
 
 	return region, name
+}
+
+func extractDestRanges(routes []*compute.Route) []string {
+	if len(routes) == 0 {
+		return nil
+	}
+
+	result := make([]string, 0, len(routes))
+	for _, route := range routes {
+		if route == nil {
+			continue
+		}
+		if dest := strings.TrimSpace(route.DestRange); dest != "" {
+			result = append(result, dest)
+		}
+	}
+
+	if len(result) == 0 {
+		return nil
+	}
+
+	return result
 }
 
 func routerReference(link, fallbackRegion string) (string, string) {
