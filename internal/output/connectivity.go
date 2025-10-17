@@ -355,6 +355,7 @@ func displayTable(results []*gcp.ConnectivityTestResult) error {
 		nameCell := padRight(truncate(result.DisplayName, nameWidth), nameWidth)
 
 		forwardPlain := formatForwardStatus(statusInfo, false)
+
 		forwardDisplay := forwardPlain
 		if colorize {
 			forwardDisplay = formatForwardStatus(statusInfo, true)
@@ -362,6 +363,7 @@ func displayTable(results []*gcp.ConnectivityTestResult) error {
 		forwardCell := padRightWithPlain(forwardDisplay, forwardPlain, forwardWidth)
 
 		returnPlain := formatReturnStatus(statusInfo, false)
+
 		returnDisplay := returnPlain
 		if colorize {
 			returnDisplay = formatReturnStatus(statusInfo, true)

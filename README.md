@@ -23,6 +23,7 @@
   - [List and Delete](#list-and-delete)
   - [Output Formats](#output-formats)
   - [Common Use Cases](#common-use-cases)
+- [VPN Overview](#vpn-overview)
 - [Development](#development)
 - [Roadmap](#roadmap)
 - [License](#license)
@@ -40,6 +41,7 @@
 - 🌐 Zone and region auto-discovery when omitted
 - 🔧 Pass arbitrary SSH flags for tunneling, forwarding, or X11
 - 🔍 Network connectivity tests powered by Google Cloud Connectivity Tests API
+- 🔭 Cloud VPN inventory across gateways, tunnels, and BGP peers
 - 📊 Structured logging with configurable verbosity
 - ⚡ Zero configuration—relies on existing `gcloud` authentication
 - 🎨 Helpful CLI UX with actionable errors
@@ -411,6 +413,50 @@ compass gcp connectivity-test create ci-check \
   --destination-port 5432 \
   --output json | jq -e '.reachabilityDetails.result == "REACHABLE"'
 ```
+
+## VPN Overview
+
+Inspect Cloud VPN gateways, tunnels, and Cloud Router BGP sessions across your project.
+
+```console
+$ compass gcp vpn list --project prod
+🔐 Gateway: prod-ha-vpn (us-central1)
+  Network:     prod-vpc
+  Interfaces:
+    - #0 IP: 10.10.0.2
+    - #1 IP: 10.10.1.2
+  Tunnels:
+    • prod-to-eu (us-central1)
+      Peer IP:      203.0.113.10
+      Router:       prod-router
+      Status:       ESTABLISHED
+      IKE Version:  2
+      BGP Peers:
+        - prod-peer-eu (169.254.0.2, ASN 65001, enabled)
+
+⚠️  Orphan Tunnels (not attached to HA VPN gateways):
+  • legacy-hub (us-east1) peer 198.51.100.10
+    Router: legacy-router
+```
+
+Switch to a concise table summary:
+
+```console
+$ compass gcp vpn list --project prod --output table
+┌────────────┬──────────────┬──────────────┬─────────────┬──────────┐
+│ GATEWAY    │ REGION       │ NETWORK      │ #INTERFACES │ #TUNNELS │
+├────────────┼──────────────┼──────────────┼─────────────┼──────────┤
+│ prod-ha-vpn│ us-central1  │ prod-vpc     │           2 │        2 │
+└────────────┴──────────────┴──────────────┴─────────────┴──────────┘
+
+┌────────────┬──────────────┬────────────┬─────────────┬─────────┬────────────┐
+│ GATEWAY    │ TUNNEL       │ REGION     │ PEER IP     │ ROUTER  │ BGP PEERS  │
+├────────────┼──────────────┼────────────┼─────────────┼─────────┼────────────┤
+│ prod-ha-vpn│ prod-to-eu   │ us-central1│ 203.0.113.10│ prod-router │ prod-peer-eu │
+└────────────┴──────────────┴────────────┴─────────────┴─────────┴────────────┘
+```
+
+Use `--output json` to consume the inventory programmatically.
 
 ## Development
 
