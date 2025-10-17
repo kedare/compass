@@ -1,8 +1,10 @@
 # compass - Cloud Connectiviy toolset
 
-`compass` is a fast, intuitive CLI for reaching Google Cloud Platform (GCP) instances over SSH. It handles Identity-Aware Proxy (IAP) tunneling, Managed Instance Groups (MIGs), connectivity tests, and advanced SSH scenarios without extra configuration.
+> Main project location : [Codeberg](https://codeberg.org/kedare/compass) : This is where you should open issues and PR and download releases
 
-> Prefer something shorter? Every command is also available through the `cps` alias.
+> Mirror on [Github](https://github.com/kedare/compass) : Read only mirror
+
+`compass` is a fast, intuitive CLI for reaching Google Cloud Platform (GCP) instances over SSH. It handles Identity-Aware Proxy (IAP) tunneling, Managed Instance Groups (MIGs), connectivity tests, and advanced SSH scenarios without extra configuration.
 
 ## Table of Contents
 - [Overview](#overview)
@@ -31,14 +33,9 @@
 - [License](#license)
 - [Support](#support)
 
-## Project organization
-
-Main project location : [Codeberg](https://codeberg.org/kedare/compass) : This is where you should open issues and PR and download releases
-Mirror on [Github](https://github.com/kedare/compass) : Read only mirror
-
 ## Overview
 
-`compass` is a one-stop CLI for operating Google Cloud fleets. It discovers instances and Managed Instance Groups, builds the right SSH or IAP tunnel automatically, and reuses your `gcloud` credentials so access stays seamless. Beyond remote access, it can launch Connectivity Tests, surface VPN topologies, and stream structured logs in whatever format you need for automation. Whether you are diagnosing reachability, crafting port-forwarding recipes, or auditing gateways, `compass` keeps workflows fast and scriptable.
+`compass` (or its alias `cps`) is a one-stop CLI for operating Google Cloud fleets. It discovers instances and Managed Instance Groups, builds the right SSH or IAP tunnel automatically, and reuses your `gcloud` credentials so access stays seamless. Beyond remote access, it can launch Connectivity Tests, surface VPN topologies, and stream structured logs in whatever format you need for automation. Whether you are diagnosing reachability, crafting port-forwarding recipes, or auditing gateways, `compass` keeps workflows fast and scriptable.
 
 ## Features
 
