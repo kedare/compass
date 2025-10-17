@@ -11,6 +11,7 @@
   - [Prerequisites](#prerequisites)
   - [Install go-task](#install-go-task)
   - [Build From Source](#build-from-source)
+  - [Shell Completion](#shell-completion)
 - [Quick Start](#quick-start)
 - [Usage](#usage)
   - [Basic Command](#basic-command)
@@ -20,6 +21,7 @@
   - [Create](#create)
   - [Watch Progress](#watch-progress)
   - [Get Results](#get-results)
+  - [Rerun a Test](#rerun-a-test)
   - [List and Delete](#list-and-delete)
   - [Output Formats](#output-formats)
   - [Common Use Cases](#common-use-cases)
@@ -83,17 +85,38 @@ task build
 ./compass --help
 ```
 
+### Shell Completion
+
+Enable autocompletion for your shell:
+
+```bash
+# Bash
+compass completion bash > /etc/bash_completion.d/compass
+
+# Zsh
+compass completion zsh > "${fpath[1]}/_compass"
+
+# Fish
+compass completion fish > ~/.config/fish/completions/compass.fish
+
+# PowerShell
+compass completion powershell | Out-String | Invoke-Expression
+```
+
 ## Quick Start
 
 ```bash
-# Connect to an instance (auto-discovers zone)
+# Connect to an instance (auto-discovers zone and resource type)
 compass gcp my-instance --project my-gcp-project
 
 # Specify a zone explicitly
 compass gcp my-instance --project my-gcp-project --zone us-central1-a
 
+# Explicitly specify resource type for faster discovery
+compass gcp my-instance --project my-gcp-project --type instance
+
 # Connect to the first running instance from a MIG
-compass gcp my-mig-name --project my-gcp-project
+compass gcp my-mig-name --project my-gcp-project --type mig
 
 # Establish a tunnel through IAP
 compass gcp my-instance --project my-gcp-project --ssh-flag "-L 8080:localhost:8080"
@@ -130,6 +153,15 @@ compass gcp instance-name --project my-project --log-level debug
 compass gcp my-regional-mig --project my-project --zone us-central1
 ```
 
+**GCP SSH Flags**
+
+| Flag | Aliases | Description | Default |
+|------|---------|-------------|---------|
+| `--project` | `-p` | GCP project ID | (required on first use, then cached) |
+| `--zone` | `-z` | GCP zone | Auto-discovered if not specified |
+| `--type` | `-t` | Resource type: `instance` or `mig` | Auto-detected (tries MIG first, then instance) |
+| `--ssh-flag` | | Additional SSH flags (can be used multiple times) | None |
+
 **Global Flags**
 
 | Flag | Description | Default |
@@ -162,6 +194,8 @@ compass gcp multi-service \
 ## Connectivity Tests
 
 Connectivity tests let you validate reachability between GCP resources using the Google Cloud Connectivity Tests API.
+
+> **Tip:** Use the shorter `ct` alias for connectivity-test commands: `compass gcp ct list` instead of `compass gcp connectivity-test list`
 
 Set `COMPASS_OUTPUT` to change the default output format (supported values: `text`, `table`, `json`, `detailed`). If the variable is unset, list commands default to `table` while detailed views use `text`.
 
@@ -201,11 +235,39 @@ time="12:07:21" level=info msg="Connectivity test created successfully"
   Result: Connection successful ✓
 ```
 
+You can specify sources and destinations using instance names, IP addresses, or network URIs. Use `--source-type` and `--destination-type` flags (or `-s` and `-d` short forms) to explicitly set resource types (`instance` or `mig`).
+
+MIG-to-instance test example:
+
+```bash
+compass gcp connectivity-test create api-to-backend \
+  --project prod \
+  --source-instance api-mig \
+  --source-type mig \
+  --destination-instance backend \
+  --destination-port 8080
+```
+
+IP-based test:
+
+```bash
+compass gcp connectivity-test create ip-test \
+  --project prod \
+  --source-ip 10.128.0.5 \
+  --destination-ip 10.138.0.10 \
+  --destination-port 443 \
+  --protocol TCP
+```
+
+**Supported protocols:** TCP (default), UDP, ICMP, ESP, AH, SCTP, GRE
+
 Add labels when you create the test:
 
 ```bash
 --labels env=prod,service=payments
 ```
+
+Cross-project tests are supported using `--source-project` and `--destination-project` flags. You can also specify custom VPC networks using `--source-network` and `--destination-network`.
 
 ### Watch Progress
 
@@ -256,7 +318,26 @@ Fetching connectivity test details...
   Result: Connection successful ✓
 ```
 
-Switch to JSON or detailed output with `--output json` or `--output detailed`.
+Switch to JSON or detailed output with `--output json` or `--output detailed`. Use `--timeout` with `--watch` to specify a custom timeout in seconds (default: 300).
+
+### Rerun a Test
+
+Rerun an existing test with the same configuration to get updated results:
+
+```console
+$ compass gcp connectivity-test run web-to-db --project prod
+Rerunning connectivity test...
+✓ Connectivity test rerun completed
+✓ Connectivity Test: web-to-db
+  Forward Status: REACHABLE
+  Return Status:  N/A
+  Source:        web-server-1 (10.128.0.5)
+  Destination:   db-server-1 (10.138.0.10:5432)
+  Protocol:      TCP
+  ...
+```
+
+This is useful for periodic validation or after making network changes. Use `--output detailed` or `--output json` for different output formats.
 
 ### List and Delete
 
@@ -291,6 +372,16 @@ ST  NAME                          FORWARD STATUS              RETURN STATUS     
 ---------------------------------------------------------------------------------------------------------------------------------------------------
 ✓   web-to-db                     REACHABLE                   N/A                         web-server-1 (10.128.0.5)     db-server-1 (10.138.0.10:5432)
 ✗   web-to-cache                  UNREACHABLE                 N/A                         web-server-1 (10.128.0.5)     cache-proxy (10.138.0.20:6379)
+```
+
+Filter and limit results:
+
+```bash
+# Filter by labels
+compass gcp connectivity-test list --project prod --filter "labels.env=prod"
+
+# Limit results
+compass gcp connectivity-test list --project prod --limit 10
 ```
 
 Delete a test with confirmation:
@@ -419,7 +510,7 @@ compass gcp connectivity-test create ci-check \
 
 ## VPN Overview
 
-Inspect Cloud VPN gateways, tunnels, and Cloud Router BGP sessions across your project.
+Inspect Cloud VPN gateways, tunnels, and Cloud Router BGP sessions across your project. The output includes BGP route information (advertised and learned routes) and configuration warnings.
 
 ```console
 $ compass gcp vpn list --project prod
@@ -436,11 +527,19 @@ $ compass gcp vpn list --project prod
       IKE Version:  2
       BGP Peers:
         - prod-peer-eu (169.254.0.2, ASN 65001, enabled)
+          Advertised Routes: 5
+          Learned Routes: 3
 
 ⚠️  Orphan Tunnels (not attached to HA VPN gateways):
   • legacy-hub (us-east1) peer 198.51.100.10
     Router: legacy-router
+
+⚠️  Configuration Warnings:
+  • Gateway 'staging-vpn' has no attached tunnels
+  • BGP peer 'backup-peer' has routing issues
 ```
+
+Use `--warnings=false` to hide the warnings section if you only want to see the active configuration.
 
 Switch to a concise table summary:
 

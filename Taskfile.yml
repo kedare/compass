@@ -159,15 +159,66 @@ tasks:
       - rm -rf tmp/
 
   install:
-    desc: Install the application
+    desc: Install the application to ~/.local/bin with shell completions
     cmds:
       - task: build
+      - echo "Installing {{.BINARY_NAME}} to $HOME/.local/bin..."
       - mkdir -p $HOME/.local/bin
-      - cp ./{{.BINARY_NAME}} $HOME/.local/bin
+      - |
+        if [ -f "$HOME/.local/bin/{{.BINARY_NAME}}" ]; then
+          echo "Backing up existing binary to {{.BINARY_NAME}}.backup"
+          cp "$HOME/.local/bin/{{.BINARY_NAME}}" "$HOME/.local/bin/{{.BINARY_NAME}}.backup"
+        fi
+      - cp ./{{.BINARY_NAME}} $HOME/.local/bin/
+      - chmod +x $HOME/.local/bin/{{.BINARY_NAME}}
+      - |
+        if [ ! -f "$HOME/.local/bin/cps" ] || [ ! -L "$HOME/.local/bin/cps" ]; then
+          echo "Creating cps alias symlink..."
+          ln -sf "$HOME/.local/bin/{{.BINARY_NAME}}" "$HOME/.local/bin/cps"
+        fi
+      - echo "Installing shell completions..."
       - mkdir -p $HOME/.local/share/bash-completion/completions
-      - ./{{.BINARY_NAME}} completion bash > $HOME/.local/share/bash-completion/completions/{{.BINARY_NAME}}
+      - $HOME/.local/bin/{{.BINARY_NAME}} completion bash > $HOME/.local/share/bash-completion/completions/{{.BINARY_NAME}}
       - mkdir -p $HOME/.local/share/zsh/site-functions
-      - ./{{.BINARY_NAME}} completion zsh > $HOME/.local/share/zsh/site-functions/_{{.BINARY_NAME}}
+      - $HOME/.local/bin/{{.BINARY_NAME}} completion zsh > $HOME/.local/share/zsh/site-functions/_{{.BINARY_NAME}}
+      - mkdir -p $HOME/.config/fish/completions
+      - $HOME/.local/bin/{{.BINARY_NAME}} completion fish > $HOME/.config/fish/completions/{{.BINARY_NAME}}.fish
+      - |
+        if command -v pwsh >/dev/null 2>&1; then
+          echo "Installing PowerShell completion..."
+          PWSH_PROFILE_DIR=$(pwsh -NoProfile -Command 'Split-Path $PROFILE')
+          mkdir -p "$PWSH_PROFILE_DIR"
+          $HOME/.local/bin/{{.BINARY_NAME}} completion powershell > "$PWSH_PROFILE_DIR/{{.BINARY_NAME}}_completion.ps1"
+          echo "  PowerShell completion installed. Add this to your profile (\$PROFILE):"
+          echo "  . \"\$PSScriptRoot/{{.BINARY_NAME}}_completion.ps1\""
+        fi
+      - echo "✓ Installation complete!"
+      - $HOME/.local/bin/{{.BINARY_NAME}} version
+      - |
+        if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
+          echo ""
+          echo "⚠️  Warning: $HOME/.local/bin is not in your PATH"
+          echo "   Add this to your shell profile (.bashrc, .zshrc, etc.):"
+          echo "   export PATH=\"\$HOME/.local/bin:\$PATH\""
+        fi
+
+  uninstall:
+    desc: Uninstall the application and remove shell completions
+    cmds:
+      - echo "Uninstalling {{.BINARY_NAME}}..."
+      - rm -f $HOME/.local/bin/{{.BINARY_NAME}}
+      - rm -f $HOME/.local/bin/cps
+      - rm -f $HOME/.local/bin/{{.BINARY_NAME}}.backup
+      - rm -f $HOME/.local/share/bash-completion/completions/{{.BINARY_NAME}}
+      - rm -f $HOME/.local/share/zsh/site-functions/_{{.BINARY_NAME}}
+      - rm -f $HOME/.config/fish/completions/{{.BINARY_NAME}}.fish
+      - |
+        if command -v pwsh >/dev/null 2>&1; then
+          PWSH_PROFILE_DIR=$(pwsh -NoProfile -Command 'Split-Path $PROFILE')
+          rm -f "$PWSH_PROFILE_DIR/{{.BINARY_NAME}}_completion.ps1"
+          echo "  PowerShell completion removed. You may need to remove the sourcing line from your profile (\$PROFILE)"
+        fi
+      - echo "✓ Uninstall complete!"
 
   run:
     desc: Run the application
