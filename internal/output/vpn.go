@@ -1,3 +1,6 @@
+// Package output provides formatting and display functions for command-line output.
+// This file contains rendering functions for Cloud VPN resources including gateways,
+// tunnels, and BGP sessions with support for multiple output formats.
 package output
 
 import (
@@ -11,7 +14,18 @@ import (
 	"github.com/jedib0t/go-pretty/v6/text"
 )
 
-// DisplayVPNOverview renders VPN gateway/tunnel/BGP data in the requested format.
+// DisplayVPNOverview renders a complete Cloud VPN infrastructure overview to stdout.
+//
+// Supported formats:
+//   - "json": Raw JSON output of the complete data structure
+//   - "table": Tabular view with gateways, tunnels, and BGP peers in separate tables
+//   - "text" (default): Hierarchical text view with color-coded status indicators
+//
+// The text format includes:
+//   - Gateway information with interfaces and attached tunnels
+//   - Tunnel details with IPSec peers and BGP sessions
+//   - BGP peer status with advertised and learned route prefixes
+//   - Orphan resources (tunnels and BGP sessions without proper associations)
 func DisplayVPNOverview(data *gcp.VPNOverview, format string) error {
 	switch strings.ToLower(format) {
 	case "json":
@@ -23,6 +37,12 @@ func DisplayVPNOverview(data *gcp.VPNOverview, format string) error {
 	}
 }
 
+// DisplayVPNGateway renders details for a single VPN gateway to stdout.
+//
+// Supported formats:
+//   - "json": Raw JSON output
+//   - "table": Single-row table with gateway summary
+//   - "text" (default): Detailed text view including tunnels and BGP sessions
 func DisplayVPNGateway(gw *gcp.VPNGatewayInfo, format string) error {
 	switch strings.ToLower(format) {
 	case "json":
@@ -47,6 +67,12 @@ func DisplayVPNGateway(gw *gcp.VPNGatewayInfo, format string) error {
 	}
 }
 
+// DisplayVPNTunnel renders details for a single VPN tunnel to stdout.
+//
+// Supported formats:
+//   - "json": Raw JSON output
+//   - "table": Single-row table with tunnel summary and BGP peer count
+//   - "text" (default): Detailed text view including IPSec config, BGP sessions, and route prefixes
 func DisplayVPNTunnel(tunnel *gcp.VPNTunnelInfo, format string) error {
 	switch strings.ToLower(format) {
 	case "json":
@@ -502,27 +528,32 @@ func formatPeerDetail(peer *gcp.BGPSessionInfo) string {
 	)
 }
 
-// renderBGPPeers renders BGP peer information with the specified indentation
+// renderBGPPeers renders BGP peer information with the specified indentation.
+// For each peer, it displays session status, endpoint IPs, ASN, and route counts.
+// If available, it also shows the specific advertised and learned route prefixes.
 func renderBGPPeers(peers []*gcp.BGPSessionInfo, indent string) {
 	if len(peers) == 0 {
 		return
 	}
 
 	fmt.Printf("%sBGP Peers:\n", indent)
+
 	for _, peer := range sortedPeers(peers) {
 		fmt.Printf("%s  - %s\n", indent, formatPeerDetail(peer))
 
 		if len(peer.AdvertisedPrefixes) > 0 {
-			fmt.Printf("%s    Advertised: %s\n", indent, strings.Join(peer.AdvertisedPrefixes, ", "))
+			fmt.Printf("%s      Advertised: %s\n", indent, strings.Join(peer.AdvertisedPrefixes, ", "))
 		}
 
 		if len(peer.LearnedPrefixes) > 0 {
-			fmt.Printf("%s    Learned:    %s\n", indent, strings.Join(peer.LearnedPrefixes, ", "))
+			fmt.Printf("%s      Learned:    %s\n", indent, strings.Join(peer.LearnedPrefixes, ", "))
 		}
 	}
 }
 
-// renderGatewayHeader renders the gateway header and basic information
+// renderGatewayHeader renders the gateway header and basic information.
+// This includes the gateway name, region, description, network, interfaces, and labels.
+// The output is indented according to the indent parameter for hierarchical display.
 func renderGatewayHeader(gw *gcp.VPNGatewayInfo, indent string) {
 	if gw == nil {
 		return
@@ -540,6 +571,7 @@ func renderGatewayHeader(gw *gcp.VPNGatewayInfo, indent string) {
 
 	if len(gw.Interfaces) > 0 {
 		fmt.Printf("%s  Interfaces:\n", indent)
+
 		for _, iface := range gw.Interfaces {
 			fmt.Printf("%s    - #%d IP: %s\n", indent, iface.Id, iface.IpAddress)
 		}
@@ -547,13 +579,16 @@ func renderGatewayHeader(gw *gcp.VPNGatewayInfo, indent string) {
 
 	if len(gw.Labels) > 0 {
 		fmt.Printf("%s  Labels:\n", indent)
+
 		for k, v := range gw.Labels {
 			fmt.Printf("%s    %s: %s\n", indent, k, v)
 		}
 	}
 }
 
-// renderTunnelDetails renders tunnel details with the specified indentation and whether to show the region
+// renderTunnelDetails renders tunnel details with the specified indentation and whether to show the region.
+// The showRegion parameter controls whether the region is displayed in the header or the status is shown instead.
+// This is a wrapper around renderTunnelDetailsBody that adds the tunnel header line.
 func renderTunnelDetails(tunnel *gcp.VPNTunnelInfo, indent string, showRegion bool) {
 	if tunnel == nil {
 		return
@@ -568,7 +603,10 @@ func renderTunnelDetails(tunnel *gcp.VPNTunnelInfo, indent string, showRegion bo
 	renderTunnelDetailsBody(tunnel, indent+"  ", showRegion, false)
 }
 
-// renderTunnelDetailsBody renders the body of tunnel details (without the header)
+// renderTunnelDetailsBody renders the body of tunnel details (without the header).
+// The showStatus parameter controls whether to display the tunnel status field.
+// The showSecretHash parameter controls whether to display the pre-shared key hash.
+// This function is called by both renderTunnelDetails and renderTunnelText to avoid code duplication.
 func renderTunnelDetailsBody(tunnel *gcp.VPNTunnelInfo, indent string, showStatus bool, showSecretHash bool) {
 	if tunnel == nil {
 		return

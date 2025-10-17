@@ -38,6 +38,7 @@ func runVPNList(ctx context.Context) {
 		if message == "" {
 			return
 		}
+
 		spin.Update(message)
 		logger.Log.Debug(message)
 	}

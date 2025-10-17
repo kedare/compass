@@ -53,6 +53,7 @@ func runVPNGet(ctx context.Context, name string) {
 		if message == "" {
 			return
 		}
+
 		spin.Update(message)
 		logger.Log.Debug(message)
 	}
@@ -66,7 +67,9 @@ func runVPNGet(ctx context.Context, name string) {
 			spin.Fail("Failed to collect gateway data")
 			logger.Log.Fatalf("Failed to fetch VPN gateway: %v", err)
 		}
+
 		spin.Success("Cloud VPN data retrieved")
+
 		if err := output.DisplayVPNGateway(info, vpnGetOutput); err != nil {
 			logger.Log.Fatalf("Failed to render VPN gateway: %v", err)
 		}
@@ -76,7 +79,9 @@ func runVPNGet(ctx context.Context, name string) {
 			spin.Fail("Failed to collect tunnel data")
 			logger.Log.Fatalf("Failed to fetch VPN tunnel: %v", err)
 		}
+
 		spin.Success("Cloud VPN data retrieved")
+
 		if err := output.DisplayVPNTunnel(info, vpnGetOutput); err != nil {
 			logger.Log.Fatalf("Failed to render VPN tunnel: %v", err)
 		}

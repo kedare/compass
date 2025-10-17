@@ -1,3 +1,5 @@
+// Package gcp provides types and methods for interacting with Google Cloud Platform resources.
+// This file contains VPN-related functionality for Cloud VPN gateways, tunnels, and BGP sessions.
 package gcp
 
 import (
@@ -10,28 +12,41 @@ import (
 	"google.golang.org/api/compute/v1"
 )
 
-// VPNOverview groups HA VPN gateways, tunnels, and BGP peers for display.
+// VPNOverview aggregates the complete Cloud VPN infrastructure state for a GCP project.
+// It organizes HA VPN gateways with their associated tunnels and BGP sessions, while
+// also tracking resources that lack proper associations (orphan tunnels and sessions).
 type VPNOverview struct {
-	Gateways       []*VPNGatewayInfo
-	OrphanTunnels  []*VPNTunnelInfo
+	// Gateways contains all HA VPN gateways discovered in the project, with their
+	// associated tunnels and BGP sessions populated.
+	Gateways []*VPNGatewayInfo
+
+	// OrphanTunnels contains VPN tunnels that are not associated with any HA VPN gateway.
+	// This typically includes legacy Classic VPN tunnels or tunnels with missing gateway links.
+	OrphanTunnels []*VPNTunnelInfo
+
+	// OrphanSessions contains BGP peers that could not be matched to any VPN tunnel.
+	// This can occur when a router interface is not linked to a tunnel or when
+	// the tunnel reference is invalid.
 	OrphanSessions []*BGPSessionInfo
 }
 
-// VPNGatewayInfo represents an HA VPN gateway and associated resources.
+// VPNGatewayInfo represents an HA VPN gateway with its complete configuration and state.
+// HA VPN gateways provide highly available VPN connectivity with 99.99% SLA when properly configured.
 type VPNGatewayInfo struct {
-	Name        string
-	Region      string
-	Network     string
-	Description string
-	SelfLink    string
-	Labels      map[string]string
-	Interfaces  []*compute.VpnGatewayVpnGatewayInterface
-	Tunnels     []*VPNTunnelInfo
+	Name        string                                   // Gateway name
+	Region      string                                   // GCP region where the gateway is deployed
+	Network     string                                   // VPC network to which the gateway is attached
+	Description string                                   // User-provided description
+	SelfLink    string                                   // Full GCP resource URL
+	Labels      map[string]string                        // Resource labels for organization and billing
+	Interfaces  []*compute.VpnGatewayVpnGatewayInterface // Gateway interfaces (typically 2 for HA)
+	Tunnels     []*VPNTunnelInfo                         // VPN tunnels attached to this gateway
 }
 
-// VPNTunnelInfo captures core tunnel metadata and associated BGP sessions.
+// VPNTunnelInfo captures the complete state of a Cloud VPN tunnel including its
+// IPSec configuration, status, and associated BGP sessions for dynamic routing.
 type VPNTunnelInfo struct {
-	Name              string
+	TargetGatewayLink string
 	Description       string
 	Region            string
 	SelfLink          string
@@ -39,23 +54,24 @@ type VPNTunnelInfo struct {
 	PeerGateway       string
 	PeerExternal      string
 	LocalGatewayIP    string
-	Status            string
 	DetailedStatus    string
-	IkeVersion        int64
-	SharedSecretHash  string
+	Status            string
 	RouterSelfLink    string
+	SharedSecretHash  string
+	LabelFingerprint  string
 	RouterName        string
 	RouterRegion      string
-	TargetGatewayLink string
+	Name              string
 	GatewayLink       string
-	GatewayInterface  int64
-	LabelFingerprint  string
 	BgpSessions       []*BGPSessionInfo
+	GatewayInterface  int64
+	IkeVersion        int64
 }
 
-// BGPSessionInfo represents a Cloud Router BGP peer attached to a VPN tunnel.
+// BGPSessionInfo represents a Cloud Router BGP peering session attached to a VPN tunnel.
+// BGP sessions enable dynamic route exchange between GCP and the remote network.
 type BGPSessionInfo struct {
-	Name               string
+	SessionState       string
 	RouterName         string
 	RouterSelfLink     string
 	Region             string
@@ -63,18 +79,18 @@ type BGPSessionInfo struct {
 	Interface          string
 	PeerIP             string
 	LocalIP            string
-	PeerASN            int64
 	AdvertisedMode     string
-	RoutePriority      int64
-	Enabled            bool
-	AdvertisedGroups   []string
-	AdvertisedIPRanges []*compute.RouterAdvertisedIpRange
+	Name               string
 	SessionStatus      string
-	SessionState       string
-	LearnedRoutes      int64
-	AdvertisedCount    int
+	AdvertisedIPRanges []*compute.RouterAdvertisedIpRange
+	AdvertisedGroups   []string
 	AdvertisedPrefixes []string
 	LearnedPrefixes    []string
+	RoutePriority      int64
+	PeerASN            int64
+	LearnedRoutes      int64
+	AdvertisedCount    int
+	Enabled            bool
 }
 
 type routerRef struct {
@@ -84,25 +100,45 @@ type routerRef struct {
 
 var apiPageBreak = errors.New("page break")
 
-// ListVPNOverview retrieves HA VPN gateways along with associated tunnels and BGP peers.
+// ListVPNOverview retrieves a comprehensive view of all Cloud VPN infrastructure in the project.
+//
+// This function performs the following operations:
+//  1. Lists all HA VPN gateways across all regions
+//  2. Lists all VPN tunnels (both HA and Classic VPN)
+//  3. Lists all Cloud Router BGP peering sessions
+//  4. Associates tunnels with their parent gateways
+//  5. Attaches BGP sessions to their corresponding tunnels
+//  6. Fetches advertised and learned BGP route prefixes for each session
+//
+// Resources that cannot be properly associated are collected as "orphans":
+//   - OrphanTunnels: tunnels not linked to any HA VPN gateway (e.g., Classic VPN)
+//   - OrphanSessions: BGP peers not linked to any tunnel
+//
+// The progress callback, if provided, is called periodically with status messages
+// about the data collection process. It can be nil if progress tracking is not needed.
+//
+// Returns an error if any API calls fail or if the context is canceled.
 func (c *Client) ListVPNOverview(ctx context.Context, progress func(string)) (*VPNOverview, error) {
 	if progress == nil {
 		progress = func(string) {}
 	}
 
 	progress("Loading HA VPN gateways")
+
 	gateways, err := c.listVpnGateways(ctx, progress)
 	if err != nil {
 		return nil, err
 	}
 
 	progress("Loading Cloud VPN tunnels")
+
 	tunnels, err := c.listVpnTunnels(ctx, progress)
 	if err != nil {
 		return nil, err
 	}
 
 	progress("Loading Cloud Router BGP peers")
+
 	sessions, err := c.listRouterBgpPeers(ctx, progress)
 	if err != nil {
 		return nil, err
@@ -117,6 +153,7 @@ func (c *Client) ListVPNOverview(ctx context.Context, progress func(string)) (*V
 	}
 
 	tunnelByLink := make(map[string]*VPNTunnelInfo, len(tunnels))
+
 	for _, t := range tunnels {
 		key := normalizeLink(t.SelfLink)
 		if key != "" {
@@ -129,8 +166,10 @@ func (c *Client) ListVPNOverview(ctx context.Context, progress func(string)) (*V
 		link := normalizeLink(peer.VpnTunnelLink)
 		if link == "" {
 			overview.OrphanSessions = append(overview.OrphanSessions, peer)
+
 			continue
 		}
+
 		if t, ok := tunnelByLink[link]; ok {
 			t.BgpSessions = append(t.BgpSessions, peer)
 		} else {
@@ -140,6 +179,7 @@ func (c *Client) ListVPNOverview(ctx context.Context, progress func(string)) (*V
 
 	// Associate tunnels with gateways.
 	attached := make(map[string]bool)
+
 	for _, gw := range gateways {
 		for _, tunnel := range tunnels {
 			if sameResource(gw.SelfLink, tunnel.GatewayLink) {
@@ -153,15 +193,18 @@ func (c *Client) ListVPNOverview(ctx context.Context, progress func(string)) (*V
 		if attached[normalizeLink(tunnel.SelfLink)] {
 			continue
 		}
+
 		overview.OrphanTunnels = append(overview.OrphanTunnels, tunnel)
 	}
 
 	// Populate BGP routes for all tunnels
 	progress("Fetching BGP advertised and learned routes")
+
 	allTunnels := make([]*VPNTunnelInfo, 0, len(tunnels))
 	for _, gw := range gateways {
 		allTunnels = append(allTunnels, gw.Tunnels...)
 	}
+
 	allTunnels = append(allTunnels, overview.OrphanTunnels...)
 
 	if err := c.populateTunnelBGP(ctx, allTunnels, progress, true); err != nil {
@@ -171,7 +214,22 @@ func (c *Client) ListVPNOverview(ctx context.Context, progress func(string)) (*V
 	return overview, nil
 }
 
-// GetVPNGatewayOverview retrieves details for a specific HA VPN gateway.
+// GetVPNGatewayOverview retrieves comprehensive details for a specific HA VPN gateway.
+//
+// This function fetches the gateway configuration and enriches it with:
+//   - All VPN tunnels attached to the gateway
+//   - BGP sessions configured on each tunnel
+//   - Advertised and learned route prefixes for each BGP session
+//   - Local gateway IP addresses for each tunnel
+//
+// The region parameter is optional. If provided, it performs a direct lookup in that
+// region for better performance. If empty, the function searches across all regions
+// using an aggregated list query.
+//
+// The progress callback, if provided, receives status messages during data collection.
+//
+// Returns an error if the gateway is not found, if API calls fail, or if the context
+// is canceled.
 func (c *Client) GetVPNGatewayOverview(ctx context.Context, region, name string, progress func(string)) (*VPNGatewayInfo, error) {
 	if progress == nil {
 		progress = func(string) {}
@@ -179,6 +237,7 @@ func (c *Client) GetVPNGatewayOverview(ctx context.Context, region, name string,
 
 	if region != "" {
 		progress(fmt.Sprintf("Getting VPN gateway %s in %s", name, region))
+
 		gw, err := c.service.VpnGateways.Get(c.project, region, name).Context(ctx).Do()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get VPN gateway %s: %w", name, err)
@@ -202,6 +261,7 @@ func (c *Client) GetVPNGatewayOverview(ctx context.Context, region, name string,
 		Filter(nameFilter(name))
 
 	var result *VPNGatewayInfo
+
 	err := call.Pages(ctx, func(page *compute.VpnGatewayAggregatedList) error {
 		for scope, scopedList := range page.Items {
 			if len(scopedList.VpnGateways) == 0 {
@@ -215,6 +275,7 @@ func (c *Client) GetVPNGatewayOverview(ctx context.Context, region, name string,
 					continue
 				}
 				result = info
+
 				return apiPageBreak
 			}
 		}
@@ -223,8 +284,10 @@ func (c *Client) GetVPNGatewayOverview(ctx context.Context, region, name string,
 	})
 	if err != nil && !errors.Is(err, apiPageBreak) {
 		logger.Log.Errorf("Failed to search VPN gateway %s: %v", name, err)
+
 		return nil, fmt.Errorf("failed to search VPN gateway %s: %w", name, err)
 	}
+
 	if errors.Is(err, apiPageBreak) {
 		err = nil
 	}
@@ -240,7 +303,22 @@ func (c *Client) GetVPNGatewayOverview(ctx context.Context, region, name string,
 	return result, nil
 }
 
-// GetVPNTunnelOverview retrieves details for a specific VPN tunnel.
+// GetVPNTunnelOverview retrieves comprehensive details for a specific VPN tunnel.
+//
+// This function fetches the tunnel configuration and enriches it with:
+//   - Local gateway IP address (derived from the parent gateway interface)
+//   - All BGP sessions configured on the tunnel
+//   - Advertised and learned route prefixes for each BGP session
+//   - Router status and session state information
+//
+// The region parameter is optional. If provided, it performs a direct lookup in that
+// region for better performance. If empty, the function searches across all regions
+// using an aggregated list query.
+//
+// The progress callback, if provided, receives status messages during data collection.
+//
+// Returns an error if the tunnel is not found, if API calls fail, or if the context
+// is canceled.
 func (c *Client) GetVPNTunnelOverview(ctx context.Context, region, name string, progress func(string)) (*VPNTunnelInfo, error) {
 	if progress == nil {
 		progress = func(string) {}
@@ -250,6 +328,7 @@ func (c *Client) GetVPNTunnelOverview(ctx context.Context, region, name string, 
 
 	if region != "" {
 		progress(fmt.Sprintf("Getting VPN tunnel %s in %s", name, region))
+
 		tunnel, err := c.service.VpnTunnels.Get(c.project, region, name).Context(ctx).Do()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get VPN tunnel %s: %w", name, err)
@@ -266,6 +345,7 @@ func (c *Client) GetVPNTunnelOverview(ctx context.Context, region, name string, 
 				if len(scopedList.VpnTunnels) == 0 {
 					continue
 				}
+
 				region := scopeSuffix(scope)
 				for _, t := range scopedList.VpnTunnels {
 					info = convertVpnTunnel(region, t)
@@ -280,6 +360,7 @@ func (c *Client) GetVPNTunnelOverview(ctx context.Context, region, name string, 
 		if err != nil && !errors.Is(err, apiPageBreak) {
 			return nil, fmt.Errorf("failed to search VPN tunnel %s: %w", name, err)
 		}
+
 		if errors.Is(err, apiPageBreak) {
 			err = nil
 		}
@@ -300,15 +381,18 @@ func (c *Client) GetVPNTunnelOverview(ctx context.Context, region, name string, 
 	return info, nil
 }
 
+// listVpnGateways retrieves all HA VPN gateways across all regions using aggregated list.
 func (c *Client) listVpnGateways(ctx context.Context, progress func(string)) ([]*VPNGatewayInfo, error) {
 	logger.Log.Debug("Listing VPN gateways (aggregated)")
 
 	var gateways []*VPNGatewayInfo
+
 	if progress != nil {
 		progress("Calling compute.v1 VpnGateways.AggregatedList")
 	}
 
 	call := c.service.VpnGateways.AggregatedList(c.project).Context(ctx)
+
 	err := call.Pages(ctx, func(page *compute.VpnGatewayAggregatedList) error {
 		for scope, scopedList := range page.Items {
 			if len(scopedList.VpnGateways) == 0 {
@@ -319,6 +403,7 @@ func (c *Client) listVpnGateways(ctx context.Context, progress func(string)) ([]
 			if progress != nil {
 				progress(fmt.Sprintf("Fetched HA VPN gateways in %s", region))
 			}
+
 			for _, gw := range scopedList.VpnGateways {
 				if info := convertVpnGateway(region, gw); info != nil {
 					gateways = append(gateways, info)
@@ -330,21 +415,25 @@ func (c *Client) listVpnGateways(ctx context.Context, progress func(string)) ([]
 	})
 	if err != nil {
 		logger.Log.Errorf("Failed to list VPN gateways: %v", err)
+
 		return nil, fmt.Errorf("failed to list VPN gateways: %w", err)
 	}
 
 	return gateways, nil
 }
 
+// listVpnTunnels retrieves all VPN tunnels (HA and Classic) across all regions using aggregated list.
 func (c *Client) listVpnTunnels(ctx context.Context, progress func(string)) ([]*VPNTunnelInfo, error) {
 	logger.Log.Debug("Listing VPN tunnels (aggregated)")
 
 	var tunnels []*VPNTunnelInfo
+
 	if progress != nil {
 		progress("Calling compute.v1 VpnTunnels.AggregatedList")
 	}
 
 	call := c.service.VpnTunnels.AggregatedList(c.project).Context(ctx)
+
 	err := call.Pages(ctx, func(page *compute.VpnTunnelAggregatedList) error {
 		for scope, scopedList := range page.Items {
 			if len(scopedList.VpnTunnels) == 0 {
@@ -355,6 +444,7 @@ func (c *Client) listVpnTunnels(ctx context.Context, progress func(string)) ([]*
 			if progress != nil {
 				progress(fmt.Sprintf("Fetched VPN tunnels in %s", region))
 			}
+
 			for _, t := range scopedList.VpnTunnels {
 				if info := convertVpnTunnel(region, t); info != nil {
 					tunnels = append(tunnels, info)
@@ -366,21 +456,26 @@ func (c *Client) listVpnTunnels(ctx context.Context, progress func(string)) ([]*
 	})
 	if err != nil {
 		logger.Log.Errorf("Failed to list VPN tunnels: %v", err)
+
 		return nil, fmt.Errorf("failed to list VPN tunnels: %w", err)
 	}
 
 	return tunnels, nil
 }
 
+// listRouterBgpPeers retrieves all BGP peer configurations from Cloud Routers across all regions.
+// This includes basic peer configuration but does NOT include advertised/learned route prefixes.
 func (c *Client) listRouterBgpPeers(ctx context.Context, progress func(string)) ([]*BGPSessionInfo, error) {
 	logger.Log.Debug("Listing Cloud Routers (aggregated) for BGP peers")
 
 	var peers []*BGPSessionInfo
+
 	if progress != nil {
 		progress("Calling compute.v1 Routers.AggregatedList")
 	}
 
 	call := c.service.Routers.AggregatedList(c.project).Context(ctx)
+
 	err := call.Pages(ctx, func(page *compute.RouterAggregatedList) error {
 		for scope, scopedList := range page.Items {
 			if len(scopedList.Routers) == 0 {
@@ -391,25 +486,30 @@ func (c *Client) listRouterBgpPeers(ctx context.Context, progress func(string)) 
 			if progress != nil {
 				progress(fmt.Sprintf("Fetched Cloud Routers in %s", region))
 			}
+
 			for _, router := range scopedList.Routers {
 				if len(router.BgpPeers) == 0 {
 					continue
 				}
 
 				interfaceToTunnel := map[string]string{}
+
 				for _, iface := range router.Interfaces {
 					if iface == nil || strings.TrimSpace(iface.Name) == "" {
 						continue
 					}
+
 					if iface.LinkedVpnTunnel != "" {
 						interfaceToTunnel[iface.Name] = iface.LinkedVpnTunnel
 					}
 				}
 
 				statusMap := map[string]*compute.RouterStatusBgpPeerStatus{}
+
 				if progress != nil {
 					progress(fmt.Sprintf("Fetching router status for %s", router.Name))
 				}
+
 				statusResp, err := c.service.Routers.GetRouterStatus(c.project, region, router.Name).Context(ctx).Do()
 				if err != nil {
 					logger.Log.Warnf("Failed to fetch router status for %s: %v", router.Name, err)
@@ -424,6 +524,7 @@ func (c *Client) listRouterBgpPeers(ctx context.Context, progress func(string)) 
 					if candidate, ok := interfaceToTunnel[peer.InterfaceName]; ok {
 						link = normalizeLink(candidate)
 					}
+
 					peerInfo := &BGPSessionInfo{
 						Name:               peer.Name,
 						RouterName:         router.Name,
@@ -447,6 +548,7 @@ func (c *Client) listRouterBgpPeers(ctx context.Context, progress func(string)) 
 						peerInfo.LearnedRoutes = status.NumLearnedRoutes
 						peerInfo.AdvertisedCount = len(status.AdvertisedRoutes)
 					}
+
 					peers = append(peers, peerInfo)
 				}
 			}
@@ -456,12 +558,15 @@ func (c *Client) listRouterBgpPeers(ctx context.Context, progress func(string)) 
 	})
 	if err != nil {
 		logger.Log.Errorf("Failed to list Cloud Router BGP peers: %v", err)
+
 		return nil, fmt.Errorf("failed to list Cloud Router BGP peers: %w", err)
 	}
 
 	return peers, nil
 }
 
+// attachTunnelsForGateway finds and attaches all tunnels associated with a specific gateway.
+// It also populates local gateway IPs and fetches BGP session details including route prefixes.
 func (c *Client) attachTunnelsForGateway(ctx context.Context, gw *VPNGatewayInfo, progress func(string)) error {
 	if gw == nil {
 		return nil
@@ -473,24 +578,29 @@ func (c *Client) attachTunnelsForGateway(ctx context.Context, gw *VPNGatewayInfo
 	}
 
 	call := c.service.VpnTunnels.List(c.project, gw.Region).Context(ctx)
+
 	err := call.Pages(ctx, func(list *compute.VpnTunnelList) error {
 		for _, t := range list.Items {
 			info := convertVpnTunnel(gw.Region, t)
 			if info == nil {
 				continue
 			}
+
 			if sameResource(info.GatewayLink, gw.SelfLink) || sameResource(info.TargetGatewayLink, gw.SelfLink) {
 				if info.LocalGatewayIP == "" {
 					if idx := info.GatewayInterface; idx >= 0 && int(idx) < len(gw.Interfaces) {
 						info.LocalGatewayIP = strings.TrimSpace(gw.Interfaces[idx].IpAddress)
 					}
+
 					if info.LocalGatewayIP == "" && len(gw.Interfaces) == 1 {
 						info.LocalGatewayIP = strings.TrimSpace(gw.Interfaces[0].IpAddress)
 					}
 				}
+
 				gw.Tunnels = append(gw.Tunnels, info)
 			}
 		}
+
 		return nil
 	})
 	if err != nil {
@@ -504,6 +614,8 @@ func (c *Client) attachTunnelsForGateway(ctx context.Context, gw *VPNGatewayInfo
 	return c.populateTunnelBGP(ctx, gw.Tunnels, progress, true)
 }
 
+// populateTunnelGatewayIP fills in the local gateway IP address for tunnels by fetching
+// the parent gateway configuration and looking up the interface IP.
 func (c *Client) populateTunnelGatewayIP(ctx context.Context, tunnels []*VPNTunnelInfo, progress func(string)) error {
 	for _, tunnel := range tunnels {
 		if tunnel == nil || strings.TrimSpace(tunnel.LocalGatewayIP) != "" {
@@ -522,6 +634,7 @@ func (c *Client) populateTunnelGatewayIP(ctx context.Context, tunnels []*VPNTunn
 		gw, err := c.service.VpnGateways.Get(c.project, region, name).Context(ctx).Do()
 		if err != nil {
 			logger.Log.Warnf("Failed to fetch gateway %s: %v", name, err)
+
 			continue
 		}
 
@@ -537,6 +650,18 @@ func (c *Client) populateTunnelGatewayIP(ctx context.Context, tunnels []*VPNTunn
 	return nil
 }
 
+// populateTunnelBGP enriches tunnel information with BGP session details from Cloud Routers.
+//
+// This function performs the following:
+//  1. Builds a map of tunnels by their self-link for efficient lookup
+//  2. Identifies unique routers associated with the tunnels
+//  3. Fetches router configuration and status for each unique router
+//  4. Matches BGP peers to tunnels via router interface associations
+//  5. Optionally fetches advertised and learned route prefixes if includeRoutes is true
+//
+// The includeRoutes parameter controls whether to fetch actual route prefixes. When false,
+// only basic BGP session info (status, route counts) is populated. When true, the actual
+// advertised and learned route prefixes are fetched from the router status API.
 func (c *Client) populateTunnelBGP(ctx context.Context, tunnels []*VPNTunnelInfo, progress func(string), includeRoutes bool) error {
 	if len(tunnels) == 0 {
 		return nil
@@ -576,6 +701,7 @@ func (c *Client) populateTunnelBGP(ctx context.Context, tunnels []*VPNTunnelInfo
 		router, err := c.service.Routers.Get(c.project, ref.Region, ref.Name).Context(ctx).Do()
 		if err != nil {
 			logger.Log.Warnf("Failed to fetch router %s: %v", ref.Name, err)
+
 			continue
 		}
 
@@ -585,6 +711,7 @@ func (c *Client) populateTunnelBGP(ctx context.Context, tunnels []*VPNTunnelInfo
 		}
 
 		statusMap := map[string]*compute.RouterStatusBgpPeerStatus{}
+
 		if statusResp != nil && statusResp.Result != nil {
 			for _, status := range statusResp.Result.BgpPeerStatus {
 				statusMap[status.Name] = status
@@ -593,16 +720,20 @@ func (c *Client) populateTunnelBGP(ctx context.Context, tunnels []*VPNTunnelInfo
 
 		learnedByTunnel := make(map[string][]string)
 		learnedByPeerIP := make(map[string][]string)
+
 		if includeRoutes && statusResp != nil && statusResp.Result != nil {
 			for _, route := range statusResp.Result.BestRoutesForRouter {
 				if route == nil || strings.TrimSpace(route.DestRange) == "" {
 					continue
 				}
+
 				prefix := strings.TrimSpace(route.DestRange)
 				if key := normalizeLink(route.NextHopVpnTunnel); key != "" {
 					learnedByTunnel[key] = append(learnedByTunnel[key], prefix)
+
 					continue
 				}
+
 				if ip := strings.TrimSpace(route.NextHopIp); ip != "" {
 					learnedByPeerIP[ip] = append(learnedByPeerIP[ip], prefix)
 				}
@@ -610,6 +741,7 @@ func (c *Client) populateTunnelBGP(ctx context.Context, tunnels []*VPNTunnelInfo
 		}
 
 		interfaceToTunnel := map[string]string{}
+
 		for _, iface := range router.Interfaces {
 			if iface == nil || iface.LinkedVpnTunnel == "" {
 				continue
@@ -650,6 +782,7 @@ func (c *Client) populateTunnelBGP(ctx context.Context, tunnels []*VPNTunnelInfo
 				info.SessionState = status.State
 				info.LearnedRoutes = status.NumLearnedRoutes
 				info.AdvertisedCount = len(status.AdvertisedRoutes)
+
 				if includeRoutes {
 					info.AdvertisedPrefixes = extractDestRanges(status.AdvertisedRoutes)
 				}
@@ -779,6 +912,7 @@ func firstNonEmpty(values ...string) string {
 			return v
 		}
 	}
+
 	return ""
 }
 
@@ -786,15 +920,18 @@ func copyLabels(src map[string]string) map[string]string {
 	if len(src) == 0 {
 		return nil
 	}
+
 	dst := make(map[string]string, len(src))
 	for k, v := range src {
 		dst[k] = v
 	}
+
 	return dst
 }
 
 func nameFilter(name string) string {
 	escaped := strings.ReplaceAll(name, "\"", "\\\"")
+
 	return fmt.Sprintf("name eq \"%s\"", escaped)
 }
 
@@ -806,7 +943,7 @@ func gatewayReference(link, fallbackRegion string) (string, string) {
 	parts := strings.Split(link, "/")
 	var region, name string
 
-	for i := 0; i < len(parts); i++ {
+	for i := range len(parts) {
 		switch parts[i] {
 		case "regions":
 			if i+1 < len(parts) {
@@ -832,10 +969,12 @@ func extractDestRanges(routes []*compute.Route) []string {
 	}
 
 	result := make([]string, 0, len(routes))
+
 	for _, route := range routes {
 		if route == nil {
 			continue
 		}
+
 		if dest := strings.TrimSpace(route.DestRange); dest != "" {
 			result = append(result, dest)
 		}
@@ -855,7 +994,8 @@ func routerReference(link, fallbackRegion string) (string, string) {
 
 	parts := strings.Split(link, "/")
 	var region, name string
-	for i := 0; i < len(parts); i++ {
+
+	for i := range len(parts) {
 		switch parts[i] {
 		case "regions":
 			if i+1 < len(parts) {
