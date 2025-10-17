@@ -1,4 +1,4 @@
-# compass - Cloud Connectiviy toolset
+# compass - Cloud connectivity toolset
 
 > Main project location : [Codeberg](https://codeberg.org/kedare/compass) : This is where you should open issues and PR and download releases
 
