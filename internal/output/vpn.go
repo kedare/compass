@@ -93,7 +93,14 @@ func displayVPNText(data *gcp.VPNOverview) error {
 				fmt.Println("      BGP Peers:")
 
 				for _, peer := range sortedPeers(tunnel.BgpSessions) {
-					fmt.Printf("        - %s (%s, ASN %d, %s)\n", colorPeerName(peer), peer.PeerIP, peer.PeerASN, colorPeerState(peer))
+					fmt.Printf("        - %s (%s, ASN %d) status %s, learned %d, advertised %d\n",
+						colorPeerName(peer),
+						peer.PeerIP,
+						peer.PeerASN,
+						colorPeerStatus(peer),
+						peer.LearnedRoutes,
+						peer.AdvertisedCount,
+					)
 				}
 			}
 		}
@@ -165,9 +172,13 @@ func displayVPNTable(data *gcp.VPNOverview) error {
 	for _, gw := range sortedGateways(data.Gateways) {
 		for _, tunnel := range sortedTunnels(gw.Tunnels) {
 			peerNames := make([]string, 0, len(tunnel.BgpSessions))
-
 			for _, peer := range sortedPeers(tunnel.BgpSessions) {
-				display := fmt.Sprintf("%s (%s)", colorPeerName(peer), colorPeerState(peer))
+				display := fmt.Sprintf("%s [%s L%d/A%d]",
+					colorPeerName(peer),
+					colorPeerStatus(peer),
+					peer.LearnedRoutes,
+					peer.AdvertisedCount,
+				)
 				peerNames = append(peerNames, display)
 			}
 
@@ -211,7 +222,7 @@ func displayVPNTable(data *gcp.VPNOverview) error {
 		bgps := table.NewWriter()
 		bgps.SetOutputMirror(os.Stdout)
 		bgps.SetStyle(table.StyleLight)
-		bgps.AppendHeader(table.Row{"BGP Peer", "Router", "Region", "Peer IP", "ASN", "State"})
+		bgps.AppendHeader(table.Row{"BGP Peer", "Router", "Region", "Peer IP", "ASN", "State", "Learned", "Advertised"})
 
 		for _, peer := range sortedPeers(data.OrphanSessions) {
 			bgps.AppendRow(table.Row{
@@ -220,7 +231,9 @@ func displayVPNTable(data *gcp.VPNOverview) error {
 				peer.Region,
 				peer.PeerIP,
 				peer.PeerASN,
-				colorPeerState(peer),
+				colorPeerStatus(peer),
+				peer.LearnedRoutes,
+				peer.AdvertisedCount,
 			})
 		}
 
@@ -301,14 +314,23 @@ func colorPeerName(peer *gcp.BGPSessionInfo) string {
 	return text.Colors{text.FgYellow}.Sprint(peer.Name)
 }
 
-func colorPeerState(peer *gcp.BGPSessionInfo) string {
+func colorPeerStatus(peer *gcp.BGPSessionInfo) string {
 	if peer == nil {
-		return "unknown"
+		return applyStyle("UNKNOWN", "warn")
 	}
-	if peer.Enabled {
-		return text.Colors{text.Bold, text.FgGreen}.Sprint("enabled")
+
+	status := strings.ToUpper(strings.TrimSpace(peer.SessionStatus))
+	if status == "" {
+		status = "UNKNOWN"
 	}
-	return text.Colors{text.FgYellow}.Sprint("disabled")
+
+	state := strings.ToUpper(strings.TrimSpace(peer.SessionState))
+	label := status
+	if state != "" && !strings.EqualFold(status, state) {
+		label = fmt.Sprintf("%s/%s", status, state)
+	}
+
+	return applyStyle(label, classifyStatus(status))
 }
 
 func classifyStatus(status string) string {
@@ -317,9 +339,9 @@ func classifyStatus(status string) string {
 		return "unknown"
 	}
 
-	goodTokens := []string{"ESTABLISHED"}
+	goodTokens := []string{"ESTABLISHED", "UP"}
 	badTokens := []string{"FAILED", "DOWN", "REJECTED", "ERROR", "STOPPED", "DEPROVISIONING", "NO_INCOMING_PACKETS", "NEGOTIATION_FAILURE", "PEER_IDENTITY_MISMATCH"}
-	warnTokens := []string{"PROVISIONING", "WAIT", "ALLOC", "FIRST_HANDSHAKE"}
+	warnTokens := []string{"PROVISIONING", "WAIT", "ALLOC", "FIRST_HANDSHAKE", "START", "CONNECT"}
 
 	for _, token := range goodTokens {
 		if strings.Contains(value, token) {

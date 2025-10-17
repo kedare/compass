@@ -66,6 +66,10 @@ type BGPSessionInfo struct {
 	Enabled            bool
 	AdvertisedGroups   []string
 	AdvertisedIPRanges []*compute.RouterAdvertisedIpRange
+	SessionStatus      string
+	SessionState       string
+	LearnedRoutes      int64
+	AdvertisedCount    int
 }
 
 // ListVPNOverview retrieves HA VPN gateways along with associated tunnels and BGP peers.
@@ -249,6 +253,16 @@ func (c *Client) listRouterBgpPeers(ctx context.Context) ([]*BGPSessionInfo, err
 					}
 				}
 
+				statusMap := map[string]*compute.RouterStatusBgpPeerStatus{}
+				statusResp, err := c.service.Routers.GetRouterStatus(c.project, region, router.Name).Context(ctx).Do()
+				if err != nil {
+					logger.Log.Warnf("Failed to fetch router status for %s: %v", router.Name, err)
+				} else if statusResp != nil && statusResp.Result != nil {
+					for _, peerStatus := range statusResp.Result.BgpPeerStatus {
+						statusMap[peerStatus.Name] = peerStatus
+					}
+				}
+
 				for _, peer := range router.BgpPeers {
 					link := ""
 					if candidate, ok := interfaceToTunnel[peer.InterfaceName]; ok {
@@ -268,6 +282,13 @@ func (c *Client) listRouterBgpPeers(ctx context.Context) ([]*BGPSessionInfo, err
 						Enabled:            !strings.EqualFold(peer.Enable, "FALSE"),
 						AdvertisedGroups:   append([]string{}, peer.AdvertisedGroups...),
 						AdvertisedIPRanges: append([]*compute.RouterAdvertisedIpRange{}, peer.AdvertisedIpRanges...),
+					}
+
+					if status := statusMap[peer.Name]; status != nil {
+						peerInfo.SessionStatus = status.Status
+						peerInfo.SessionState = status.State
+						peerInfo.LearnedRoutes = status.NumLearnedRoutes
+						peerInfo.AdvertisedCount = len(status.AdvertisedRoutes)
 					}
 					peers = append(peers, peerInfo)
 				}
