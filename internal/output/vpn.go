@@ -79,61 +79,13 @@ func renderGatewayText(gw *gcp.VPNGatewayInfo) error {
 		return nil
 	}
 
-	fmt.Printf("🔐 Gateway: %s (%s)\n", gw.Name, gw.Region)
-
-	if gw.Description != "" {
-		fmt.Printf("  Description: %s\n", gw.Description)
-	}
-
-	if gw.Network != "" {
-		fmt.Printf("  Network:     %s\n", resourceName(gw.Network))
-	}
-
-	if len(gw.Interfaces) > 0 {
-		fmt.Println("  Interfaces:")
-
-		for _, iface := range gw.Interfaces {
-			fmt.Printf("    - #%d IP: %s\n", iface.Id, iface.IpAddress)
-		}
-	}
-
-	if len(gw.Labels) > 0 {
-		fmt.Println("  Labels:")
-
-		for k, v := range gw.Labels {
-			fmt.Printf("    %s: %s\n", k, v)
-		}
-	}
+	renderGatewayHeader(gw, "")
 
 	if len(gw.Tunnels) > 0 {
 		fmt.Println("  Tunnels:")
 
 		for _, tunnel := range sortedTunnels(gw.Tunnels) {
-			fmt.Printf("    • %s [%s]\n", colorTunnelName(tunnel), colorStatus(tunnel.Status))
-
-			if tunnel.PeerIP != "" {
-				fmt.Printf("      IPSec Peers: %s\n", formatIPSecPeers(tunnel))
-			}
-
-			if tunnel.RouterName != "" {
-				fmt.Printf("      Router: %s\n", tunnel.RouterName)
-			}
-
-			if len(tunnel.BgpSessions) > 0 {
-				fmt.Println("      BGP Peers:")
-
-				for _, peer := range sortedPeers(tunnel.BgpSessions) {
-					fmt.Printf("        - %s\n", formatPeerDetail(peer))
-
-					if len(peer.AdvertisedPrefixes) > 0 {
-						fmt.Printf("          Advertised: %s\n", strings.Join(peer.AdvertisedPrefixes, ", "))
-					}
-
-					if len(peer.LearnedPrefixes) > 0 {
-						fmt.Printf("          Learned:    %s\n", strings.Join(peer.LearnedPrefixes, ", "))
-					}
-				}
-			}
+			renderTunnelDetails(tunnel, "    ", false)
 		}
 	}
 
@@ -153,53 +105,7 @@ func renderTunnelText(tunnel *gcp.VPNTunnelInfo) error {
 		fmt.Printf("  Description:  %s\n", tunnel.Description)
 	}
 
-	if tunnel.Status != "" {
-		fmt.Printf("  Status:       %s\n", colorStatus(tunnel.Status))
-	}
-
-	if tunnel.DetailedStatus != "" {
-		fmt.Printf("  Detail:       %s\n", tunnel.DetailedStatus)
-	}
-
-	if tunnel.PeerIP != "" {
-		fmt.Printf("  IPSec Peers:  %s\n", formatIPSecPeers(tunnel))
-	}
-
-	if tunnel.PeerGateway != "" {
-		fmt.Printf("  Peer Gateway: %s\n", resourceName(tunnel.PeerGateway))
-	}
-
-	if tunnel.PeerExternal != "" {
-		fmt.Printf("  Peer External:%s\n", resourceName(tunnel.PeerExternal))
-	}
-
-	if tunnel.RouterName != "" {
-		fmt.Printf("  Router:       %s\n", tunnel.RouterName)
-	}
-
-	if tunnel.IkeVersion != 0 {
-		fmt.Printf("  IKE Version:  %d\n", tunnel.IkeVersion)
-	}
-
-	if tunnel.SharedSecretHash != "" {
-		fmt.Printf("  Secret Hash:  %s\n", tunnel.SharedSecretHash)
-	}
-
-	if len(tunnel.BgpSessions) > 0 {
-		fmt.Println("  BGP Peers:")
-
-		for _, peer := range sortedPeers(tunnel.BgpSessions) {
-			fmt.Printf("    - %s\n", formatPeerDetail(peer))
-
-			if len(peer.AdvertisedPrefixes) > 0 {
-				fmt.Printf("      Advertised: %s\n", strings.Join(peer.AdvertisedPrefixes, ", "))
-			}
-
-			if len(peer.LearnedPrefixes) > 0 {
-				fmt.Printf("      Learned:    %s\n", strings.Join(peer.LearnedPrefixes, ", "))
-			}
-		}
-	}
+	renderTunnelDetailsBody(tunnel, "  ", true, true)
 
 	return nil
 }
@@ -225,23 +131,7 @@ func displayVPNText(data *gcp.VPNOverview) error {
 	}
 
 	for _, gw := range sortedGateways(data.Gateways) {
-		fmt.Printf("🔐 Gateway: %s (%s)\n", gw.Name, gw.Region)
-
-		if gw.Description != "" {
-			fmt.Printf("  Description: %s\n", gw.Description)
-		}
-
-		if gw.Network != "" {
-			fmt.Printf("  Network:     %s\n", resourceName(gw.Network))
-		}
-
-		if len(gw.Interfaces) > 0 {
-			fmt.Println("  Interfaces:")
-
-			for _, iface := range gw.Interfaces {
-				fmt.Printf("    - #%d IP: %s\n", iface.Id, iface.IpAddress)
-			}
-		}
+		renderGatewayHeader(gw, "")
 
 		if len(gw.Tunnels) == 0 {
 			fmt.Println("  Tunnels:     none")
@@ -253,49 +143,7 @@ func displayVPNText(data *gcp.VPNOverview) error {
 		fmt.Println("  Tunnels:")
 
 		for _, tunnel := range sortedTunnels(gw.Tunnels) {
-			fmt.Printf("    • %s (%s)\n", colorTunnelName(tunnel), tunnel.Region)
-
-			if strings.TrimSpace(tunnel.PeerIP) != "" {
-				fmt.Printf("      IPSec Peers:  %s\n", formatIPSecPeers(tunnel))
-			}
-
-			if tunnel.PeerGateway != "" {
-				fmt.Printf("      Peer Gateway: %s\n", resourceName(tunnel.PeerGateway))
-			}
-
-			if tunnel.PeerExternal != "" {
-				fmt.Printf("      Peer External: %s\n", resourceName(tunnel.PeerExternal))
-			}
-
-			if tunnel.RouterName != "" {
-				fmt.Printf("      Router:       %s\n", tunnel.RouterName)
-			}
-
-			if tunnel.Status != "" {
-				fmt.Printf("      Status:       %s\n", colorStatus(tunnel.Status))
-			}
-
-			if tunnel.DetailedStatus != "" {
-				fmt.Printf("      Detail:       %s\n", tunnel.DetailedStatus)
-			}
-
-			if tunnel.IkeVersion != 0 {
-				fmt.Printf("      IKE Version:  %d\n", tunnel.IkeVersion)
-			}
-
-			if len(tunnel.BgpSessions) > 0 {
-				fmt.Println("      BGP Peers:")
-
-				for _, peer := range sortedPeers(tunnel.BgpSessions) {
-					fmt.Printf("        - %s\n", formatPeerDetail(peer))
-					if len(peer.AdvertisedPrefixes) > 0 {
-						fmt.Printf("          Advertised: %s\n", strings.Join(peer.AdvertisedPrefixes, ", "))
-					}
-					if len(peer.LearnedPrefixes) > 0 {
-						fmt.Printf("          Learned:    %s\n", strings.Join(peer.LearnedPrefixes, ", "))
-					}
-				}
-			}
+			renderTunnelDetails(tunnel, "    ", true)
 		}
 
 		fmt.Println()
@@ -652,4 +500,111 @@ func formatPeerDetail(peer *gcp.BGPSessionInfo) string {
 		peer.LearnedRoutes,
 		peer.AdvertisedCount,
 	)
+}
+
+// renderBGPPeers renders BGP peer information with the specified indentation
+func renderBGPPeers(peers []*gcp.BGPSessionInfo, indent string) {
+	if len(peers) == 0 {
+		return
+	}
+
+	fmt.Printf("%sBGP Peers:\n", indent)
+	for _, peer := range sortedPeers(peers) {
+		fmt.Printf("%s  - %s\n", indent, formatPeerDetail(peer))
+
+		if len(peer.AdvertisedPrefixes) > 0 {
+			fmt.Printf("%s    Advertised: %s\n", indent, strings.Join(peer.AdvertisedPrefixes, ", "))
+		}
+
+		if len(peer.LearnedPrefixes) > 0 {
+			fmt.Printf("%s    Learned:    %s\n", indent, strings.Join(peer.LearnedPrefixes, ", "))
+		}
+	}
+}
+
+// renderGatewayHeader renders the gateway header and basic information
+func renderGatewayHeader(gw *gcp.VPNGatewayInfo, indent string) {
+	if gw == nil {
+		return
+	}
+
+	fmt.Printf("%s🔐 Gateway: %s (%s)\n", indent, gw.Name, gw.Region)
+
+	if gw.Description != "" {
+		fmt.Printf("%s  Description: %s\n", indent, gw.Description)
+	}
+
+	if gw.Network != "" {
+		fmt.Printf("%s  Network:     %s\n", indent, resourceName(gw.Network))
+	}
+
+	if len(gw.Interfaces) > 0 {
+		fmt.Printf("%s  Interfaces:\n", indent)
+		for _, iface := range gw.Interfaces {
+			fmt.Printf("%s    - #%d IP: %s\n", indent, iface.Id, iface.IpAddress)
+		}
+	}
+
+	if len(gw.Labels) > 0 {
+		fmt.Printf("%s  Labels:\n", indent)
+		for k, v := range gw.Labels {
+			fmt.Printf("%s    %s: %s\n", indent, k, v)
+		}
+	}
+}
+
+// renderTunnelDetails renders tunnel details with the specified indentation and whether to show the region
+func renderTunnelDetails(tunnel *gcp.VPNTunnelInfo, indent string, showRegion bool) {
+	if tunnel == nil {
+		return
+	}
+
+	if showRegion {
+		fmt.Printf("%s• %s (%s)\n", indent, colorTunnelName(tunnel), tunnel.Region)
+	} else {
+		fmt.Printf("%s• %s [%s]\n", indent, colorTunnelName(tunnel), colorStatus(tunnel.Status))
+	}
+
+	renderTunnelDetailsBody(tunnel, indent+"  ", showRegion, false)
+}
+
+// renderTunnelDetailsBody renders the body of tunnel details (without the header)
+func renderTunnelDetailsBody(tunnel *gcp.VPNTunnelInfo, indent string, showStatus bool, showSecretHash bool) {
+	if tunnel == nil {
+		return
+	}
+
+	if tunnel.PeerIP != "" {
+		fmt.Printf("%sIPSec Peers:  %s\n", indent, formatIPSecPeers(tunnel))
+	}
+
+	if tunnel.PeerGateway != "" {
+		fmt.Printf("%sPeer Gateway: %s\n", indent, resourceName(tunnel.PeerGateway))
+	}
+
+	if tunnel.PeerExternal != "" {
+		fmt.Printf("%sPeer External:%s\n", indent, resourceName(tunnel.PeerExternal))
+	}
+
+	if tunnel.RouterName != "" {
+		fmt.Printf("%sRouter:       %s\n", indent, tunnel.RouterName)
+	}
+
+	if showStatus && tunnel.Status != "" {
+		fmt.Printf("%sStatus:       %s\n", indent, colorStatus(tunnel.Status))
+	}
+
+	if tunnel.DetailedStatus != "" {
+		fmt.Printf("%sDetail:       %s\n", indent, tunnel.DetailedStatus)
+	}
+
+	if tunnel.IkeVersion != 0 {
+		fmt.Printf("%sIKE Version:  %d\n", indent, tunnel.IkeVersion)
+	}
+
+	if showSecretHash && tunnel.SharedSecretHash != "" {
+		fmt.Printf("%sSecret Hash:  %s\n", indent, tunnel.SharedSecretHash)
+	}
+
+	renderBGPPeers(tunnel.BgpSessions, indent)
 }

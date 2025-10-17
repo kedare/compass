@@ -156,6 +156,18 @@ func (c *Client) ListVPNOverview(ctx context.Context, progress func(string)) (*V
 		overview.OrphanTunnels = append(overview.OrphanTunnels, tunnel)
 	}
 
+	// Populate BGP routes for all tunnels
+	progress("Fetching BGP advertised and learned routes")
+	allTunnels := make([]*VPNTunnelInfo, 0, len(tunnels))
+	for _, gw := range gateways {
+		allTunnels = append(allTunnels, gw.Tunnels...)
+	}
+	allTunnels = append(allTunnels, overview.OrphanTunnels...)
+
+	if err := c.populateTunnelBGP(ctx, allTunnels, progress, true); err != nil {
+		return nil, err
+	}
+
 	return overview, nil
 }
 
