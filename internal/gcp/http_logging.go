@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"compass/internal/logger"
+	"codeberg.org/kedare/compass/internal/logger"
 	"golang.org/x/oauth2/google"
 )
 
@@ -95,8 +95,12 @@ func (t loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 			// Drain and close the response body before retrying
 			if resp != nil && resp.Body != nil {
-				io.Copy(io.Discard, resp.Body)
-				resp.Body.Close()
+				if _, copyErr := io.Copy(io.Discard, resp.Body); copyErr != nil {
+					logger.Log.Debugf("Failed to drain response body: %v", copyErr)
+				}
+				if closeErr := resp.Body.Close(); closeErr != nil {
+					logger.Log.Debugf("Failed to close response body: %v", closeErr)
+				}
 			}
 
 			continue

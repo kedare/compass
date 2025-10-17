@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"compass/internal/logger"
+	"codeberg.org/kedare/compass/internal/logger"
 	"google.golang.org/api/compute/v1"
 )
 
@@ -99,7 +99,7 @@ type routerRef struct {
 	Name   string
 }
 
-var apiPageBreak = errors.New("page break")
+var errAPIPageBreak = errors.New("page break")
 
 // ListVPNOverview retrieves a comprehensive view of all Cloud VPN infrastructure in the project.
 //
@@ -277,20 +277,16 @@ func (c *Client) GetVPNGatewayOverview(ctx context.Context, region, name string,
 				}
 				result = info
 
-				return apiPageBreak
+				return errAPIPageBreak
 			}
 		}
 
 		return nil
 	})
-	if err != nil && !errors.Is(err, apiPageBreak) {
+	if err != nil && !errors.Is(err, errAPIPageBreak) {
 		logger.Log.Errorf("Failed to search VPN gateway %s: %v", name, err)
 
 		return nil, fmt.Errorf("failed to search VPN gateway %s: %w", name, err)
-	}
-
-	if errors.Is(err, apiPageBreak) {
-		err = nil
 	}
 
 	if result == nil {
@@ -351,19 +347,15 @@ func (c *Client) GetVPNTunnelOverview(ctx context.Context, region, name string, 
 				for _, t := range scopedList.VpnTunnels {
 					info = convertVpnTunnel(region, t)
 					if info != nil {
-						return apiPageBreak
+						return errAPIPageBreak
 					}
 				}
 			}
 
 			return nil
 		})
-		if err != nil && !errors.Is(err, apiPageBreak) {
+		if err != nil && !errors.Is(err, errAPIPageBreak) {
 			return nil, fmt.Errorf("failed to search VPN tunnel %s: %w", name, err)
-		}
-
-		if errors.Is(err, apiPageBreak) {
-			err = nil
 		}
 	}
 

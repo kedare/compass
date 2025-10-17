@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"compass/internal/cache"
-	"compass/internal/logger"
+	"codeberg.org/kedare/compass/internal/cache"
+	"codeberg.org/kedare/compass/internal/logger"
 	"google.golang.org/api/compute/v1"
 	"google.golang.org/api/option"
 )

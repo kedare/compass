@@ -39,6 +39,7 @@ Thumbs.db
 
 # Build output
 /compass
+/compass-*
 /dist/
 
 # Log files

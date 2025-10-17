@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"compass/internal/gcp"
+	"codeberg.org/kedare/compass/internal/gcp"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -31,7 +31,9 @@ func captureStdout(t *testing.T, fn func()) string {
 
 	fn()
 
-	writer.Close()
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close pipe writer: %v", err)
+	}
 	os.Stdout = origStdout
 	output := <-outCh
 

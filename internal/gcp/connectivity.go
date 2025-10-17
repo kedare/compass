@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"compass/internal/logger"
+	"codeberg.org/kedare/compass/internal/logger"
 	"google.golang.org/api/networkmanagement/v1"
 	"google.golang.org/api/option"
 )

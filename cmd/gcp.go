@@ -3,9 +3,9 @@ package cmd
 import (
 	"context"
 
-	"compass/internal/gcp"
-	"compass/internal/logger"
-	"compass/internal/ssh"
+	"codeberg.org/kedare/compass/internal/gcp"
+	"codeberg.org/kedare/compass/internal/logger"
+	"codeberg.org/kedare/compass/internal/ssh"
 	"github.com/spf13/cobra"
 )
 

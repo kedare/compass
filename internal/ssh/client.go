@@ -8,8 +8,8 @@ import (
 	"os"
 	"os/exec"
 
-	"compass/internal/gcp"
-	"compass/internal/logger"
+	"codeberg.org/kedare/compass/internal/gcp"
+	"codeberg.org/kedare/compass/internal/logger"
 )
 
 var ErrNoExternalIPAndNoIAP = errors.New("instance has no external IP and IAP is not available")

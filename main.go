@@ -6,7 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"compass/cmd"
+	"codeberg.org/kedare/compass/cmd"
 )
 
 func main() {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"compass/internal/logger"
+	"codeberg.org/kedare/compass/internal/logger"
 	"github.com/spf13/cobra"
 )
 

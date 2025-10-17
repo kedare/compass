@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"compass/internal/gcp"
+	"codeberg.org/kedare/compass/internal/gcp"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
 )

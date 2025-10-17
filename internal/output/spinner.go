@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"codeberg.org/kedare/compass/internal/logger"
 	"github.com/briandowns/spinner"
 	"golang.org/x/term"
 )
@@ -36,7 +37,10 @@ func NewSpinner(message string) *Spinner {
 		sp := spinner.New(spinner.CharSets[14], 100*time.Millisecond, spinner.WithWriter(writer))
 		sp.Suffix = " " + message
 		sp.HideCursor = true
-		sp.Color("cyan")
+		if err := sp.Color("cyan"); err != nil {
+			// Fall back to no color if setting color fails
+			s.enabled = false
+		}
 		s.sp = sp
 	}
 
@@ -55,7 +59,9 @@ func (s *Spinner) Start() {
 	if s.enabled && s.sp != nil {
 		s.sp.Start()
 	} else {
-		fmt.Fprintf(s.writer, "%s...\n", s.message)
+		if _, err := fmt.Fprintf(s.writer, "%s...\n", s.message); err != nil {
+			logger.Log.Debugf("Failed to write spinner message: %v", err)
+		}
 	}
 	s.active = true
 }
@@ -73,7 +79,9 @@ func (s *Spinner) Update(message string) {
 	if s.enabled && s.sp != nil {
 		s.sp.Suffix = " " + message
 	} else {
-		fmt.Fprintf(s.writer, "%s...\n", message)
+		if _, err := fmt.Fprintf(s.writer, "%s...\n", message); err != nil {
+			logger.Log.Debugf("Failed to write spinner update: %v", err)
+		}
 	}
 }
 
@@ -89,7 +97,9 @@ func (s *Spinner) Stop() {
 
 	if s.enabled && s.sp != nil {
 		s.sp.Stop()
-		fmt.Fprint(s.writer, "\r")
+		if _, err := fmt.Fprint(s.writer, "\r"); err != nil {
+			logger.Log.Debugf("Failed to write carriage return: %v", err)
+		}
 	}
 }
 
@@ -109,7 +119,9 @@ func (s *Spinner) stopWithMessage(prefix, message string) {
 
 	if s.stopped {
 		if message != "" {
-			fmt.Fprintf(s.writer, "%s %s\n", prefix, message)
+			if _, err := fmt.Fprintf(s.writer, "%s %s\n", prefix, message); err != nil {
+				logger.Log.Debugf("Failed to write stopped spinner message: %v", err)
+			}
 		}
 
 		return
@@ -118,12 +130,16 @@ func (s *Spinner) stopWithMessage(prefix, message string) {
 
 	if s.enabled && s.sp != nil {
 		s.sp.Stop()
-		fmt.Fprintf(s.writer, "\r%s %s\n", prefix, message)
+		if _, err := fmt.Fprintf(s.writer, "\r%s %s\n", prefix, message); err != nil {
+			logger.Log.Debugf("Failed to write spinner stop message: %v", err)
+		}
 
 		return
 	}
 
 	if message != "" {
-		fmt.Fprintf(s.writer, "%s %s\n", prefix, message)
+		if _, err := fmt.Fprintf(s.writer, "%s %s\n", prefix, message); err != nil {
+			logger.Log.Debugf("Failed to write spinner message: %v", err)
+		}
 	}
 }

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"compass/internal/gcp"
+	"codeberg.org/kedare/compass/internal/gcp"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
 	"github.com/mattn/go-runewidth"
@@ -98,9 +98,7 @@ func normalizeStatusLabel(raw string) string {
 	}
 
 	upper := strings.ToUpper(value)
-	if strings.HasPrefix(upper, "REACHABILITY_RESULT_") {
-		upper = strings.TrimPrefix(upper, "REACHABILITY_RESULT_")
-	}
+	upper = strings.TrimPrefix(upper, "REACHABILITY_RESULT_")
 
 	return upper
 }
@@ -378,55 +376,6 @@ func displayTable(results []*gcp.ConnectivityTestResult) error {
 	}
 
 	return nil
-}
-
-// displayTraces displays network traces in a table layout.
-func displayTraces(traces []*gcp.Trace, isReachable bool) {
-	for traceIdx, trace := range traces {
-		if len(trace.Steps) == 0 {
-			continue
-		}
-
-		// If there are multiple traces, add a header to distinguish them
-		if len(traces) > 1 {
-			if traceIdx > 0 {
-				fmt.Println() // Add spacing between traces
-			}
-
-			fmt.Printf("    Path %d of %d:\n", traceIdx+1, len(traces))
-		}
-
-		// Create table
-		t := table.NewWriter()
-		t.SetOutputMirror(os.Stdout)
-		t.SetStyle(table.StyleLight)
-		t.Style().Options.SeparateRows = true
-
-		// Add header
-		t.AppendHeader(table.Row{"#", "Step", "Type", "Resource", "Status"})
-
-		// Add each step as a row
-		for i, step := range trace.Steps {
-			stepNum := strconv.Itoa(i + 1)
-			stepType, resource, status := formatTraceStepForTable(step)
-
-			// Apply styling based on step state
-			if step.CausesDrop {
-				// Red bold for failures
-				stepNum = text.Bold.Sprint(text.FgRed.Sprint(stepNum))
-				stepType = text.Bold.Sprint(text.FgRed.Sprint(stepType))
-				resource = text.Bold.Sprint(text.FgRed.Sprint(resource))
-				status = text.Bold.Sprint(text.FgRed.Sprint(status))
-			} else {
-				// Green for successful steps
-				status = text.FgGreen.Sprint(status)
-			}
-
-			t.AppendRow(table.Row{stepNum, getStepIcon(i, len(trace.Steps), step.CausesDrop), stepType, resource, status})
-		}
-
-		t.Render()
-	}
 }
 
 // displayForwardAndReturnPaths displays forward and return traces, pairing them when possible.
@@ -707,40 +656,6 @@ func getStepIcon(index, total int, causesDrop bool) string {
 	}
 
 	return "→"
-}
-
-// formatTraceStep formats a trace step for display.
-func formatTraceStep(step *gcp.TraceStep) string {
-	if step.Instance != "" {
-		return fmt.Sprintf("VM Instance (%s)", extractResourceName(step.Instance))
-	}
-
-	if step.Firewall != "" {
-		status := "allow"
-		if step.CausesDrop {
-			status = "BLOCKED"
-		}
-
-		return fmt.Sprintf("Firewall (%s: %s)", step.Firewall, status)
-	}
-
-	if step.Route != "" {
-		return fmt.Sprintf("Route (%s)", step.Route)
-	}
-
-	if step.VPC != "" {
-		return fmt.Sprintf("VPC (%s)", step.VPC)
-	}
-
-	if step.LoadBalancer != "" {
-		return fmt.Sprintf("Load Balancer (%s)", step.LoadBalancer)
-	}
-
-	if step.Description != "" {
-		return step.Description
-	}
-
-	return step.State
 }
 
 // formatTraceStepForTable formats a trace step for table display, returning type, resource, and status.

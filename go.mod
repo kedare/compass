@@ -1,4 +1,4 @@
-module compass
+module codeberg.org/kedare/compass
 
 go 1.24.2
 

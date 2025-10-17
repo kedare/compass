@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"compass/internal/gcp"
+	"codeberg.org/kedare/compass/internal/gcp"
 )
 
 type fakeRunner struct {
