@@ -53,27 +53,121 @@ func DisplayConnectivityTestList(results []*gcp.ConnectivityTestResult, format s
 	}
 }
 
-// displayText displays a connectivity test result in human-readable format.
-func displayText(result *gcp.ConnectivityTestResult) error {
-	// Determine if test is reachable
-	isReachable := false
+type connectivityStatus struct {
+	overall          bool
+	forwardStatus    string
+	forwardReachable bool
+	hasReturn        bool
+	returnStatus     string
+	returnReachable  bool
+}
 
-	status := "UNKNOWN"
-	if result.ReachabilityDetails != nil {
-		status = result.ReachabilityDetails.Result
-		isReachable = strings.Contains(strings.ToUpper(status), "REACHABLE") &&
-			!strings.Contains(strings.ToUpper(status), "UNREACHABLE")
+func evaluateConnectivityStatus(result *gcp.ConnectivityTestResult) connectivityStatus {
+	status := connectivityStatus{
+		forwardStatus: normalizeStatusLabel(""),
 	}
 
-	// Print header with status icon
-	statusIcon := "✓"
-	var formattedStatus string
+	if result == nil {
+		return status
+	}
 
-	if !isReachable {
-		statusIcon = "✗"
-		formattedStatus = text.Colors{text.Bold, text.FgRed}.Sprint(status)
+	if result.ReachabilityDetails != nil {
+		status.forwardStatus = normalizeStatusLabel(result.ReachabilityDetails.Result)
+		status.forwardReachable = isStatusReachable(status.forwardStatus)
 	} else {
-		formattedStatus = text.Colors{text.Bold, text.FgGreen}.Sprint(status)
+		status.forwardStatus = normalizeStatusLabel("")
+		status.forwardReachable = false
+	}
+
+	if result.ReturnReachabilityDetails != nil {
+		status.hasReturn = true
+		status.returnStatus = normalizeStatusLabel(result.ReturnReachabilityDetails.Result)
+		status.returnReachable = isStatusReachable(status.returnStatus)
+	}
+
+	status.overall = status.forwardReachable && (!status.hasReturn || status.returnReachable)
+
+	return status
+}
+
+func normalizeStatusLabel(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "UNKNOWN"
+	}
+
+	upper := strings.ToUpper(value)
+	if strings.HasPrefix(upper, "REACHABILITY_RESULT_") {
+		upper = strings.TrimPrefix(upper, "REACHABILITY_RESULT_")
+	}
+
+	return upper
+}
+
+func isStatusReachable(status string) bool {
+	if status == "" {
+		return false
+	}
+
+	upper := strings.ToUpper(status)
+	if strings.Contains(upper, "UNREACHABLE") ||
+		strings.Contains(upper, "DROP") ||
+		strings.Contains(upper, "BLOCK") ||
+		strings.Contains(upper, "ERROR") ||
+		strings.Contains(upper, "TIMEOUT") ||
+		strings.Contains(upper, "AMBIGUOUS") {
+		return false
+	}
+
+	return strings.Contains(upper, "REACHABLE")
+}
+
+func formatSingleStatus(status string, reachable bool, colorize bool) string {
+	display := status
+	if strings.TrimSpace(display) == "" {
+		display = "UNKNOWN"
+	}
+
+	switch strings.ToUpper(display) {
+	case "UNKNOWN", "N/A":
+		if colorize {
+			return text.Bold.Sprint(display)
+		}
+
+		return display
+	}
+
+	if !colorize {
+		return display
+	}
+
+	if reachable {
+		return text.Colors{text.Bold, text.FgGreen}.Sprint(display)
+	}
+
+	return text.Colors{text.Bold, text.FgRed}.Sprint(display)
+}
+
+func formatStatusSummary(status connectivityStatus, colorize bool) string {
+	forward := formatSingleStatus(status.forwardStatus, status.forwardReachable, colorize)
+	if !status.hasReturn {
+		return fmt.Sprintf("Forward: %s", forward)
+	}
+
+	return fmt.Sprintf("Forward: %s, Return: %s",
+		forward,
+		formatSingleStatus(status.returnStatus, status.returnReachable, colorize),
+	)
+}
+
+// displayText displays a connectivity test result in human-readable format.
+func displayText(result *gcp.ConnectivityTestResult) error {
+	statusInfo := evaluateConnectivityStatus(result)
+
+	// Print header with status icon
+	statusIcon := "✗"
+	if statusInfo.overall {
+		statusIcon = "✓"
 	}
 
 	fmt.Printf("%s Connectivity Test: %s\n", statusIcon, result.DisplayName)
@@ -82,7 +176,7 @@ func displayText(result *gcp.ConnectivityTestResult) error {
 			result.Name, result.ProjectID)
 		fmt.Printf("  Console URL:   %s\n", consoleURL)
 	}
-	fmt.Printf("  Status:        %s\n", formattedStatus)
+	fmt.Printf("  Status:        %s\n", formatStatusSummary(statusInfo, true))
 
 	// Display source
 	if result.Source != nil {
@@ -112,13 +206,13 @@ func displayText(result *gcp.ConnectivityTestResult) error {
 			returnTraces = result.ReturnReachabilityDetails.Traces
 		}
 
-		displayForwardAndReturnPaths(forwardTraces, returnTraces, isReachable)
+		displayForwardAndReturnPaths(forwardTraces, returnTraces, statusInfo.overall)
 	}
 
 	// Display result message
 	fmt.Println()
 
-	if isReachable {
+	if statusInfo.overall {
 		fmt.Println("  Result: Connection successful ✓")
 	} else {
 		fmt.Println("  Result: Connection failed ✗")
@@ -126,8 +220,15 @@ func displayText(result *gcp.ConnectivityTestResult) error {
 		if result.ReachabilityDetails != nil && result.ReachabilityDetails.Error != "" {
 			fmt.Printf("  Error:  %s\n", result.ReachabilityDetails.Error)
 		}
+		if statusInfo.hasReturn && result.ReturnReachabilityDetails != nil && result.ReturnReachabilityDetails.Error != "" {
+			fmt.Printf("  Return Error: %s\n", result.ReturnReachabilityDetails.Error)
+		}
+		if statusInfo.forwardReachable && statusInfo.hasReturn && !statusInfo.returnReachable {
+			fmt.Println("  Note: Forward path succeeded but return path failed.")
+		}
+
 		// Display suggested fixes if available
-		displaySuggestedFixes(result)
+		displaySuggestedFixes(result, statusInfo)
 	}
 
 	return nil
@@ -180,26 +281,14 @@ func displayListText(results []*gcp.ConnectivityTestResult) error {
 	fmt.Printf("Found %d connectivity test(s):\n\n", len(results))
 
 	for _, result := range results {
-		status := "UNKNOWN"
-		statusIcon := "?"
-		var formattedStatus string
-
-		if result.ReachabilityDetails != nil {
-			status = result.ReachabilityDetails.Result
-			if strings.Contains(strings.ToUpper(status), "REACHABLE") &&
-				!strings.Contains(strings.ToUpper(status), "UNREACHABLE") {
-				statusIcon = "✓"
-				formattedStatus = text.Colors{text.Bold, text.FgGreen}.Sprint(status)
-			} else {
-				statusIcon = "✗"
-				formattedStatus = text.Colors{text.Bold, text.FgRed}.Sprint(status)
-			}
-		} else {
-			formattedStatus = text.Bold.Sprint(status)
+		statusInfo := evaluateConnectivityStatus(result)
+		statusIcon := "✗"
+		if statusInfo.overall {
+			statusIcon = "✓"
 		}
 
 		fmt.Printf("%s %s\n", statusIcon, result.DisplayName)
-		fmt.Printf("  Status: %s\n", formattedStatus)
+		fmt.Printf("  Status: %s\n", formatStatusSummary(statusInfo, true))
 
 		if result.Source != nil {
 			fmt.Printf("  Source: %s\n", formatEndpoint(result.Source, false))
@@ -224,30 +313,23 @@ func displayTable(results []*gcp.ConnectivityTestResult) error {
 	}
 
 	// Print header
-	fmt.Printf("%-3s %-30s %-15s %-30s %-30s\n", "ST", "NAME", "STATUS", "SOURCE", "DESTINATION")
-	fmt.Println(strings.Repeat("-", 110))
+	fmt.Printf("%-3s %-30s %-40s %-30s %-30s\n", "ST", "NAME", "STATUS", "SOURCE", "DESTINATION")
+	fmt.Println(strings.Repeat("-", 133))
 
 	// Print rows
 	for _, result := range results {
-		status := "UNKNOWN"
-		statusIcon := "?"
-
-		if result.ReachabilityDetails != nil {
-			status = result.ReachabilityDetails.Result
-			if strings.Contains(strings.ToUpper(status), "REACHABLE") &&
-				!strings.Contains(strings.ToUpper(status), "UNREACHABLE") {
-				statusIcon = "✓"
-			} else {
-				statusIcon = "✗"
-			}
+		statusInfo := evaluateConnectivityStatus(result)
+		statusIcon := "✗"
+		if statusInfo.overall {
+			statusIcon = "✓"
 		}
 
 		name := truncate(result.DisplayName, 30)
-		statusStr := truncate(status, 15)
+		statusStr := truncate(formatStatusSummary(statusInfo, false), 40)
 		source := truncate(formatEndpoint(result.Source, false), 30)
 		dest := truncate(formatEndpoint(result.Destination, true), 30)
 
-		fmt.Printf("%-3s %-30s %-15s %-30s %-30s\n", statusIcon, name, statusStr, source, dest)
+		fmt.Printf("%-3s %-30s %-40s %-30s %-30s\n", statusIcon, name, statusStr, source, dest)
 	}
 
 	return nil
@@ -630,43 +712,71 @@ func formatTraceStepForTable(step *gcp.TraceStep) (stepType string, resource str
 }
 
 // displaySuggestedFixes displays suggested fixes for failed tests.
-func displaySuggestedFixes(result *gcp.ConnectivityTestResult) {
-	if result.ReachabilityDetails == nil || len(result.ReachabilityDetails.Traces) == 0 {
+func displaySuggestedFixes(result *gcp.ConnectivityTestResult, status connectivityStatus) {
+	if result == nil || status.overall {
 		return
 	}
 
+	if !status.forwardReachable {
+		if displaySuggestedFixesForDetails(result, result.ReachabilityDetails, false) {
+			return
+		}
+	}
+
+	if status.hasReturn && !status.returnReachable {
+		displaySuggestedFixesForDetails(result, result.ReturnReachabilityDetails, true)
+	}
+}
+
+func displaySuggestedFixesForDetails(result *gcp.ConnectivityTestResult, details *gcp.ReachabilityDetails, reverse bool) bool {
+	if details == nil || len(details.Traces) == 0 {
+		return false
+	}
+
+	source := result.Source
+	destination := result.Destination
+	if reverse {
+		source, destination = destination, source
+	}
+
 	// Find the step that caused the drop
-	for _, trace := range result.ReachabilityDetails.Traces {
+	for _, trace := range details.Traces {
 		for _, step := range trace.Steps {
 			if step.CausesDrop {
 				if step.Firewall != "" {
 					fmt.Println("\n  Suggested Fix:")
 					fmt.Printf("  Add firewall rule allowing %s traffic", result.Protocol)
 
-					if result.Source != nil && result.Source.IPAddress != "" {
-						fmt.Printf(" from %s", result.Source.IPAddress)
+					if source != nil && source.IPAddress != "" {
+						fmt.Printf(" from %s", source.IPAddress)
 					}
 
-					if result.Destination != nil {
-						if result.Destination.IPAddress != "" {
-							fmt.Printf(" to %s", result.Destination.IPAddress)
+					if destination != nil {
+						if destination.IPAddress != "" {
+							fmt.Printf(" to %s", destination.IPAddress)
 						}
 
-						if result.Destination.Port > 0 {
-							fmt.Printf(":%d", result.Destination.Port)
+						if destination.Port > 0 {
+							fmt.Printf(":%d", destination.Port)
 						}
 					}
 
 					fmt.Println()
 				} else if step.Route != "" {
 					fmt.Println("\n  Suggested Fix:")
-					fmt.Println("  Check routing configuration and ensure proper route exists")
+					if reverse {
+						fmt.Println("  Check return-path routing configuration and ensure proper route exists")
+					} else {
+						fmt.Println("  Check routing configuration and ensure proper route exists")
+					}
 				}
 
-				return
+				return true
 			}
 		}
 	}
+
+	return false
 }
 
 // formatEndpoint formats an endpoint for display.
