@@ -31,6 +31,11 @@
 - [License](#license)
 - [Support](#support)
 
+## Project organization
+
+Main project location : [Codeberg](https://codeberg.org/kedare/compass) : This is where you should open issues and PR and download releases
+Mirror on [Github](https://github.com/kedare/compass) : Read only mirror
+
 ## Overview
 
 `compass` discovers instances, selects the best SSH path, and launches connections quickly. It reuses your existing `gcloud` credentials, surfaces meaningful logs, and stays flexible enough for tunneling, port forwarding, or automation.
