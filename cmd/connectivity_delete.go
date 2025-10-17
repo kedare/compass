@@ -38,6 +38,7 @@ Examples:
 		testName := args[0]
 		runDeleteTest(cmd.Context(), testName)
 	},
+	ValidArgsFunction: connectivityTestNameCompletion,
 }
 
 func runDeleteTest(ctx context.Context, testName string) {

@@ -157,7 +157,11 @@ tasks:
     cmds:
       - task: build
       - mkdir -p $HOME/.local/bin
-      - cp ./cx $HOME/.local/bin
+      - cp ./{{.BINARY_NAME}} $HOME/.local/bin
+      - mkdir -p $HOME/.local/share/bash-completion/completions
+      - ./{{.BINARY_NAME}} completion bash > $HOME/.local/share/bash-completion/completions/{{.BINARY_NAME}}
+      - mkdir -p $HOME/.local/share/zsh/site-functions
+      - ./{{.BINARY_NAME}} completion zsh > $HOME/.local/share/zsh/site-functions/_{{.BINARY_NAME}}
 
   run:
     desc: Run the application

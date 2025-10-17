@@ -33,6 +33,7 @@ Examples:
 		testName := args[0]
 		runRunTest(cmd.Context(), testName)
 	},
+	ValidArgsFunction: connectivityTestNameCompletion,
 }
 
 func runRunTest(ctx context.Context, testName string) {
