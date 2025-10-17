@@ -10,6 +10,7 @@ import (
 )
 
 var vpnOutputFormat string
+var vpnShowWarnings bool
 
 var vpnListCmd = &cobra.Command{
 	Use:     "list",
@@ -51,7 +52,7 @@ func runVPNList(ctx context.Context) {
 
 	spin.Success("Cloud VPN data retrieved")
 
-	if err := output.DisplayVPNOverview(overview, vpnOutputFormat); err != nil {
+	if err := output.DisplayVPNOverview(overview, vpnOutputFormat, vpnShowWarnings); err != nil {
 		logger.Log.Fatalf("Failed to render VPN overview: %v", err)
 	}
 }
@@ -62,4 +63,6 @@ func init() {
 	vpnListCmd.Flags().StringVarP(&vpnOutputFormat, "output", "o",
 		output.DefaultFormat("text", []string{"text", "table", "json"}),
 		"Output format: text, table, json")
+	vpnListCmd.Flags().BoolVar(&vpnShowWarnings, "warnings", true,
+		"Show warning sections for configuration issues (gateways with no tunnels, BGP peers with routing issues, etc.)")
 }

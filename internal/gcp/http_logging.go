@@ -2,6 +2,8 @@ package gcp
 
 import (
 	"context"
+	"io"
+	"math"
 	"net/http"
 	"time"
 
@@ -9,8 +11,27 @@ import (
 	"golang.org/x/oauth2/google"
 )
 
+const (
+	maxRetries     = 3
+	initialBackoff = 1 * time.Second
+	maxBackoff     = 10 * time.Second
+)
+
 type loggingTransport struct {
 	base http.RoundTripper
+}
+
+// isRetryableStatusCode checks if an HTTP status code is retryable.
+func isRetryableStatusCode(statusCode int) bool {
+	return statusCode == http.StatusTooManyRequests || // 429
+		statusCode == http.StatusServiceUnavailable || // 503
+		statusCode == http.StatusGatewayTimeout || // 504
+		statusCode == http.StatusInternalServerError // 500
+}
+
+// isReadOnlyRequest checks if a request is a safe read-only operation.
+func isReadOnlyRequest(req *http.Request) bool {
+	return req.Method == http.MethodGet || req.Method == http.MethodHead
 }
 
 func (t loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -19,24 +40,74 @@ func (t loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		base = http.DefaultTransport
 	}
 
-	start := time.Now()
-	resp, err := base.RoundTrip(req)
-	elapsed := time.Since(start)
+	var resp *http.Response
+	var err error
 
-	if err != nil {
-		logger.Log.Debugf("GCP HTTP %s %s failed after %s: %v", req.Method, req.URL.String(), elapsed, err)
+	// Only retry read-only requests
+	shouldRetry := isReadOnlyRequest(req)
+	attempts := 1
 
-		return nil, err
+	if shouldRetry {
+		attempts = maxRetries
 	}
 
-	status := 0
-	if resp != nil {
-		status = resp.StatusCode
+	for attempt := 0; attempt < attempts; attempt++ {
+		// If this is a retry, apply exponential backoff
+		if attempt > 0 {
+			backoff := time.Duration(math.Pow(2, float64(attempt-1))) * initialBackoff
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+
+			logger.Log.Debugf("GCP HTTP retrying %s %s after %s (attempt %d/%d)",
+				req.Method, req.URL.String(), backoff, attempt+1, attempts)
+			time.Sleep(backoff)
+		}
+
+		start := time.Now()
+		resp, err = base.RoundTrip(req)
+		elapsed := time.Since(start)
+
+		// If request failed with network error and it's retryable, continue to next attempt
+		if err != nil {
+			if shouldRetry && attempt < attempts-1 {
+				logger.Log.Debugf("GCP HTTP %s %s failed after %s: %v (will retry)",
+					req.Method, req.URL.String(), elapsed, err)
+
+				continue
+			}
+
+			logger.Log.Debugf("GCP HTTP %s %s failed after %s: %v",
+				req.Method, req.URL.String(), elapsed, err)
+
+			return nil, err
+		}
+
+		status := 0
+		if resp != nil {
+			status = resp.StatusCode
+		}
+
+		// If we got a retryable status code and can retry, do so
+		if shouldRetry && attempt < attempts-1 && isRetryableStatusCode(status) {
+			logger.Log.Debugf("GCP HTTP %s %s -> %d (%s) (will retry)",
+				req.Method, req.URL.String(), status, elapsed)
+
+			// Drain and close the response body before retrying
+			if resp != nil && resp.Body != nil {
+				io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+			}
+
+			continue
+		}
+
+		logger.Log.Debugf("GCP HTTP %s %s -> %d (%s)", req.Method, req.URL.String(), status, elapsed)
+
+		break
 	}
 
-	logger.Log.Debugf("GCP HTTP %s %s -> %d (%s)", req.Method, req.URL.String(), status, elapsed)
-
-	return resp, nil
+	return resp, err
 }
 
 func attachLoggingTransport(client *http.Client) {

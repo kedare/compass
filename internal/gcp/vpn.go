@@ -52,7 +52,6 @@ type VPNTunnelInfo struct {
 	SelfLink          string
 	PeerIP            string
 	PeerGateway       string
-	PeerExternal      string
 	LocalGatewayIP    string
 	DetailedStatus    string
 	Status            string
@@ -86,7 +85,9 @@ type BGPSessionInfo struct {
 	AdvertisedGroups   []string
 	AdvertisedPrefixes []string
 	LearnedPrefixes    []string
+	BestRoutePrefixes  []string // Subset of LearnedPrefixes that are selected as best routes
 	RoutePriority      int64
+	LocalASN           int64
 	PeerASN            int64
 	LearnedRoutes      int64
 	AdvertisedCount    int
@@ -525,6 +526,11 @@ func (c *Client) listRouterBgpPeers(ctx context.Context, progress func(string)) 
 						link = normalizeLink(candidate)
 					}
 
+					localASN := int64(0)
+					if router.Bgp != nil {
+						localASN = router.Bgp.Asn
+					}
+
 					peerInfo := &BGPSessionInfo{
 						Name:               peer.Name,
 						RouterName:         router.Name,
@@ -534,6 +540,7 @@ func (c *Client) listRouterBgpPeers(ctx context.Context, progress func(string)) 
 						Interface:          peer.InterfaceName,
 						PeerIP:             firstNonEmpty(peer.PeerIpAddress, peer.PeerIpv4NexthopAddress, peer.PeerIpv6NexthopAddress),
 						LocalIP:            firstNonEmpty(peer.IpAddress, peer.Ipv4NexthopAddress, peer.Ipv6NexthopAddress),
+						LocalASN:           localASN,
 						PeerASN:            peer.PeerAsn,
 						AdvertisedMode:     peer.AdvertiseMode,
 						RoutePriority:      peer.AdvertisedRoutePriority,
@@ -718,8 +725,85 @@ func (c *Client) populateTunnelBGP(ctx context.Context, tunnels []*VPNTunnelInfo
 			}
 		}
 
-		learnedByTunnel := make(map[string][]string)
-		learnedByPeerIP := make(map[string][]string)
+		// Collect ALL routes learned from each BGP peer using ListBgpRoutes API
+		allLearnedByPeer := make(map[string][]string) // key: peer name, value: learned prefixes
+
+		if includeRoutes {
+			// Use ListBgpRoutes API to get all learned routes per BGP peer
+			for _, peer := range router.BgpPeers {
+				if peer == nil || strings.TrimSpace(peer.Name) == "" {
+					continue
+				}
+
+				// Check which address families are enabled from the status
+				peerStatus := statusMap[peer.Name]
+				enabledFamilies := make([]string, 0, 2)
+
+				if peerStatus != nil {
+					if peerStatus.EnableIpv4 {
+						enabledFamilies = append(enabledFamilies, "IPV4")
+					}
+
+					if peerStatus.EnableIpv6 {
+						enabledFamilies = append(enabledFamilies, "IPV6")
+					}
+				}
+
+				// Fallback: if no status or both disabled, try IPv4 by default
+				if len(enabledFamilies) == 0 {
+					enabledFamilies = append(enabledFamilies, "IPV4")
+				}
+
+				var learnedPrefixes []string
+
+				// Fetch routes for each enabled address family
+				for _, addressFamily := range enabledFamilies {
+					if progress != nil {
+						progress(fmt.Sprintf("Fetching %s routes for peer %s on router %s", addressFamily, peer.Name, ref.Name))
+					}
+
+					call := c.service.Routers.ListBgpRoutes(c.project, ref.Region, ref.Name).
+						Context(ctx).
+						Peer(peer.Name).
+						RouteType("LEARNED").
+						PolicyApplied(true).
+						AddressFamily(addressFamily).
+						PolicyApplied(false).
+						MaxResults(500)
+
+					err := call.Pages(ctx, func(page *compute.RoutersListBgpRoutes) error {
+						for _, route := range page.Result {
+							if route == nil || route.Destination == nil {
+								continue
+							}
+
+							prefix := strings.TrimSpace(route.Destination.Prefix)
+							if prefix != "" {
+								learnedPrefixes = append(learnedPrefixes, prefix)
+							}
+						}
+
+						return nil
+					})
+					if err != nil {
+						// Only log as debug if it's an expected "not configured" error
+						if strings.Contains(err.Error(), "address family") && strings.Contains(err.Error(), "is not configured") {
+							logger.Log.Debugf("Address family %s not configured for peer %s on router %s", addressFamily, peer.Name, ref.Name)
+						} else {
+							logger.Log.Warnf("Failed to list %s BGP routes for peer %s on router %s: %v", addressFamily, peer.Name, ref.Name, err)
+						}
+					}
+				}
+
+				if len(learnedPrefixes) > 0 {
+					allLearnedByPeer[peer.Name] = learnedPrefixes
+				}
+			}
+		}
+
+		// Also keep track of best routes separately
+		bestByTunnel := make(map[string][]string)
+		bestByPeerIP := make(map[string][]string)
 
 		if includeRoutes && statusResp != nil && statusResp.Result != nil {
 			for _, route := range statusResp.Result.BestRoutesForRouter {
@@ -729,13 +813,13 @@ func (c *Client) populateTunnelBGP(ctx context.Context, tunnels []*VPNTunnelInfo
 
 				prefix := strings.TrimSpace(route.DestRange)
 				if key := normalizeLink(route.NextHopVpnTunnel); key != "" {
-					learnedByTunnel[key] = append(learnedByTunnel[key], prefix)
+					bestByTunnel[key] = append(bestByTunnel[key], prefix)
 
 					continue
 				}
 
 				if ip := strings.TrimSpace(route.NextHopIp); ip != "" {
-					learnedByPeerIP[ip] = append(learnedByPeerIP[ip], prefix)
+					bestByPeerIP[ip] = append(bestByPeerIP[ip], prefix)
 				}
 			}
 		}
@@ -760,6 +844,11 @@ func (c *Client) populateTunnelBGP(ctx context.Context, tunnels []*VPNTunnelInfo
 				continue
 			}
 
+			localASN := int64(0)
+			if router.Bgp != nil {
+				localASN = router.Bgp.Asn
+			}
+
 			info := &BGPSessionInfo{
 				Name:               peer.Name,
 				RouterName:         router.Name,
@@ -769,6 +858,7 @@ func (c *Client) populateTunnelBGP(ctx context.Context, tunnels []*VPNTunnelInfo
 				Interface:          peer.InterfaceName,
 				PeerIP:             firstNonEmpty(peer.PeerIpAddress, peer.PeerIpv4NexthopAddress, peer.PeerIpv6NexthopAddress),
 				LocalIP:            firstNonEmpty(peer.IpAddress, peer.Ipv4NexthopAddress, peer.Ipv6NexthopAddress),
+				LocalASN:           localASN,
 				PeerASN:            peer.PeerAsn,
 				AdvertisedMode:     peer.AdvertiseMode,
 				RoutePriority:      peer.AdvertisedRoutePriority,
@@ -789,10 +879,16 @@ func (c *Client) populateTunnelBGP(ctx context.Context, tunnels []*VPNTunnelInfo
 			}
 
 			if includeRoutes {
-				if v := learnedByTunnel[link]; len(v) > 0 {
+				// Populate learned prefixes from the peer-specific map
+				if v := allLearnedByPeer[peer.Name]; len(v) > 0 {
 					info.LearnedPrefixes = append([]string{}, v...)
-				} else if v := learnedByPeerIP[info.PeerIP]; len(v) > 0 {
-					info.LearnedPrefixes = append([]string{}, v...)
+				}
+
+				// Populate best route prefixes
+				if v := bestByTunnel[link]; len(v) > 0 {
+					info.BestRoutePrefixes = append([]string{}, v...)
+				} else if v := bestByPeerIP[info.PeerIP]; len(v) > 0 {
+					info.BestRoutePrefixes = append([]string{}, v...)
 				}
 			}
 
@@ -844,7 +940,6 @@ func convertVpnTunnel(region string, t *compute.VpnTunnel) *VPNTunnelInfo {
 		SelfLink:          t.SelfLink,
 		PeerIP:            t.PeerIp,
 		PeerGateway:       firstNonEmpty(t.PeerGcpGateway, t.PeerExternalGateway),
-		PeerExternal:      t.PeerExternalGateway,
 		Status:            t.Status,
 		DetailedStatus:    t.DetailedStatus,
 		IkeVersion:        t.IkeVersion,
