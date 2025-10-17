@@ -73,21 +73,30 @@ type BGPSessionInfo struct {
 }
 
 // ListVPNOverview retrieves HA VPN gateways along with associated tunnels and BGP peers.
-func (c *Client) ListVPNOverview(ctx context.Context) (*VPNOverview, error) {
-	gateways, err := c.listVpnGateways(ctx)
+func (c *Client) ListVPNOverview(ctx context.Context, progress func(string)) (*VPNOverview, error) {
+	if progress == nil {
+		progress = func(string) {}
+	}
+
+	progress("Loading HA VPN gateways")
+	gateways, err := c.listVpnGateways(ctx, progress)
 	if err != nil {
 		return nil, err
 	}
 
-	tunnels, err := c.listVpnTunnels(ctx)
+	progress("Loading Cloud VPN tunnels")
+	tunnels, err := c.listVpnTunnels(ctx, progress)
 	if err != nil {
 		return nil, err
 	}
 
-	sessions, err := c.listRouterBgpPeers(ctx)
+	progress("Loading Cloud Router BGP peers")
+	sessions, err := c.listRouterBgpPeers(ctx, progress)
 	if err != nil {
 		return nil, err
 	}
+
+	progress("Assembling Cloud VPN topology")
 
 	overview := &VPNOverview{
 		Gateways:       gateways,
@@ -138,10 +147,13 @@ func (c *Client) ListVPNOverview(ctx context.Context) (*VPNOverview, error) {
 	return overview, nil
 }
 
-func (c *Client) listVpnGateways(ctx context.Context) ([]*VPNGatewayInfo, error) {
+func (c *Client) listVpnGateways(ctx context.Context, progress func(string)) ([]*VPNGatewayInfo, error) {
 	logger.Log.Debug("Listing VPN gateways (aggregated)")
 
 	var gateways []*VPNGatewayInfo
+	if progress != nil {
+		progress("Calling compute.v1 VpnGateways.AggregatedList")
+	}
 
 	call := c.service.VpnGateways.AggregatedList(c.project).Context(ctx)
 	err := call.Pages(ctx, func(page *compute.VpnGatewayAggregatedList) error {
@@ -151,6 +163,9 @@ func (c *Client) listVpnGateways(ctx context.Context) ([]*VPNGatewayInfo, error)
 			}
 
 			region := scopeSuffix(scope)
+			if progress != nil {
+				progress(fmt.Sprintf("Fetched HA VPN gateways in %s", region))
+			}
 			for _, gw := range scopedList.VpnGateways {
 				info := &VPNGatewayInfo{
 					Name:        gw.Name,
@@ -176,10 +191,13 @@ func (c *Client) listVpnGateways(ctx context.Context) ([]*VPNGatewayInfo, error)
 	return gateways, nil
 }
 
-func (c *Client) listVpnTunnels(ctx context.Context) ([]*VPNTunnelInfo, error) {
+func (c *Client) listVpnTunnels(ctx context.Context, progress func(string)) ([]*VPNTunnelInfo, error) {
 	logger.Log.Debug("Listing VPN tunnels (aggregated)")
 
 	var tunnels []*VPNTunnelInfo
+	if progress != nil {
+		progress("Calling compute.v1 VpnTunnels.AggregatedList")
+	}
 
 	call := c.service.VpnTunnels.AggregatedList(c.project).Context(ctx)
 	err := call.Pages(ctx, func(page *compute.VpnTunnelAggregatedList) error {
@@ -189,6 +207,9 @@ func (c *Client) listVpnTunnels(ctx context.Context) ([]*VPNTunnelInfo, error) {
 			}
 
 			region := scopeSuffix(scope)
+			if progress != nil {
+				progress(fmt.Sprintf("Fetched VPN tunnels in %s", region))
+			}
 			for _, t := range scopedList.VpnTunnels {
 				info := &VPNTunnelInfo{
 					Name:              t.Name,
@@ -225,10 +246,13 @@ func (c *Client) listVpnTunnels(ctx context.Context) ([]*VPNTunnelInfo, error) {
 	return tunnels, nil
 }
 
-func (c *Client) listRouterBgpPeers(ctx context.Context) ([]*BGPSessionInfo, error) {
+func (c *Client) listRouterBgpPeers(ctx context.Context, progress func(string)) ([]*BGPSessionInfo, error) {
 	logger.Log.Debug("Listing Cloud Routers (aggregated) for BGP peers")
 
 	var peers []*BGPSessionInfo
+	if progress != nil {
+		progress("Calling compute.v1 Routers.AggregatedList")
+	}
 
 	call := c.service.Routers.AggregatedList(c.project).Context(ctx)
 	err := call.Pages(ctx, func(page *compute.RouterAggregatedList) error {
@@ -238,6 +262,9 @@ func (c *Client) listRouterBgpPeers(ctx context.Context) ([]*BGPSessionInfo, err
 			}
 
 			region := scopeSuffix(scope)
+			if progress != nil {
+				progress(fmt.Sprintf("Fetched Cloud Routers in %s", region))
+			}
 			for _, router := range scopedList.Routers {
 				if len(router.BgpPeers) == 0 {
 					continue
@@ -254,6 +281,9 @@ func (c *Client) listRouterBgpPeers(ctx context.Context) ([]*BGPSessionInfo, err
 				}
 
 				statusMap := map[string]*compute.RouterStatusBgpPeerStatus{}
+				if progress != nil {
+					progress(fmt.Sprintf("Fetching router status for %s", router.Name))
+				}
 				statusResp, err := c.service.Routers.GetRouterStatus(c.project, region, router.Name).Context(ctx).Do()
 				if err != nil {
 					logger.Log.Warnf("Failed to fetch router status for %s: %v", router.Name, err)

@@ -34,7 +34,15 @@ func runVPNList(ctx context.Context) {
 	spin := output.NewSpinner("Collecting Cloud VPN data")
 	spin.Start()
 
-	overview, err := client.ListVPNOverview(ctx)
+	progress := func(message string) {
+		if message == "" {
+			return
+		}
+		spin.Update(message)
+		logger.Log.Debug(message)
+	}
+
+	overview, err := client.ListVPNOverview(ctx, progress)
 	if err != nil {
 		spin.Fail("Failed to collect Cloud VPN data")
 		logger.Log.Fatalf("Failed to fetch VPN overview: %v", err)

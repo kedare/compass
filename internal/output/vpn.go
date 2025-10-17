@@ -130,8 +130,16 @@ func displayVPNText(data *gcp.VPNOverview) error {
 		fmt.Println("⚠️  Orphan BGP Sessions (no tunnel association):")
 
 		for _, peer := range sortedPeers(data.OrphanSessions) {
-			fmt.Printf("  • %s on router %s (%s) peer %s ASN %d\n",
-				peer.Name, peer.RouterName, peer.Region, peer.PeerIP, peer.PeerASN)
+			fmt.Printf("  • %s on router %s (%s) peer %s ASN %d status %s, learned %d, advertised %d\n",
+				colorPeerName(peer),
+				peer.RouterName,
+				peer.Region,
+				peer.PeerIP,
+				peer.PeerASN,
+				colorPeerStatus(peer),
+				peer.LearnedRoutes,
+				peer.AdvertisedCount,
+			)
 		}
 	}
 
@@ -203,12 +211,13 @@ func displayVPNTable(data *gcp.VPNOverview) error {
 		orphans := table.NewWriter()
 		orphans.SetOutputMirror(os.Stdout)
 		orphans.SetStyle(table.StyleLight)
-		orphans.AppendHeader(table.Row{"Orphan Tunnel", "Region", "Peer IP", "Router"})
+		orphans.AppendHeader(table.Row{"Orphan Tunnel", "Region", "Status", "Peer IP", "Router"})
 
 		for _, tunnel := range sortedTunnels(data.OrphanTunnels) {
 			orphans.AppendRow(table.Row{
-				tunnel.Name,
+				colorTunnelName(tunnel),
 				tunnel.Region,
+				colorStatus(tunnel.Status),
 				tunnel.PeerIP,
 				tunnel.RouterName,
 			})
