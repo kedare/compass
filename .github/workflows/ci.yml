@@ -26,6 +26,9 @@ jobs:
       - name: Install go-task
         uses: go-task/setup-task@v1
 
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.6
+
       - name: Cache Go build outputs
         uses: actions/cache@v4
         with:
@@ -39,11 +42,11 @@ jobs:
       - name: Download modules
         run: go mod download
 
-      - name: Run checks
+      - name: Run task check
         run: task check
 
-      - name: Test
-        run: task test
+      - name: Verify working tree clean
+        run: git diff --exit-code
 
       - name: Test race conditions
         run: task test-race

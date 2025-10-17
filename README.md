@@ -586,7 +586,7 @@ Remove compiled binaries like `./compass` before committing changes.
 
 ## CI/CD
 
-GitHub Actions run `task fmt`, `task vet`, and `task test` on pull requests and pushes to `main`. Tagging a commit triggers an automated release that rebuilds via `task build`, reruns tests, and publishes notes.
+GitHub Actions run `task check` (fmt, vet, lint, test) and `task test-race` on pull requests and pushes to `main`. Tagging a commit triggers an automated release that repeats `task check`, verifies formatting stays clean, rebuilds via `task build`, and publishes notes.
 
 ## Roadmap
 
