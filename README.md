@@ -29,6 +29,7 @@
   - [Common Use Cases](#common-use-cases)
 - [VPN Overview](#vpn-overview)
 - [Development](#development)
+- [CI/CD](#cicd)
 - [Roadmap](#roadmap)
 - [License](#license)
 - [Support](#support)
@@ -582,6 +583,10 @@ Use the `Taskfile.yml` to build, lint, and test consistently.
 - `task dev` – hot-reload workflow (requires [`air`](https://github.com/cosmtrek/air))
 
 Remove compiled binaries like `./compass` before committing changes.
+
+## CI/CD
+
+GitHub Actions run `task fmt`, `task vet`, and `task test` on pull requests and pushes to `main`. Tagging a commit triggers an automated release that rebuilds via `task build`, reruns tests, and publishes notes.
 
 ## Roadmap
 

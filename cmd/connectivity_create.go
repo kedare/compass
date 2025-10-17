@@ -186,11 +186,12 @@ func resolveSource(ctx context.Context, gcpClient *gcp.Client, config *gcp.Conne
 		var err error
 
 		// Check if it's a MIG or instance
-		if createSourceType == resourceTypeMIG {
+		switch createSourceType {
+		case resourceTypeMIG:
 			instance, err = gcpClient.FindInstanceInMIG(ctx, createSourceInstance, createSourceZone)
-		} else if createSourceType == resourceTypeInstance {
+		case resourceTypeInstance:
 			instance, err = gcpClient.FindInstance(ctx, createSourceInstance, createSourceZone)
-		} else {
+		default:
 			// Auto-detect: try MIG first, then instance
 			instance, err = gcpClient.FindInstanceInMIG(ctx, createSourceInstance, createSourceZone)
 			if err != nil {
@@ -229,11 +230,12 @@ func resolveDestination(ctx context.Context, gcpClient *gcp.Client, config *gcp.
 		var err error
 
 		// Check if it's a MIG or instance
-		if createDestinationType == resourceTypeMIG {
+		switch createDestinationType {
+		case resourceTypeMIG:
 			instance, err = gcpClient.FindInstanceInMIG(ctx, createDestinationInstance, createDestinationZone)
-		} else if createDestinationType == resourceTypeInstance {
+		case resourceTypeInstance:
 			instance, err = gcpClient.FindInstance(ctx, createDestinationInstance, createDestinationZone)
-		} else {
+		default:
 			// Auto-detect: try MIG first, then instance
 			instance, err = gcpClient.FindInstanceInMIG(ctx, createDestinationInstance, createDestinationZone)
 			if err != nil {
