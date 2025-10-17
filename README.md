@@ -1,4 +1,4 @@
-# compass - Cloud Instance SSH Connector
+# compass - Cloud Connectiviy toolset
 
 `compass` is a fast, intuitive CLI for reaching Google Cloud Platform (GCP) instances over SSH. It handles Identity-Aware Proxy (IAP) tunneling, Managed Instance Groups (MIGs), connectivity tests, and advanced SSH scenarios without extra configuration.
 
