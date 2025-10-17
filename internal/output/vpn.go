@@ -23,6 +23,168 @@ func DisplayVPNOverview(data *gcp.VPNOverview, format string) error {
 	}
 }
 
+func DisplayVPNGateway(gw *gcp.VPNGatewayInfo, format string) error {
+	switch strings.ToLower(format) {
+	case "json":
+		return displayJSON(gw)
+	case "table":
+		t := table.NewWriter()
+		t.SetOutputMirror(os.Stdout)
+		t.SetStyle(table.StyleLight)
+		t.AppendHeader(table.Row{"Gateway", "Region", "Network", "Interfaces", "Tunnels"})
+		t.AppendRow(table.Row{
+			gw.Name,
+			gw.Region,
+			resourceName(gw.Network),
+			len(gw.Interfaces),
+			len(gw.Tunnels),
+		})
+		t.Render()
+		return nil
+	default:
+		return renderGatewayText(gw)
+	}
+}
+
+func DisplayVPNTunnel(tunnel *gcp.VPNTunnelInfo, format string) error {
+	switch strings.ToLower(format) {
+	case "json":
+		return displayJSON(tunnel)
+	case "table":
+		t := table.NewWriter()
+		t.SetOutputMirror(os.Stdout)
+		t.SetStyle(table.StyleLight)
+		t.AppendHeader(table.Row{"Tunnel", "Region", "Status", "Peer IP", "Router", "BGP Peers"})
+		peers := tunnelPeerSummary(tunnel)
+		t.AppendRow(table.Row{
+			colorTunnelName(tunnel),
+			tunnel.Region,
+			colorStatus(tunnel.Status),
+			tunnel.PeerIP,
+			tunnel.RouterName,
+			peers,
+		})
+		t.Render()
+		return nil
+	default:
+		return renderTunnelText(tunnel)
+	}
+}
+
+func renderGatewayText(gw *gcp.VPNGatewayInfo) error {
+	if gw == nil {
+		fmt.Println("VPN gateway not found")
+		return nil
+	}
+
+	fmt.Printf("🔐 Gateway: %s (%s)\n", gw.Name, gw.Region)
+	if gw.Description != "" {
+		fmt.Printf("  Description: %s\n", gw.Description)
+	}
+	if gw.Network != "" {
+		fmt.Printf("  Network:     %s\n", resourceName(gw.Network))
+	}
+	if len(gw.Interfaces) > 0 {
+		fmt.Println("  Interfaces:")
+		for _, iface := range gw.Interfaces {
+			fmt.Printf("    - #%d IP: %s\n", iface.Id, iface.IpAddress)
+		}
+	}
+	if len(gw.Labels) > 0 {
+		fmt.Println("  Labels:")
+		for k, v := range gw.Labels {
+			fmt.Printf("    %s: %s\n", k, v)
+		}
+	}
+	if len(gw.Tunnels) > 0 {
+		fmt.Println("  Tunnels:")
+		for _, tunnel := range sortedTunnels(gw.Tunnels) {
+			fmt.Printf("    • %s [%s]\n", colorTunnelName(tunnel), colorStatus(tunnel.Status))
+			if tunnel.PeerIP != "" {
+				fmt.Printf("      Peer:   %s\n", tunnel.PeerIP)
+			}
+			if tunnel.RouterName != "" {
+				fmt.Printf("      Router: %s\n", tunnel.RouterName)
+			}
+			if len(tunnel.BgpSessions) > 0 {
+				fmt.Printf("      BGP:   %s\n", tunnelPeerSummary(tunnel))
+			}
+		}
+	}
+
+	return nil
+}
+
+func renderTunnelText(tunnel *gcp.VPNTunnelInfo) error {
+	if tunnel == nil {
+		fmt.Println("VPN tunnel not found")
+		return nil
+	}
+
+	fmt.Printf("🔗 Tunnel: %s (%s)\n", colorTunnelName(tunnel), tunnel.Region)
+	if tunnel.Description != "" {
+		fmt.Printf("  Description:  %s\n", tunnel.Description)
+	}
+	if tunnel.Status != "" {
+		fmt.Printf("  Status:       %s\n", colorStatus(tunnel.Status))
+	}
+	if tunnel.DetailedStatus != "" {
+		fmt.Printf("  Detail:       %s\n", tunnel.DetailedStatus)
+	}
+	if tunnel.PeerIP != "" {
+		fmt.Printf("  Peer IP:      %s\n", tunnel.PeerIP)
+	}
+	if tunnel.PeerGateway != "" {
+		fmt.Printf("  Peer Gateway: %s\n", resourceName(tunnel.PeerGateway))
+	}
+	if tunnel.PeerExternal != "" {
+		fmt.Printf("  Peer External:%s\n", resourceName(tunnel.PeerExternal))
+	}
+	if tunnel.RouterName != "" {
+		fmt.Printf("  Router:       %s\n", tunnel.RouterName)
+	}
+	if tunnel.IkeVersion != 0 {
+		fmt.Printf("  IKE Version:  %d\n", tunnel.IkeVersion)
+	}
+	if tunnel.SharedSecretHash != "" {
+		fmt.Printf("  Secret Hash:  %s\n", tunnel.SharedSecretHash)
+	}
+	if len(tunnel.BgpSessions) > 0 {
+		fmt.Println("  BGP Sessions:")
+		for _, peer := range sortedPeers(tunnel.BgpSessions) {
+			fmt.Printf("    - %s (%s, ASN %d) status %s, learned %d, advertised %d\n",
+				colorPeerName(peer),
+				peer.PeerIP,
+				peer.PeerASN,
+				colorPeerStatus(peer),
+				peer.LearnedRoutes,
+				peer.AdvertisedCount,
+			)
+		}
+	}
+
+	return nil
+}
+
+func tunnelPeerSummary(tunnel *gcp.VPNTunnelInfo) string {
+	if tunnel == nil || len(tunnel.BgpSessions) == 0 {
+		return "none"
+	}
+
+	summaries := make([]string, 0, len(tunnel.BgpSessions))
+	for _, peer := range sortedPeers(tunnel.BgpSessions) {
+		status := colorPeerStatus(peer)
+		summaries = append(summaries, fmt.Sprintf("%s [%s L%d/A%d]",
+			colorPeerName(peer),
+			status,
+			peer.LearnedRoutes,
+			peer.AdvertisedCount,
+		))
+	}
+
+	return strings.Join(summaries, ", ")
+}
+
 func displayVPNText(data *gcp.VPNOverview) error {
 	if data == nil || len(data.Gateways) == 0 && len(data.OrphanTunnels) == 0 && len(data.OrphanSessions) == 0 {
 		fmt.Println("No VPN resources found")

@@ -100,6 +100,9 @@ compass gcp my-instance --project my-gcp-project --ssh-flag "-L 8080:localhost:8
 
 # Display build metadata
 compass version
+
+# Inspect a VPN gateway
+compass gcp vpn get prod-ha-vpn --type gateway --region us-central1
 ```
 
 ## Usage
@@ -457,6 +460,14 @@ $ compass gcp vpn list --project prod --output table
 ```
 
 Use `--output json` to consume the inventory programmatically.
+
+### Inspect a Single Gateway or Tunnel
+
+```console
+$ compass gcp vpn get prod-ha-vpn --type gateway --region us-central1
+
+$ compass gcp vpn get prod-to-eu --type tunnel --region us-central1 --output json
+```
 
 ## Development
 
