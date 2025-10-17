@@ -38,7 +38,7 @@ Mirror on [Github](https://github.com/kedare/compass) : Read only mirror
 
 ## Overview
 
-`compass` discovers instances, selects the best SSH path, and launches connections quickly. It reuses your existing `gcloud` credentials, surfaces meaningful logs, and stays flexible enough for tunneling, port forwarding, or automation.
+`compass` is a one-stop CLI for operating Google Cloud fleets. It discovers instances and Managed Instance Groups, builds the right SSH or IAP tunnel automatically, and reuses your `gcloud` credentials so access stays seamless. Beyond remote access, it can launch Connectivity Tests, surface VPN topologies, and stream structured logs in whatever format you need for automation. Whether you are diagnosing reachability, crafting port-forwarding recipes, or auditing gateways, `compass` keeps workflows fast and scriptable.
 
 ## Features
 
@@ -595,7 +595,7 @@ Remove compiled binaries like `./compass` before committing changes.
 
 ## License
 
-Private for now—OSS soon?
+Licensed under the [Apache License 2.0](LICENSE).
 
 ## Support
 
