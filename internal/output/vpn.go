@@ -54,13 +54,12 @@ func DisplayVPNTunnel(tunnel *gcp.VPNTunnelInfo, format string) error {
 		t := table.NewWriter()
 		t.SetOutputMirror(os.Stdout)
 		t.SetStyle(table.StyleLight)
-		t.AppendHeader(table.Row{"Tunnel", "Region", "Status", "Peer IP", "Router", "BGP Peers"})
+		t.AppendHeader(table.Row{"Tunnel", "Region", "Status", "Router", "BGP Peers"})
 		peers := tunnelPeerSummary(tunnel)
 		t.AppendRow(table.Row{
 			colorTunnelName(tunnel),
 			tunnel.Region,
 			colorStatus(tunnel.Status),
-			tunnel.PeerIP,
 			tunnel.RouterName,
 			peers,
 		})
@@ -101,13 +100,13 @@ func renderGatewayText(gw *gcp.VPNGatewayInfo) error {
 		for _, tunnel := range sortedTunnels(gw.Tunnels) {
 			fmt.Printf("    • %s [%s]\n", colorTunnelName(tunnel), colorStatus(tunnel.Status))
 			if tunnel.PeerIP != "" {
-				fmt.Printf("      Peer:   %s\n", tunnel.PeerIP)
+				fmt.Printf("      IPSec Peers: %s\n", formatIPSecPeers(tunnel))
 			}
 			if tunnel.RouterName != "" {
 				fmt.Printf("      Router: %s\n", tunnel.RouterName)
 			}
 			if len(tunnel.BgpSessions) > 0 {
-				fmt.Printf("      BGP:   %s\n", tunnelPeerSummary(tunnel))
+				fmt.Printf("      BGP Peers: %s\n", tunnelPeerSummary(tunnel))
 			}
 		}
 	}
@@ -132,7 +131,7 @@ func renderTunnelText(tunnel *gcp.VPNTunnelInfo) error {
 		fmt.Printf("  Detail:       %s\n", tunnel.DetailedStatus)
 	}
 	if tunnel.PeerIP != "" {
-		fmt.Printf("  Peer IP:      %s\n", tunnel.PeerIP)
+		fmt.Printf("  IPSec Peers:  %s\n", formatIPSecPeers(tunnel))
 	}
 	if tunnel.PeerGateway != "" {
 		fmt.Printf("  Peer Gateway: %s\n", resourceName(tunnel.PeerGateway))
@@ -150,12 +149,13 @@ func renderTunnelText(tunnel *gcp.VPNTunnelInfo) error {
 		fmt.Printf("  Secret Hash:  %s\n", tunnel.SharedSecretHash)
 	}
 	if len(tunnel.BgpSessions) > 0 {
-		fmt.Println("  BGP Sessions:")
+		fmt.Println("  BGP Peers:")
 		for _, peer := range sortedPeers(tunnel.BgpSessions) {
-			fmt.Printf("    - %s (%s, ASN %d) status %s, learned %d, advertised %d\n",
+			fmt.Printf("    - %s (%s, ASN %d) endpoints %s, status %s, learned %d, advertised %d\n",
 				colorPeerName(peer),
 				peer.PeerIP,
 				peer.PeerASN,
+				formatEndpointPair(peer),
 				colorPeerStatus(peer),
 				peer.LearnedRoutes,
 				peer.AdvertisedCount,
@@ -173,10 +173,10 @@ func tunnelPeerSummary(tunnel *gcp.VPNTunnelInfo) string {
 
 	summaries := make([]string, 0, len(tunnel.BgpSessions))
 	for _, peer := range sortedPeers(tunnel.BgpSessions) {
-		status := colorPeerStatus(peer)
-		summaries = append(summaries, fmt.Sprintf("%s [%s L%d/A%d]",
+		summaries = append(summaries, fmt.Sprintf("%s %s [%s L%d/A%d]",
 			colorPeerName(peer),
-			status,
+			formatEndpointPair(peer),
+			colorPeerStatus(peer),
 			peer.LearnedRoutes,
 			peer.AdvertisedCount,
 		))
@@ -224,7 +224,7 @@ func displayVPNText(data *gcp.VPNOverview) error {
 			fmt.Printf("    • %s (%s)\n", colorTunnelName(tunnel), tunnel.Region)
 
 			if strings.TrimSpace(tunnel.PeerIP) != "" {
-				fmt.Printf("      Peer IP:      %s\n", tunnel.PeerIP)
+				fmt.Printf("      IPSec Peers:  %s\n", formatIPSecPeers(tunnel))
 			}
 
 			if tunnel.PeerGateway != "" {
@@ -255,9 +255,9 @@ func displayVPNText(data *gcp.VPNOverview) error {
 				fmt.Println("      BGP Peers:")
 
 				for _, peer := range sortedPeers(tunnel.BgpSessions) {
-					fmt.Printf("        - %s (%s, ASN %d) status %s, learned %d, advertised %d\n",
+					fmt.Printf("        - %s endpoints %s (ASN %d) status %s, learned %d, advertised %d\n",
 						colorPeerName(peer),
-						peer.PeerIP,
+						formatEndpointPair(peer),
 						peer.PeerASN,
 						colorPeerStatus(peer),
 						peer.LearnedRoutes,
@@ -274,7 +274,7 @@ func displayVPNText(data *gcp.VPNOverview) error {
 		fmt.Println("⚠️  Orphan Tunnels (not attached to HA VPN gateways):")
 
 		for _, tunnel := range sortedTunnels(data.OrphanTunnels) {
-			fmt.Printf("  • %s (%s) peer %s\n", colorTunnelName(tunnel), tunnel.Region, tunnel.PeerIP)
+			fmt.Printf("  • %s (%s) peers %s\n", colorTunnelName(tunnel), tunnel.Region, formatIPSecPeers(tunnel))
 
 			if tunnel.RouterName != "" {
 				fmt.Printf("    Router: %s\n", tunnel.RouterName)
@@ -292,11 +292,11 @@ func displayVPNText(data *gcp.VPNOverview) error {
 		fmt.Println("⚠️  Orphan BGP Sessions (no tunnel association):")
 
 		for _, peer := range sortedPeers(data.OrphanSessions) {
-			fmt.Printf("  • %s on router %s (%s) peer %s ASN %d status %s, learned %d, advertised %d\n",
+			fmt.Printf("  • %s on router %s (%s) endpoints %s ASN %d status %s, learned %d, advertised %d\n",
 				colorPeerName(peer),
 				peer.RouterName,
 				peer.Region,
-				peer.PeerIP,
+				formatEndpointPair(peer),
 				peer.PeerASN,
 				colorPeerStatus(peer),
 				peer.LearnedRoutes,
@@ -337,14 +337,15 @@ func displayVPNTable(data *gcp.VPNOverview) error {
 	detail := table.NewWriter()
 	detail.SetOutputMirror(os.Stdout)
 	detail.SetStyle(table.StyleLight)
-	detail.AppendHeader(table.Row{"Gateway", "Tunnel", "Region", "Status", "Peer IP", "Router", "BGP Peers"})
+	detail.AppendHeader(table.Row{"Gateway", "Tunnel", "Region", "Status", "Router", "BGP Peers"})
 
 	for _, gw := range sortedGateways(data.Gateways) {
 		for _, tunnel := range sortedTunnels(gw.Tunnels) {
 			peerNames := make([]string, 0, len(tunnel.BgpSessions))
 			for _, peer := range sortedPeers(tunnel.BgpSessions) {
-				display := fmt.Sprintf("%s [%s L%d/A%d]",
+				display := fmt.Sprintf("%s %s [%s L%d/A%d]",
 					colorPeerName(peer),
+					formatEndpointPair(peer),
 					colorPeerStatus(peer),
 					peer.LearnedRoutes,
 					peer.AdvertisedCount,
@@ -357,7 +358,6 @@ func displayVPNTable(data *gcp.VPNOverview) error {
 				colorTunnelName(tunnel),
 				tunnel.Region,
 				colorStatus(tunnel.Status),
-				tunnel.PeerIP,
 				tunnel.RouterName,
 				strings.Join(peerNames, ", "),
 			})
@@ -373,14 +373,14 @@ func displayVPNTable(data *gcp.VPNOverview) error {
 		orphans := table.NewWriter()
 		orphans.SetOutputMirror(os.Stdout)
 		orphans.SetStyle(table.StyleLight)
-		orphans.AppendHeader(table.Row{"Orphan Tunnel", "Region", "Status", "Peer IP", "Router"})
+		orphans.AppendHeader(table.Row{"Orphan Tunnel", "Region", "Status", "IPSec Peers", "Router"})
 
 		for _, tunnel := range sortedTunnels(data.OrphanTunnels) {
 			orphans.AppendRow(table.Row{
 				colorTunnelName(tunnel),
 				tunnel.Region,
 				colorStatus(tunnel.Status),
-				tunnel.PeerIP,
+				formatIPSecPeers(tunnel),
 				tunnel.RouterName,
 			})
 		}
@@ -393,14 +393,14 @@ func displayVPNTable(data *gcp.VPNOverview) error {
 		bgps := table.NewWriter()
 		bgps.SetOutputMirror(os.Stdout)
 		bgps.SetStyle(table.StyleLight)
-		bgps.AppendHeader(table.Row{"BGP Peer", "Router", "Region", "Peer IP", "ASN", "State", "Learned", "Advertised"})
+		bgps.AppendHeader(table.Row{"BGP Peer", "Router", "Region", "BGP Peers", "ASN", "State", "Learned", "Advertised"})
 
 		for _, peer := range sortedPeers(data.OrphanSessions) {
 			bgps.AppendRow(table.Row{
 				colorPeerName(peer),
 				peer.RouterName,
 				peer.Region,
-				peer.PeerIP,
+				formatEndpointPair(peer),
 				peer.PeerASN,
 				colorPeerStatus(peer),
 				peer.LearnedRoutes,
@@ -550,4 +550,48 @@ func applyStyle(textValue, style string) string {
 	default:
 		return textValue
 	}
+}
+
+func formatEndpointPair(peer *gcp.BGPSessionInfo) string {
+	if peer == nil {
+		return "? <-> ?"
+	}
+	local := strings.TrimSpace(peer.LocalIP)
+	if local == "" {
+		local = "?"
+	}
+	remote := strings.TrimSpace(peer.PeerIP)
+	if remote == "" {
+		remote = "?"
+	}
+	return fmt.Sprintf("%s <-> %s", local, remote)
+}
+
+func formatIPSecPeers(tunnel *gcp.VPNTunnelInfo) string {
+	if tunnel == nil {
+		return "? <-> ?"
+	}
+
+	local := strings.TrimSpace(tunnel.LocalGatewayIP)
+	if local == "" {
+		for _, peer := range tunnel.BgpSessions {
+			if peer == nil {
+				continue
+			}
+			if v := strings.TrimSpace(peer.LocalIP); v != "" {
+				local = v
+				break
+			}
+		}
+	}
+	if local == "" {
+		local = "?"
+	}
+
+	remote := strings.TrimSpace(tunnel.PeerIP)
+	if remote == "" {
+		remote = "?"
+	}
+
+	return fmt.Sprintf("%s <-> %s", local, remote)
 }

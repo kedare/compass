@@ -57,88 +57,30 @@ func runVPNGet(ctx context.Context, name string) {
 		logger.Log.Debug(message)
 	}
 
-	overview, err := client.ListVPNOverview(ctx, progress)
-	if err != nil {
-		spin.Fail("Failed to collect Cloud VPN data")
-		logger.Log.Fatalf("Failed to fetch VPN overview: %v", err)
-	}
-
-	spin.Success("Cloud VPN data retrieved")
-
-	var matches []*gcp.VPNGatewayInfo
 	regionFilter := strings.TrimSpace(vpnGetRegion)
 
-	if resourceType == "gateway" {
-		matches = filterGatewaysByName(overview.Gateways, name, regionFilter)
-		if len(matches) == 0 {
-			logger.Log.Fatalf("No VPN gateway named %q found", name)
+	switch resourceType {
+	case "gateway":
+		info, err := client.GetVPNGatewayOverview(ctx, regionFilter, name, progress)
+		if err != nil {
+			spin.Fail("Failed to collect gateway data")
+			logger.Log.Fatalf("Failed to fetch VPN gateway: %v", err)
 		}
-		if len(matches) > 1 {
-			logger.Log.Fatalf("Multiple VPN gateways named %q found; please specify --region", name)
-		}
-		if err := output.DisplayVPNGateway(matches[0], vpnGetOutput); err != nil {
+		spin.Success("Cloud VPN data retrieved")
+		if err := output.DisplayVPNGateway(info, vpnGetOutput); err != nil {
 			logger.Log.Fatalf("Failed to render VPN gateway: %v", err)
 		}
-
-		return
-	}
-
-	tunnel := selectTunnel(overview, name, regionFilter)
-	if tunnel == nil {
-		logger.Log.Fatalf("No VPN tunnel named %q found", name)
-	}
-
-	if err := output.DisplayVPNTunnel(tunnel, vpnGetOutput); err != nil {
-		logger.Log.Fatalf("Failed to render VPN tunnel: %v", err)
-	}
-}
-
-func filterGatewaysByName(gateways []*gcp.VPNGatewayInfo, name, region string) []*gcp.VPNGatewayInfo {
-	var result []*gcp.VPNGatewayInfo
-	for _, gw := range gateways {
-		if !strings.EqualFold(gw.Name, name) {
-			continue
+	case "tunnel":
+		info, err := client.GetVPNTunnelOverview(ctx, regionFilter, name, progress)
+		if err != nil {
+			spin.Fail("Failed to collect tunnel data")
+			logger.Log.Fatalf("Failed to fetch VPN tunnel: %v", err)
 		}
-		if region != "" && !strings.EqualFold(gw.Region, region) {
-			continue
-		}
-		result = append(result, gw)
-	}
-	return result
-}
-
-func selectTunnel(overview *gcp.VPNOverview, name, region string) *gcp.VPNTunnelInfo {
-	matches := make([]*gcp.VPNTunnelInfo, 0)
-
-	check := func(tunnel *gcp.VPNTunnelInfo) {
-		if !strings.EqualFold(tunnel.Name, name) {
-			return
-		}
-		if region != "" && !strings.EqualFold(tunnel.Region, region) {
-			return
-		}
-		matches = append(matches, tunnel)
-	}
-
-	for _, gw := range overview.Gateways {
-		for _, tunnel := range gw.Tunnels {
-			check(tunnel)
+		spin.Success("Cloud VPN data retrieved")
+		if err := output.DisplayVPNTunnel(info, vpnGetOutput); err != nil {
+			logger.Log.Fatalf("Failed to render VPN tunnel: %v", err)
 		}
 	}
-
-	for _, tunnel := range overview.OrphanTunnels {
-		check(tunnel)
-	}
-
-	if len(matches) == 0 {
-		return nil
-	}
-
-	if len(matches) > 1 {
-		logger.Log.Fatalf("Multiple VPN tunnels named %q found; please specify --region", name)
-	}
-
-	return matches[0]
 }
 
 func init() {
