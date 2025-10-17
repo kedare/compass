@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"cx/internal/cache"
-	"cx/internal/logger"
+	"compass/internal/cache"
+	"compass/internal/logger"
 	"google.golang.org/api/compute/v1"
 	"google.golang.org/api/option"
 )
@@ -545,6 +545,7 @@ func (c *Client) convertInstance(instance *compute.Instance) *Instance {
 
 	// Extract IP addresses
 	hasExternalIP := false
+
 	for _, networkInterface := range instance.NetworkInterfaces {
 		if networkInterface.NetworkIP != "" {
 			result.InternalIP = networkInterface.NetworkIP
@@ -627,6 +628,7 @@ func getDefaultProject() string {
 	for _, key := range envVars {
 		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 			logger.Log.Debugf("Using default project from %s", key)
+
 			return value
 		}
 	}
@@ -634,6 +636,7 @@ func getDefaultProject() string {
 	project, err := readProjectFromGCloudConfig()
 	if err == nil && project != "" {
 		logger.Log.Debug("Using default project from gcloud configuration")
+
 		return project
 	}
 
@@ -652,6 +655,7 @@ func readProjectFromGCloudConfig() (string, error) {
 	}
 
 	configPath := filepath.Join(configDir, "configurations", "config_default")
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return "", err
@@ -669,6 +673,7 @@ func readProjectFromGCloudConfig() (string, error) {
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
 			section := strings.Trim(line, "[]")
 			inCore = strings.EqualFold(section, "core")
+
 			continue
 		}
 
@@ -684,7 +689,7 @@ func readProjectFromGCloudConfig() (string, error) {
 		return "", err
 	}
 
-	return "", fmt.Errorf("project not found in gcloud config")
+	return "", errors.New("project not found in gcloud config")
 }
 
 // cacheInstance stores instance location information in the cache.

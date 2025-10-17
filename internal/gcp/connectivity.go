@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"cx/internal/logger"
+	"compass/internal/logger"
 	"google.golang.org/api/networkmanagement/v1"
 	"google.golang.org/api/option"
 )
@@ -355,6 +355,7 @@ func waitForOperationWithBackoff(ctx context.Context, poll func(context.Context)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+
 			return ctx.Err()
 		case <-timer.C:
 		}
@@ -363,6 +364,7 @@ func waitForOperationWithBackoff(ctx context.Context, poll func(context.Context)
 		if nextDelay > backoff.max {
 			nextDelay = backoff.max
 		}
+
 		if nextDelay <= 0 {
 			nextDelay = backoff.initial
 		}

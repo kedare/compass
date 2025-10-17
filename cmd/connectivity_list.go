@@ -3,9 +3,9 @@ package cmd
 import (
 	"context"
 
-	"cx/internal/gcp"
-	"cx/internal/logger"
-	"cx/internal/output"
+	"compass/internal/gcp"
+	"compass/internal/logger"
+	"compass/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -24,16 +24,16 @@ You can filter results using the --filter flag with a filter expression.
 
 Examples:
   # List all tests
-  cx gcp connectivity-test list --project my-project
+  compass gcp connectivity-test list --project my-project
 
   # List with table output
-  cx gcp connectivity-test list --project my-project --output table
+  compass gcp connectivity-test list --project my-project --output table
 
   # List with filter
-  cx gcp connectivity-test list --project my-project --filter "labels.env=prod"
+  compass gcp connectivity-test list --project my-project --filter "labels.env=prod"
 
   # List with JSON output
-  cx gcp connectivity-test list --project my-project --output json`,
+  compass gcp connectivity-test list --project my-project --output json`,
 	Args: cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		runListTests(cmd.Context())
@@ -58,6 +58,7 @@ func runListTests(ctx context.Context) {
 		spin.Fail("Failed to fetch connectivity tests")
 		logger.Log.Fatalf("Failed to list connectivity tests: %v", err)
 	}
+
 	spin.Success("Connectivity tests retrieved")
 
 	// Apply limit if specified

@@ -1,6 +1,6 @@
 # Connectivity Tests Implementation
 
-This document provides an overview of the GCP Network Connectivity Tests implementation in the `cx` CLI tool.
+This document provides an overview of the GCP Network Connectivity Tests implementation in the `compass` CLI tool.
 
 ## Architecture
 
@@ -38,29 +38,29 @@ The create command integrates with the existing GCP client to automatically reso
 
 ### Test Operations
 
-**Create**: `cx gcp connectivity-test create <name>`
+**Create**: `compass gcp connectivity-test create <name>`
 - Source: Instance name or IP
 - Destination: Instance name or IP
 - Automatic IP resolution for instances
 - Supports multiple protocols (TCP, UDP, ICMP, ESP, AH, SCTP, GRE)
 - Labels and descriptions for organization
 
-**Run**: `cx gcp connectivity-test run <name>`
+**Run**: `compass gcp connectivity-test run <name>`
 - Reruns existing test
 - Waits for completion
 - Returns updated results
 
-**Get**: `cx gcp connectivity-test get <name>`
+**Get**: `compass gcp connectivity-test get <name>`
 - Retrieves test results
 - Watch mode polls until completion
 - Multiple output formats (text, JSON, detailed)
 
-**List**: `cx gcp connectivity-test list`
+**List**: `compass gcp connectivity-test list`
 - Lists all tests in project
 - Filter support
 - Multiple output formats (text, table, JSON)
 
-**Delete**: `cx gcp connectivity-test delete <name>`
+**Delete**: `compass gcp connectivity-test delete <name>`
 - Confirmation prompt (unless --force)
 - Clean test removal
 
@@ -130,7 +130,7 @@ Test creation and execution are asynchronous operations:
 
 ```bash
 # Quick connectivity check
-cx gcp connectivity-test create quick-check \
+compass gcp connectivity-test create quick-check \
   --project prod \
   --source-instance app-server \
   --destination-instance db-primary \
@@ -142,7 +142,7 @@ cx gcp connectivity-test create quick-check \
 
 ```bash
 # Verify new service connectivity
-cx gcp connectivity-test create pre-deploy-check \
+compass gcp connectivity-test create pre-deploy-check \
   --project staging \
   --source-instance new-service-v2 \
   --destination-ip 10.0.1.100 \
@@ -155,21 +155,21 @@ cx gcp connectivity-test create pre-deploy-check \
 ```bash
 # Test multiple ports
 for port in 80 443 8080; do
-  cx gcp connectivity-test create "web-port-${port}" \
+  compass gcp connectivity-test create "web-port-${port}" \
     --project prod \
     --source-instance web-frontend \
     --destination-instance backend \
     --destination-port $port
 done
 
-cx gcp connectivity-test list --project prod --output table
+compass gcp connectivity-test list --project prod --output table
 ```
 
 ### CI/CD Integration
 
 ```bash
 # Automated validation in pipeline
-result=$(cx gcp connectivity-test create ci-validation \
+result=$(compass gcp connectivity-test create ci-validation \
   --project staging \
   --source-instance app \
   --destination-instance db \

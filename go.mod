@@ -1,4 +1,4 @@
-module cx
+module compass
 
 go 1.24.2
 

@@ -7,19 +7,20 @@ import (
 	"reflect"
 	"testing"
 
-	"cx/internal/gcp"
+	"compass/internal/gcp"
 )
 
 type fakeRunner struct {
 	ctx  context.Context
+	err  error
 	name string
 	args []string
-	err  error
 }
 
 func (f *fakeRunner) Run(ctx context.Context, name string, args []string) error {
 	f.ctx = ctx
 	f.name = name
+
 	f.args = append([]string(nil), args...)
 
 	return f.err
@@ -63,7 +64,7 @@ func TestConnectWithIAP_NoExternalIP(t *testing.T) {
 		CanUseIAP:  false,
 	}
 
-	err := client.ConnectWithIAP(context.Background(), instance, "test-project", nil)
+	err := client.ConnectWithIAP(t.Context(), instance, "test-project", nil)
 	if err == nil {
 		t.Fatal("expected error for instance without external IP and IAP disabled")
 	}
@@ -89,7 +90,7 @@ func TestConnectWithIAP_UsesDirectCommand(t *testing.T) {
 	}
 
 	sshFlags := []string{"-i", "~/.ssh/id_rsa"}
-	ctx := context.WithValue(context.Background(), ctxKey("runner"), "direct")
+	ctx := context.WithValue(t.Context(), ctxKey("runner"), "direct")
 
 	if err := client.ConnectWithIAP(ctx, instance, "test-project", sshFlags); err != nil {
 		t.Fatalf("ConnectWithIAP returned error: %v", err)
@@ -124,7 +125,7 @@ func TestConnectWithIAP_UsesIAPCommand(t *testing.T) {
 	}
 
 	flags := []string{"-L 8080:localhost:8080"}
-	ctx := context.WithValue(context.Background(), ctxKey("runner"), "iap")
+	ctx := context.WithValue(t.Context(), ctxKey("runner"), "iap")
 
 	if err := client.ConnectWithIAP(ctx, instance, "demo-project", flags); err != nil {
 		t.Fatalf("ConnectWithIAP returned error: %v", err)
@@ -166,7 +167,7 @@ func TestConnectWithIAP_PropagatesRunnerError(t *testing.T) {
 		CanUseIAP: true,
 	}
 
-	err := client.ConnectWithIAP(context.Background(), instance, "demo-project", nil)
+	err := client.ConnectWithIAP(t.Context(), instance, "demo-project", nil)
 	if err == nil {
 		t.Fatal("expected error when runner fails")
 	}

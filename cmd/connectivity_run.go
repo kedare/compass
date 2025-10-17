@@ -3,9 +3,9 @@ package cmd
 import (
 	"context"
 
-	"cx/internal/gcp"
-	"cx/internal/logger"
-	"cx/internal/output"
+	"compass/internal/gcp"
+	"compass/internal/logger"
+	"compass/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -21,13 +21,13 @@ the updated results.
 
 Examples:
   # Run a test
-  cx gcp connectivity-test run web-to-db --project my-project
+  compass gcp connectivity-test run web-to-db --project my-project
 
   # Run and get detailed output
-  cx gcp connectivity-test run web-to-db --project my-project --output detailed
+  compass gcp connectivity-test run web-to-db --project my-project --output detailed
 
   # Run and get JSON output
-  cx gcp connectivity-test run web-to-db --project my-project --output json`,
+  compass gcp connectivity-test run web-to-db --project my-project --output json`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		testName := args[0]
@@ -56,6 +56,7 @@ func runRunTest(ctx context.Context, testName string) {
 		spin.Fail("Failed to run connectivity test")
 		logger.Log.Fatalf("Failed to run connectivity test: %v", err)
 	}
+
 	spin.Success("Connectivity test finished")
 
 	logger.Log.Info("Connectivity test completed")

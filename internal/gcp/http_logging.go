@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"cx/internal/logger"
+	"compass/internal/logger"
 	"golang.org/x/oauth2/google"
 )
 

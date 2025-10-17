@@ -1,6 +1,8 @@
-# cx - Cloud Instance SSH Connector
+# compass - Cloud Instance SSH Connector
 
 A fast and intuitive CLI tool to connect to cloud instances using SSH with support for IAP tunneling, Managed Instance Groups (MIGs), and advanced SSH features.
+
+> Prefer something shorter? All commands are also available through the `cps` alias.
 
 ## Features
 
@@ -46,25 +48,25 @@ Or download binaries from [releases page](https://github.com/go-task/task/releas
 
 ```bash
 git clone <repository-url>
-cd cx
+cd compass
 task build
-./cx --help
+./compass --help
 ```
 
 ## Quick Start
 
 ```bash
 # Connect to an instance (auto-discovers zone)
-cx gcp my-instance --project my-gcp-project
+compass gcp my-instance --project my-gcp-project
 
 # Connect with specific zone
-cx gcp my-instance --project my-gcp-project --zone us-central1-a
+compass gcp my-instance --project my-gcp-project --zone us-central1-a
 
 # Connect to a MIG instance (finds first running instance)
-cx gcp my-mig-name --project my-gcp-project
+compass gcp my-mig-name --project my-gcp-project
 
 # Setup SSH tunnel through IAP
-cx gcp my-instance --project my-gcp-project --ssh-flag "-L 8080:localhost:8080"
+compass gcp my-instance --project my-gcp-project --ssh-flag "-L 8080:localhost:8080"
 ```
 
 ## Usage
@@ -72,43 +74,43 @@ cx gcp my-instance --project my-gcp-project --ssh-flag "-L 8080:localhost:8080"
 ### Basic Connection
 
 ```bash
-cx gcp [instance-name] --project [project-id]
+compass gcp [instance-name] --project [project-id]
 ```
 
 ### Advanced Usage
 
 ```bash
 # Multiple SSH flags
-cx gcp instance-name \
+compass gcp instance-name \
   --project my-project \
   --ssh-flag "-L 8080:localhost:8080" \
   --ssh-flag "-D 1080" \
   --ssh-flag "-X"
 
 # Enable debug logging
-cx gcp instance-name --project my-project --log-level debug
+compass gcp instance-name --project my-project --log-level debug
 
 # Connect to regional MIG
-cx gcp my-regional-mig --project my-project --zone us-central1
+compass gcp my-regional-mig --project my-project --zone us-central1
 ```
 
 ### SSH Tunneling Examples
 
 ```bash
 # Local port forwarding
-cx gcp app-server --project prod --ssh-flag "-L 3000:localhost:3000"
+compass gcp app-server --project prod --ssh-flag "-L 3000:localhost:3000"
 
 # Remote port forwarding
-cx gcp jump-host --project staging --ssh-flag "-R 8080:localhost:8080"
+compass gcp jump-host --project staging --ssh-flag "-R 8080:localhost:8080"
 
 # Dynamic port forwarding (SOCKS proxy)
-cx gcp proxy-server --project dev --ssh-flag "-D 1080"
+compass gcp proxy-server --project dev --ssh-flag "-D 1080"
 
 # X11 forwarding
-cx gcp desktop-instance --project dev --ssh-flag "-X"
+compass gcp desktop-instance --project dev --ssh-flag "-X"
 
 # Multiple tunnels
-cx gcp multi-service \
+compass gcp multi-service \
   --project prod \
   --ssh-flag "-L 3000:service1:3000" \
   --ssh-flag "-L 4000:service2:4000" \
@@ -133,8 +135,8 @@ cx gcp multi-service \
 
 ## How It Works
 
-1. **Instance Discovery**: cx first attempts to find the target as a MIG (Managed Instance Group), then falls back to searching for a standalone instance
-2. **Zone Auto-Discovery**: When zone is not specified, cx searches through all available zones
+1. **Instance Discovery**: compass first attempts to find the target as a MIG (Managed Instance Group), then falls back to searching for a standalone instance
+2. **Zone Auto-Discovery**: When zone is not specified, compass searches through all available zones
 3. **Connection Method Selection**:
    - If instance has external IP and IAP is disabled: Direct SSH connection
    - If IAP is available: Connection through `gcloud compute ssh` with IAP tunneling
@@ -144,7 +146,7 @@ cx gcp multi-service \
 
 ## Configuration
 
-cx uses your existing gcloud configuration:
+compass uses your existing gcloud configuration:
 
 ```bash
 # Set default project
@@ -161,44 +163,44 @@ gcloud auth application-default login
 
 ```bash
 # Standard VM instance
-cx gcp web-server-1 --project production
+compass gcp web-server-1 --project production
 
 # Instance in specific zone
-cx gcp database-primary --project production --zone us-east1-b
+compass gcp database-primary --project production --zone us-east1-b
 
 # First running instance in a zonal MIG
-cx gcp web-servers-mig --project production --zone us-central1-a
+compass gcp web-servers-mig --project production --zone us-central1-a
 
 # First running instance in a regional MIG
-cx gcp api-servers-mig --project production --zone us-central1
+compass gcp api-servers-mig --project production --zone us-central1
 ```
 
 ### Development Workflows
 
 ```bash
 # Connect to development instance with port forwarding for web app
-cx gcp dev-instance --project dev-project --ssh-flag "-L 3000:localhost:3000"
+compass gcp dev-instance --project dev-project --ssh-flag "-L 3000:localhost:3000"
 
 # Setup database tunnel
-cx gcp db-proxy --project staging --ssh-flag "-L 5432:database.internal:5432"
+compass gcp db-proxy --project staging --ssh-flag "-L 5432:database.internal:5432"
 
 # Create SOCKS proxy for accessing internal services
-cx gcp bastion --project production --ssh-flag "-D 8080"
+compass gcp bastion --project production --ssh-flag "-D 8080"
 ```
 
 ### Troubleshooting
 
 ```bash
 # Enable debug logging to see detailed connection process
-cx gcp problematic-instance --project my-project --log-level debug
+compass gcp problematic-instance --project my-project --log-level debug
 
 # Enable trace logging for maximum verbosity
-cx gcp instance-name --project my-project --log-level trace
+compass gcp instance-name --project my-project --log-level trace
 ```
 
 ## Logging
 
-cx provides structured logging with configurable levels:
+compass provides structured logging with configurable levels:
 
 - `trace`: Maximum verbosity, shows all API calls and decisions
 - `debug`: Detailed information about discovery and connection process
@@ -210,7 +212,7 @@ cx provides structured logging with configurable levels:
 
 ## Error Handling
 
-cx provides clear error messages for common scenarios:
+compass provides clear error messages for common scenarios:
 
 - **Instance not found**: Searches through all zones and provides suggestions
 - **No external IP and IAP disabled**: Clear explanation of connectivity requirements
@@ -219,7 +221,7 @@ cx provides clear error messages for common scenarios:
 
 ## Security Considerations
 
-- cx uses your existing gcloud authentication and respects IAM policies
+- compass uses your existing gcloud authentication and respects IAM policies
 - IAP tunneling provides secure access without exposing instances to the internet
 - SSH keys are managed through your GCP project's OS Login or metadata SSH keys
 - All connections go through Google's secure infrastructure when using IAP
@@ -306,23 +308,23 @@ Run `task --list-all` to see all available tasks with descriptions.
 
 ## Connectivity Testing
 
-cx includes built-in support for Google Cloud Network Connectivity Tests, allowing you to validate network paths and diagnose connectivity issues between resources.
+compass includes built-in support for Google Cloud Network Connectivity Tests, allowing you to validate network paths and diagnose connectivity issues between resources.
 
 ### Quick Start
 
 ```bash
 # Test connectivity between two instances
-cx gcp connectivity-test create web-to-db \
+compass gcp connectivity-test create web-to-db \
   --project my-project \
   --source-instance web-server-1 \
   --destination-instance db-server-1 \
   --destination-port 5432
 
 # Get test results
-cx gcp connectivity-test get web-to-db --project my-project
+compass gcp connectivity-test get web-to-db --project my-project
 
 # List all tests
-cx gcp connectivity-test list --project my-project
+compass gcp connectivity-test list --project my-project
 ```
 
 ### Connectivity Test Commands
@@ -330,7 +332,7 @@ cx gcp connectivity-test list --project my-project
 **Create a test:**
 ```bash
 # Instance-to-instance test (automatic IP resolution)
-cx gcp connectivity-test create web-to-db \
+compass gcp connectivity-test create web-to-db \
   --project my-project \
   --source-instance web-server \
   --destination-instance db-server \
@@ -338,14 +340,14 @@ cx gcp connectivity-test create web-to-db \
   --protocol TCP
 
 # IP-based test
-cx gcp connectivity-test create ip-test \
+compass gcp connectivity-test create ip-test \
   --project my-project \
   --source-ip 10.128.0.5 \
   --destination-ip 10.138.0.10 \
   --destination-port 443
 
 # MIG to instance test
-cx gcp connectivity-test create mig-test \
+compass gcp connectivity-test create mig-test \
   --project my-project \
   --source-instance api-mig \
   --source-type mig \
@@ -353,7 +355,7 @@ cx gcp connectivity-test create mig-test \
   --destination-port 8080
 
 # With labels and description
-cx gcp connectivity-test create tagged-test \
+compass gcp connectivity-test create tagged-test \
   --project my-project \
   --source-instance web \
   --destination-instance db \
@@ -364,43 +366,43 @@ cx gcp connectivity-test create tagged-test \
 
 **Run an existing test:**
 ```bash
-cx gcp connectivity-test run web-to-db --project my-project
+compass gcp connectivity-test run web-to-db --project my-project
 ```
 
 **Get test results:**
 ```bash
 # One-time check
-cx gcp connectivity-test get web-to-db --project my-project
+compass gcp connectivity-test get web-to-db --project my-project
 
 # Watch mode (poll until complete)
-cx gcp connectivity-test get web-to-db --project my-project --watch
+compass gcp connectivity-test get web-to-db --project my-project --watch
 
 # Detailed output
-cx gcp connectivity-test get web-to-db --project my-project --output detailed
+compass gcp connectivity-test get web-to-db --project my-project --output detailed
 
 # JSON output for automation
-cx gcp connectivity-test get web-to-db --project my-project --output json
+compass gcp connectivity-test get web-to-db --project my-project --output json
 ```
 
 **List tests:**
 ```bash
 # List all tests
-cx gcp connectivity-test list --project my-project
+compass gcp connectivity-test list --project my-project
 
 # Table format
-cx gcp connectivity-test list --project my-project --output table
+compass gcp connectivity-test list --project my-project --output table
 
 # With filter
-cx gcp connectivity-test list --project my-project --filter "labels.env=prod"
+compass gcp connectivity-test list --project my-project --filter "labels.env=prod"
 ```
 
 **Delete a test:**
 ```bash
 # With confirmation prompt
-cx gcp connectivity-test delete web-to-db --project my-project
+compass gcp connectivity-test delete web-to-db --project my-project
 
 # Force delete
-cx gcp connectivity-test delete web-to-db --project my-project --force
+compass gcp connectivity-test delete web-to-db --project my-project --force
 ```
 
 ### Connectivity Test Output
@@ -452,7 +454,7 @@ cx gcp connectivity-test delete web-to-db --project my-project --force
 **Troubleshooting Connectivity Issues:**
 ```bash
 # Quickly verify if application can reach database
-cx gcp connectivity-test create quick-check \
+compass gcp connectivity-test create quick-check \
   --project prod \
   --source-instance app-1 \
   --destination-instance db-primary \
@@ -463,7 +465,7 @@ cx gcp connectivity-test create quick-check \
 **Pre-deployment Validation:**
 ```bash
 # Verify new service can reach required endpoints
-cx gcp connectivity-test create deploy-validation \
+compass gcp connectivity-test create deploy-validation \
   --project staging \
   --source-instance new-service \
   --destination-ip 10.0.1.100 \
@@ -474,7 +476,7 @@ cx gcp connectivity-test create deploy-validation \
 ```bash
 # Test firewall rules after changes
 for port in 80 443 8080; do
-  cx gcp connectivity-test create "web-port-${port}" \
+  compass gcp connectivity-test create "web-port-${port}" \
     --project prod \
     --source-instance web-frontend \
     --destination-instance backend \
@@ -482,13 +484,13 @@ for port in 80 443 8080; do
 done
 
 # Review results
-cx gcp connectivity-test list --project prod --output table
+compass gcp connectivity-test list --project prod --output table
 ```
 
 **CI/CD Integration:**
 ```bash
 # Automated connectivity validation
-cx gcp connectivity-test create ci-check \
+compass gcp connectivity-test create ci-check \
   --project staging \
   --source-instance app \
   --destination-instance db \

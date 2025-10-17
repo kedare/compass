@@ -6,7 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"cx/cmd"
+	"compass/cmd"
 )
 
 func main() {

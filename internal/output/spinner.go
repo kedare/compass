@@ -12,12 +12,12 @@ import (
 
 // Spinner wraps a CLI spinner that gracefully degrades when stdout isn't a TTY.
 type Spinner struct {
+	sp      *spinner.Spinner
+	writer  *os.File
+	message string
 	mu      sync.Mutex
 	active  bool
 	enabled bool
-	sp      *spinner.Spinner
-	message string
-	writer  *os.File
 	stopped bool
 }
 
@@ -111,6 +111,7 @@ func (s *Spinner) stopWithMessage(prefix, message string) {
 		if message != "" {
 			fmt.Fprintf(s.writer, "%s %s\n", prefix, message)
 		}
+
 		return
 	}
 	s.stopped = true
@@ -118,6 +119,7 @@ func (s *Spinner) stopWithMessage(prefix, message string) {
 	if s.enabled && s.sp != nil {
 		s.sp.Stop()
 		fmt.Fprintf(s.writer, "\r%s %s\n", prefix, message)
+
 		return
 	}
 

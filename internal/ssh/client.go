@@ -8,8 +8,8 @@ import (
 	"os"
 	"os/exec"
 
-	"cx/internal/gcp"
-	"cx/internal/logger"
+	"compass/internal/gcp"
+	"compass/internal/logger"
 )
 
 var ErrNoExternalIPAndNoIAP = errors.New("instance has no external IP and IAP is not available")

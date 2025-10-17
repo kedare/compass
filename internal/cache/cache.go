@@ -9,12 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"cx/internal/logger"
+	"compass/internal/logger"
 )
 
 const (
 	// CacheFileName is the name of the cache file.
-	CacheFileName = ".cx.cache.json"
+	CacheFileName = ".compass.cache.json"
 	// CacheExpiry defines how long cache entries are valid (30 days).
 	CacheExpiry = 30 * 24 * time.Hour
 	// CacheFilePermissions defines the file permissions for the cache file (owner read/write only).

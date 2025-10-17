@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"cx/internal/gcp"
-	"cx/internal/logger"
-	"cx/internal/output"
+	"compass/internal/gcp"
+	"compass/internal/logger"
+	"compass/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -43,14 +43,14 @@ When using instance names, the tool will automatically resolve their internal IP
 
 Examples:
   # Instance-to-instance test
-  cx gcp connectivity-test create web-to-db \
+  compass gcp connectivity-test create web-to-db \
     --project my-project \
     --source-instance web-server-1 \
     --destination-instance db-server-1 \
     --destination-port 5432
 
   # IP-based test
-  cx gcp connectivity-test create ip-test \
+  compass gcp connectivity-test create ip-test \
     --project my-project \
     --source-ip 10.128.0.5 \
     --destination-ip 10.138.0.10 \
@@ -58,7 +58,7 @@ Examples:
     --protocol TCP
 
   # MIG to instance test
-  cx gcp connectivity-test create mig-test \
+  compass gcp connectivity-test create mig-test \
     --project my-project \
     --source-instance api-mig \
     --source-type mig \
@@ -124,6 +124,7 @@ func runCreateTest(ctx context.Context) {
 		spin.Fail("Failed to create connectivity test")
 		logger.Log.Fatalf("Failed to create connectivity test: %v", err)
 	}
+
 	spin.Success("Connectivity test created")
 
 	logger.Log.Info("Connectivity test created successfully")

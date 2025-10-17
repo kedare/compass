@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"testing"
 
-	"cx/internal/logger"
+	"compass/internal/logger"
 	"github.com/sirupsen/logrus"
 )
 
@@ -19,6 +19,7 @@ type stubRoundTripper struct {
 
 func (s *stubRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	s.req = req
+
 	return s.resp, s.err
 }
 

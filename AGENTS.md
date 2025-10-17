@@ -5,10 +5,10 @@
 - `cmd/` groups user-facing commands (`connectivity_*.go`, `gcp.go`, `root.go`) plus integration tests in `gcp_test.go`.
 - `internal/` holds reusable services: `gcp/` for API clients, `ssh/` for tunneling, `output/` for formatting, `logger/` for structured logs, and `cache/` for local state.
 - `Taskfile.yml` centralizes build/test tasks; `CONNECTIVITY_TESTS.md` documents the connectivity features.
-- Built binaries (e.g., `./cx`) live in the repo root—delete them before committing if you generate new ones.
+- Built binaries (e.g., `./compass`) live in the repo root—delete them before committing if you generate new ones.
 
 ## Build, Test, and Development Commands
-- `task build` compiles the `cx` binary with version metadata; `task build-all` cross-compiles for common targets.
+- `task build` compiles the `compass` binary with version metadata; `task build-all` cross-compiles for common targets.
 - `task run -- gcp <instance> --project <id>` runs the CLI without writing a binary.
 - `task fmt`, `task lint`, and `task vet` enforce formatting, linting, and static checks.
 - `task test`, `task test-short`, and `task test-integration` cover full, unit, and integration suites; add `task test-coverage` when you need HTML or function coverage reports.

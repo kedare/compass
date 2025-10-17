@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"cx/internal/gcp"
-	"cx/internal/logger"
-	"cx/internal/output"
+	"compass/internal/gcp"
+	"compass/internal/logger"
+	"compass/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -27,16 +27,16 @@ a test is still running.
 
 Examples:
   # Get test results once
-  cx gcp connectivity-test get web-to-db --project my-project
+  compass gcp connectivity-test get web-to-db --project my-project
 
   # Watch for results (poll until complete)
-  cx gcp connectivity-test get web-to-db --project my-project --watch
+  compass gcp connectivity-test get web-to-db --project my-project --watch
 
   # Get detailed results
-  cx gcp connectivity-test get web-to-db --project my-project --output detailed
+  compass gcp connectivity-test get web-to-db --project my-project --output detailed
 
   # Get JSON results for automation
-  cx gcp connectivity-test get web-to-db --project my-project --output json`,
+  compass gcp connectivity-test get web-to-db --project my-project --output json`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		testName := args[0]
@@ -72,6 +72,7 @@ func runGetTest(ctx context.Context, testName string) {
 			spin.Fail("Failed to fetch connectivity test")
 			logger.Log.Fatalf("Failed to get connectivity test: %v", err)
 		}
+
 		spin.Success("Connectivity test details received")
 	}
 
@@ -99,6 +100,7 @@ func watchTest(ctx context.Context, client *gcp.ConnectivityClient, testName str
 	result, err := client.GetTest(ctx, testName)
 	if err != nil {
 		spin.Fail("Failed to fetch connectivity test status")
+
 		return nil, err
 	}
 
@@ -113,7 +115,8 @@ func watchTest(ctx context.Context, client *gcp.ConnectivityClient, testName str
 	for {
 		select {
 		case <-ctx.Done():
-			spin.Fail("Context cancelled while waiting for connectivity test")
+			spin.Fail("Context canceled while waiting for connectivity test")
+
 			return nil, ctx.Err()
 		case <-ticker.C:
 			elapsed := time.Since(startTime)

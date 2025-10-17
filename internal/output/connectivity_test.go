@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
-	"cx/internal/gcp"
+	"compass/internal/gcp"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -70,7 +71,7 @@ func TestDisplayForwardAndReturnPaths_RespectsTerminalWidth(t *testing.T) {
 		narrow = 1
 	}
 
-	t.Setenv("COLUMNS", fmt.Sprintf("%d", narrow))
+	t.Setenv("COLUMNS", strconv.Itoa(narrow))
 	sequential := captureStdout(t, func() {
 		displayForwardAndReturnPaths([]*gcp.Trace{forward}, []*gcp.Trace{backward}, true)
 	})
@@ -80,7 +81,8 @@ func TestDisplayForwardAndReturnPaths_RespectsTerminalWidth(t *testing.T) {
 	}
 
 	wide := required + 10
-	t.Setenv("COLUMNS", fmt.Sprintf("%d", wide))
+	t.Setenv("COLUMNS", strconv.Itoa(wide))
+
 	if width, ok := detectTerminalWidth(); !ok || width != wide {
 		t.Fatalf("expected terminal width %d, got %d (ok=%v)", wide, width, ok)
 	}
@@ -111,7 +113,7 @@ func TestRenderCombinedTraceAlignment(t *testing.T) {
 	}...)
 
 	combined := renderCombinedTrace(forward, backward, 0, 1)
-	t.Setenv("COLUMNS", fmt.Sprintf("%d", maximumLineWidth(combined)+10))
+	t.Setenv("COLUMNS", strconv.Itoa(maximumLineWidth(combined)+10))
 
 	out := captureStdout(t, func() {
 		fmt.Print(combined)
@@ -119,6 +121,7 @@ func TestRenderCombinedTraceAlignment(t *testing.T) {
 
 	lines := strings.Split(out, "\n")
 	column := -1
+
 	for _, line := range lines {
 		idx := firstTableColumn(line)
 		if idx == -1 {
@@ -127,6 +130,7 @@ func TestRenderCombinedTraceAlignment(t *testing.T) {
 
 		if column == -1 {
 			column = idx
+
 			continue
 		}
 

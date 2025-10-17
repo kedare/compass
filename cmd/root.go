@@ -1,4 +1,4 @@
-// Package cmd provides the command-line interface for the cx tool
+// Package cmd provides the command-line interface for the compass tool
 package cmd
 
 import (
@@ -6,16 +6,17 @@ import (
 	"fmt"
 	"os"
 
-	"cx/internal/logger"
+	"compass/internal/logger"
 	"github.com/spf13/cobra"
 )
 
 var logLevel string
 
 var rootCmd = &cobra.Command{
-	Use:   "cx",
-	Short: "Connect to cloud instances easily",
-	Long:  "A CLI tool to connect to remote instances from cloud providers using SSH and IAP tunneling",
+	Use:     "compass",
+	Aliases: []string{"cps"},
+	Short:   "Connect to cloud instances easily",
+	Long:    "A CLI tool to connect to remote instances from cloud providers using SSH and IAP tunneling",
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		if err := logger.SetLevel(logLevel); err != nil {
 			fmt.Fprintf(os.Stderr, "Invalid log level '%s': %v\n", logLevel, err)

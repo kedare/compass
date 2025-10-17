@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"cx/internal/gcp"
+	"compass/internal/gcp"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
 	"github.com/mattn/go-runewidth"
@@ -54,11 +54,11 @@ func DisplayConnectivityTestList(results []*gcp.ConnectivityTestResult, format s
 }
 
 type connectivityStatus struct {
-	overall          bool
 	forwardStatus    string
+	returnStatus     string
+	overall          bool
 	forwardReachable bool
 	hasReturn        bool
-	returnStatus     string
 	returnReachable  bool
 }
 
@@ -171,11 +171,13 @@ func displayText(result *gcp.ConnectivityTestResult) error {
 	}
 
 	fmt.Printf("%s Connectivity Test: %s\n", statusIcon, result.DisplayName)
+
 	if result.Name != "" && result.ProjectID != "" {
 		consoleURL := fmt.Sprintf("https://console.cloud.google.com/net-intelligence/connectivity/tests/details/%s?project=%s",
 			result.Name, result.ProjectID)
 		fmt.Printf("  Console URL:   %s\n", consoleURL)
 	}
+
 	fmt.Printf("  Status:        %s\n", formatStatusSummary(statusInfo, true))
 
 	// Display source
@@ -220,9 +222,11 @@ func displayText(result *gcp.ConnectivityTestResult) error {
 		if result.ReachabilityDetails != nil && result.ReachabilityDetails.Error != "" {
 			fmt.Printf("  Error:  %s\n", result.ReachabilityDetails.Error)
 		}
+
 		if statusInfo.hasReturn && result.ReturnReachabilityDetails != nil && result.ReturnReachabilityDetails.Error != "" {
 			fmt.Printf("  Return Error: %s\n", result.ReturnReachabilityDetails.Error)
 		}
+
 		if statusInfo.forwardReachable && statusInfo.hasReturn && !statusInfo.returnReachable {
 			fmt.Println("  Note: Forward path succeeded but return path failed.")
 		}
@@ -283,6 +287,7 @@ func displayListText(results []*gcp.ConnectivityTestResult) error {
 	for _, result := range results {
 		statusInfo := evaluateConnectivityStatus(result)
 		statusIcon := "✗"
+
 		if statusInfo.overall {
 			statusIcon = "✓"
 		}
@@ -320,6 +325,7 @@ func displayTable(results []*gcp.ConnectivityTestResult) error {
 	for _, result := range results {
 		statusInfo := evaluateConnectivityStatus(result)
 		statusIcon := "✗"
+
 		if statusInfo.overall {
 			statusIcon = "✓"
 		}
@@ -362,7 +368,7 @@ func displayTraces(traces []*gcp.Trace, isReachable bool) {
 
 		// Add each step as a row
 		for i, step := range trace.Steps {
-			stepNum := fmt.Sprintf("%d", i+1)
+			stepNum := strconv.Itoa(i + 1)
 			stepType, resource, status := formatTraceStepForTable(step)
 
 			// Apply styling based on step state
@@ -399,13 +405,14 @@ func displayForwardAndReturnPaths(forwardTraces []*gcp.Trace, returnTraces []*gc
 
 		if fitsTerminalWidth(combined) {
 			fmt.Print(combined)
+
 			return true
 		}
 
 		return false
 	}
 
-	for i := 0; i < pairs; i++ {
+	for i := range pairs {
 		if i > 0 {
 			fmt.Println()
 		}
@@ -498,7 +505,7 @@ func renderCombinedTrace(forward, backward *gcp.Trace, index, total int) string 
 		maxSteps = len(backward.Steps)
 	}
 
-	for i := 0; i < maxSteps; i++ {
+	for i := range maxSteps {
 		f := traceStepCells(forward, i)
 		r := traceStepCells(backward, i)
 		t.AppendRow(table.Row{f[0], f[1], f[2], f[3], f[4], r[0], r[1], r[2], r[3], r[4]})
@@ -530,7 +537,7 @@ func traceStepCells(trace *gcp.Trace, index int) [5]string {
 	}
 
 	step := trace.Steps[index]
-	stepNum := fmt.Sprintf("%d", index+1)
+	stepNum := strconv.Itoa(index + 1)
 	stepType, resource, status := formatTraceStepForTable(step)
 
 	if step.CausesDrop {
@@ -552,6 +559,7 @@ func fitsTerminalWidth(block string) bool {
 	}
 
 	maxWidth := 0
+
 	for _, line := range strings.Split(block, "\n") {
 		if line == "" {
 			continue
@@ -576,7 +584,7 @@ func displaySingleTrace(trace *gcp.Trace, title string) {
 	t.AppendHeader(table.Row{"#", "Step", "Type", "Resource", "Status"})
 
 	for i, step := range trace.Steps {
-		stepNum := fmt.Sprintf("%d", i+1)
+		stepNum := strconv.Itoa(i + 1)
 		stepType, resource, status := formatTraceStepForTable(step)
 
 		if step.CausesDrop {
@@ -735,6 +743,7 @@ func displaySuggestedFixesForDetails(result *gcp.ConnectivityTestResult, details
 
 	source := result.Source
 	destination := result.Destination
+
 	if reverse {
 		source, destination = destination, source
 	}
@@ -764,6 +773,7 @@ func displaySuggestedFixesForDetails(result *gcp.ConnectivityTestResult, details
 					fmt.Println()
 				} else if step.Route != "" {
 					fmt.Println("\n  Suggested Fix:")
+
 					if reverse {
 						fmt.Println("  Check return-path routing configuration and ensure proper route exists")
 					} else {

@@ -3,9 +3,9 @@ package cmd
 import (
 	"context"
 
-	"cx/internal/gcp"
-	"cx/internal/logger"
-	"cx/internal/ssh"
+	"compass/internal/gcp"
+	"compass/internal/logger"
+	"compass/internal/ssh"
 	"github.com/spf13/cobra"
 )
 
@@ -31,25 +31,25 @@ so subsequent connections don't need --project or --zone flags.
 
 Examples:
   # First connection (requires project)
-  cx gcp my-instance --project my-project --type instance
+  compass gcp my-instance --project my-project --type instance
 
   # Subsequent connections (uses cached project and zone)
-  cx gcp my-instance
+  compass gcp my-instance
 
   # Auto-detect resource type (tries MIG first, then instance)
-  cx gcp my-resource --project my-project
+  compass gcp my-resource --project my-project
 
   # Explicitly specify it's an instance for faster search
-  cx gcp my-instance --project my-project --type instance
+  compass gcp my-instance --project my-project --type instance
 
   # Explicitly specify it's a MIG for faster search
-  cx gcp my-mig --project my-project --type mig
+  compass gcp my-mig --project my-project --type mig
 
   # Specify zone to bypass cache and auto-detection
-  cx gcp my-instance --zone us-central1-a --project my-project
+  compass gcp my-instance --zone us-central1-a --project my-project
 
   # Combine resource type with zone for fastest search
-  cx gcp my-instance --type instance --zone us-central1-a --project my-project`,
+  compass gcp my-instance --type instance --zone us-central1-a --project my-project`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		instanceName := args[0]

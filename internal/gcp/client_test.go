@@ -374,8 +374,8 @@ func TestFindMIGScopeAcrossPagesNotFound(t *testing.T) {
 
 func TestCollectManagedInstances(t *testing.T) {
 	pages := map[string]struct {
-		items []*compute.ManagedInstance
 		next  string
+		items []*compute.ManagedInstance
 	}{
 		"": {
 			items: []*compute.ManagedInstance{{Instance: "instances/one"}},
@@ -420,6 +420,7 @@ func TestCollectManagedInstancesError(t *testing.T) {
 
 func TestGetDefaultProjectFromEnv(t *testing.T) {
 	t.Setenv("GOOGLE_CLOUD_PROJECT", "env-project")
+
 	if project := getDefaultProject(); project != "env-project" {
 		t.Fatalf("expected env-project, got %s", project)
 	}
@@ -430,6 +431,7 @@ func TestGetDefaultProjectFromConfig(t *testing.T) {
 	t.Setenv("CLOUDSDK_CORE_PROJECT", "")
 
 	configDir := t.TempDir()
+
 	configPath := filepath.Join(configDir, "configurations")
 	if err := os.MkdirAll(configPath, 0o755); err != nil {
 		t.Fatalf("failed to create config path: %v", err)

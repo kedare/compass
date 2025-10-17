@@ -15,6 +15,7 @@ func withOperationBackoff(t *testing.T, timeout time.Duration, cfg backoffConfig
 	originalFactory := newOperationBackoff
 	operationTimeout = timeout
 	newOperationBackoff = func() backoffConfig { return cfg }
+
 	t.Cleanup(func() {
 		operationTimeout = originalTimeout
 		newOperationBackoff = originalFactory
@@ -25,7 +26,8 @@ func TestWaitForOperationWithBackoffSuccess(t *testing.T) {
 	withOperationBackoff(t, 200*time.Millisecond, backoffConfig{initial: 5 * time.Millisecond, multiplier: 1.0, max: 5 * time.Millisecond})
 
 	attempts := 0
-	err := waitForOperationWithBackoff(context.Background(), func(context.Context) (*networkmanagement.Operation, error) {
+
+	err := waitForOperationWithBackoff(t.Context(), func(context.Context) (*networkmanagement.Operation, error) {
 		attempts++
 		if attempts >= 2 {
 			return &networkmanagement.Operation{Done: true}, nil
@@ -45,11 +47,13 @@ func TestWaitForOperationWithBackoffSuccess(t *testing.T) {
 func TestWaitForOperationWithBackoffContextCancel(t *testing.T) {
 	withOperationBackoff(t, 200*time.Millisecond, backoffConfig{initial: 5 * time.Millisecond, multiplier: 1.0, max: 5 * time.Millisecond})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	attempts := 0
 	err := waitForOperationWithBackoff(ctx, func(context.Context) (*networkmanagement.Operation, error) {
 		attempts++
+
 		cancel()
+
 		return &networkmanagement.Operation{Done: false}, nil
 	})
 
@@ -66,7 +70,7 @@ func TestWaitForOperationWithBackoffError(t *testing.T) {
 	withOperationBackoff(t, 200*time.Millisecond, backoffConfig{initial: 5 * time.Millisecond, multiplier: 1.0, max: 5 * time.Millisecond})
 
 	sentinel := errors.New("boom")
-	err := waitForOperationWithBackoff(context.Background(), func(context.Context) (*networkmanagement.Operation, error) {
+	err := waitForOperationWithBackoff(t.Context(), func(context.Context) (*networkmanagement.Operation, error) {
 		return nil, sentinel
 	})
 
@@ -79,7 +83,7 @@ func TestWaitForOperationWithBackoffTimeout(t *testing.T) {
 	withOperationBackoff(t, 40*time.Millisecond, backoffConfig{initial: 10 * time.Millisecond, multiplier: 1.0, max: 10 * time.Millisecond})
 
 	start := time.Now()
-	err := waitForOperationWithBackoff(context.Background(), func(context.Context) (*networkmanagement.Operation, error) {
+	err := waitForOperationWithBackoff(t.Context(), func(context.Context) (*networkmanagement.Operation, error) {
 		return &networkmanagement.Operation{Done: false}, nil
 	})
 

@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 
-	"cx/internal/gcp"
-	"cx/internal/logger"
-	"cx/internal/output"
+	"compass/internal/gcp"
+	"compass/internal/logger"
+	"compass/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -27,13 +27,13 @@ By default, you will be prompted for confirmation unless --force is used.
 
 Examples:
   # Delete with confirmation prompt
-  cx gcp connectivity-test delete web-to-db --project my-project
+  compass gcp connectivity-test delete web-to-db --project my-project
 
   # Delete without confirmation
-  cx gcp connectivity-test delete web-to-db --project my-project --force
+  compass gcp connectivity-test delete web-to-db --project my-project --force
 
   # Delete with explicit confirmation flag
-  cx gcp connectivity-test delete web-to-db --project my-project --confirm`,
+  compass gcp connectivity-test delete web-to-db --project my-project --confirm`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		testName := args[0]
@@ -75,6 +75,7 @@ func runDeleteTest(ctx context.Context, testName string) {
 		spin.Fail("Failed to delete connectivity test")
 		logger.Log.Fatalf("Failed to delete connectivity test: %v", err)
 	}
+
 	spin.Success("Connectivity test deleted")
 
 	logger.Log.Infof("Connectivity test '%s' deleted successfully", testName)

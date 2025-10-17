@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"cx/internal/gcp"
+	"compass/internal/gcp"
 	"github.com/spf13/cobra"
 )
 
@@ -20,6 +20,7 @@ func connectivityTestNameCompletion(cmd *cobra.Command, args []string, toComplet
 	if err != nil {
 		projectID = ""
 	}
+
 	if projectID == "" {
 		projectID = project
 	}
@@ -38,6 +39,7 @@ func connectivityTestNameCompletion(cmd *cobra.Command, args []string, toComplet
 	}
 
 	completions := make([]string, 0, len(tests))
+
 	for _, test := range tests {
 		if toComplete != "" && !strings.HasPrefix(test.Name, toComplete) {
 			continue
@@ -47,6 +49,7 @@ func connectivityTestNameCompletion(cmd *cobra.Command, args []string, toComplet
 		if test.DisplayName != "" && test.DisplayName != test.Name {
 			entry = fmt.Sprintf("%s\t%s", test.Name, test.DisplayName)
 		}
+
 		completions = append(completions, entry)
 	}
 

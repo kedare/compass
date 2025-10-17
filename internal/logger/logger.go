@@ -1,4 +1,4 @@
-// Package logger provides structured logging configuration for the cx application
+// Package logger provides structured logging configuration for the compass application
 package logger
 
 import (
