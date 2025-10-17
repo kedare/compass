@@ -34,8 +34,9 @@ var (
 )
 
 var createCmd = &cobra.Command{
-	Use:   "create <test-name>",
-	Short: "Create a new connectivity test",
+	Use:     "create <test-name>",
+	Aliases: []string{"c"},
+	Short:   "Create a new connectivity test",
 	Long: `Create a new Google Cloud Network Connectivity Test to validate network paths.
 
 You can specify source and destination by instance name (with automatic discovery) or by IP address.
@@ -307,5 +308,7 @@ func init() {
 	createCmd.Flags().StringVar(&createLabels, "labels", "", "Labels in format 'key1=value1,key2=value2'")
 
 	// Output flags
-	createCmd.Flags().StringVarP(&createOutputFormat, "output", "o", "text", "Output format: text, json, detailed")
+	createCmd.Flags().StringVarP(&createOutputFormat, "output", "o",
+		output.DefaultFormat("text", []string{"text", "json", "detailed"}),
+		"Output format: text, json, detailed")
 }

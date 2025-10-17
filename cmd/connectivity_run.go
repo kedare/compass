@@ -12,8 +12,9 @@ import (
 var runOutputFormat string
 
 var runCmd = &cobra.Command{
-	Use:   "run <test-name>",
-	Short: "Run an existing connectivity test",
+	Use:     "run <test-name>",
+	Aliases: []string{"r"},
+	Short:   "Run an existing connectivity test",
 	Long: `Rerun an existing Google Cloud Network Connectivity Test and display the results.
 
 This command reruns a previously created test with the same configuration and displays
@@ -70,5 +71,7 @@ func runRunTest(ctx context.Context, testName string) {
 func init() {
 	connectivityTestCmd.AddCommand(runCmd)
 
-	runCmd.Flags().StringVarP(&runOutputFormat, "output", "o", "text", "Output format: text, json, detailed")
+	runCmd.Flags().StringVarP(&runOutputFormat, "output", "o",
+		output.DefaultFormat("text", []string{"text", "json", "detailed"}),
+		"Output format: text, json, detailed")
 }

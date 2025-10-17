@@ -16,8 +16,9 @@ var (
 )
 
 var listCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List connectivity tests",
+	Use:     "list",
+	Aliases: []string{"l", "ls"},
+	Short:   "List connectivity tests",
 	Long: `List all Google Cloud Network Connectivity Tests in the project.
 
 You can filter results using the --filter flag with a filter expression.
@@ -76,6 +77,8 @@ func init() {
 	connectivityTestCmd.AddCommand(listCmd)
 
 	listCmd.Flags().StringVar(&listFilter, "filter", "", "Filter expression")
-	listCmd.Flags().StringVarP(&listOutputFormat, "output", "o", "text", "Output format: text, table, json")
+	listCmd.Flags().StringVarP(&listOutputFormat, "output", "o",
+		output.DefaultFormat("table", []string{"text", "table", "json"}),
+		"Output format: text, table, json")
 	listCmd.Flags().IntVar(&listLimit, "limit", 0, "Maximum number of results (0 = no limit)")
 }

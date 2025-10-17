@@ -19,8 +19,9 @@ var (
 )
 
 var deleteCmd = &cobra.Command{
-	Use:   "delete <test-name>",
-	Short: "Delete a connectivity test",
+	Use:     "delete <test-name>",
+	Aliases: []string{"d"},
+	Short:   "Delete a connectivity test",
 	Long: `Delete a Google Cloud Network Connectivity Test.
 
 By default, you will be prompted for confirmation unless --force is used.

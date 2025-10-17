@@ -18,8 +18,9 @@ var (
 )
 
 var getCmd = &cobra.Command{
-	Use:   "get <test-name>",
-	Short: "Get connectivity test results",
+	Use:     "get <test-name>",
+	Aliases: []string{"g"},
+	Short:   "Get connectivity test results",
 	Long: `Get the results of a Google Cloud Network Connectivity Test.
 
 Use --watch to poll for results until the test completes. This is useful when
@@ -161,6 +162,8 @@ func init() {
 	connectivityTestCmd.AddCommand(getCmd)
 
 	getCmd.Flags().BoolVarP(&getWatch, "watch", "w", false, "Watch test progress until completion")
-	getCmd.Flags().StringVarP(&getOutputFormat, "output", "o", "text", "Output format: text, json, detailed")
+	getCmd.Flags().StringVarP(&getOutputFormat, "output", "o",
+		output.DefaultFormat("text", []string{"text", "json", "detailed"}),
+		"Output format: text, json, detailed")
 	getCmd.Flags().IntVar(&getTimeout, "timeout", 300, "Watch timeout in seconds")
 }

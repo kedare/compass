@@ -155,6 +155,8 @@ compass gcp multi-service \
 
 Connectivity tests let you validate reachability between GCP resources using the Google Cloud Connectivity Tests API.
 
+Set `COMPASS_OUTPUT` to change the default output format (supported values: `text`, `table`, `json`, `detailed`). If the variable is unset, list commands default to `table` while detailed views use `text`.
+
 ### Create
 
 ```console

@@ -15,8 +15,11 @@ var logLevel string
 var rootCmd = &cobra.Command{
 	Use:     "compass",
 	Aliases: []string{"cps"},
-	Short:   "Connect to cloud instances easily",
-	Long:    "A CLI tool to connect to remote instances from cloud providers using SSH and IAP tunneling",
+	Short:   "Connect and troubleshoot GCP workloads from your terminal",
+	Long: `compass speeds up day-to-day GCP operations with zero-config SSH access (including IAP tunnels),
+automatic zone and MIG discovery, reusable connection caching, and rich logging. It also manages Google
+Cloud Network Connectivity Tests so you can validate network paths, stream results, and view structured
+diagnostics without leaving the CLI.`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		if err := logger.SetLevel(logLevel); err != nil {
 			fmt.Fprintf(os.Stderr, "Invalid log level '%s': %v\n", logLevel, err)
