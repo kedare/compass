@@ -77,6 +77,11 @@ func displayText(result *gcp.ConnectivityTestResult) error {
 	}
 
 	fmt.Printf("%s Connectivity Test: %s\n", statusIcon, result.DisplayName)
+	if result.Name != "" && result.ProjectID != "" {
+		consoleURL := fmt.Sprintf("https://console.cloud.google.com/net-intelligence/connectivity/tests/details/%s?project=%s",
+			result.Name, result.ProjectID)
+		fmt.Printf("  Console URL:   %s\n", consoleURL)
+	}
 	fmt.Printf("  Status:        %s\n", formattedStatus)
 
 	// Display source

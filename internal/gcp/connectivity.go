@@ -46,6 +46,7 @@ type ConnectivityTestResult struct {
 	ReachabilityDetails       *ReachabilityDetails
 	ReturnReachabilityDetails *ReachabilityDetails
 	Name                      string
+	ProjectID                 string
 	DisplayName               string
 	Description               string
 	Protocol                  string
@@ -373,6 +374,7 @@ func waitForOperationWithBackoff(ctx context.Context, poll func(context.Context)
 func (c *ConnectivityClient) convertTestResult(test *networkmanagement.ConnectivityTest) *ConnectivityTestResult {
 	result := &ConnectivityTestResult{
 		Name:        extractTestName(test.Name),
+		ProjectID:   c.project,
 		DisplayName: test.DisplayName,
 		Description: test.Description,
 		Protocol:    test.Protocol,
