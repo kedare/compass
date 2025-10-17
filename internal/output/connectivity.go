@@ -13,6 +13,7 @@ import (
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
 	"github.com/mattn/go-runewidth"
+	"golang.org/x/term"
 )
 
 func detectTerminalWidth() (int, bool) {
@@ -319,10 +320,28 @@ func displayTable(results []*gcp.ConnectivityTestResult) error {
 		return nil
 	}
 
+	const (
+		nameWidth    = 30
+		forwardWidth = 25
+		returnWidth  = 25
+		sourceWidth  = 30
+		destWidth    = 30
+	)
+
+	colorize := term.IsTerminal(int(os.Stdout.Fd()))
+
 	// Print header
-	fmt.Printf("%-3s %-30s %-25s %-25s %-30s %-30s\n",
-		"ST", "NAME", "FORWARD STATUS", "RETURN STATUS", "SOURCE", "DESTINATION")
-	fmt.Println(strings.Repeat("-", 147))
+	fmt.Printf("%-3s %s %s %s %s %s\n",
+		"ST",
+		padRight("NAME", nameWidth),
+		padRight("FORWARD STATUS", forwardWidth),
+		padRight("RETURN STATUS", returnWidth),
+		padRight("SOURCE", sourceWidth),
+		padRight("DESTINATION", destWidth),
+	)
+
+	totalWidth := 3 + 1 + nameWidth + 1 + forwardWidth + 1 + returnWidth + 1 + sourceWidth + 1 + destWidth
+	fmt.Println(strings.Repeat("-", totalWidth))
 
 	// Print rows
 	for _, result := range results {
@@ -333,14 +352,27 @@ func displayTable(results []*gcp.ConnectivityTestResult) error {
 			statusIcon = "✓"
 		}
 
-		name := truncate(result.DisplayName, 30)
-		forwardStr := truncate(formatForwardStatus(statusInfo, false), 25)
-		returnStr := truncate(formatReturnStatus(statusInfo, false), 25)
-		source := truncate(formatEndpoint(result.Source, false), 30)
-		dest := truncate(formatEndpoint(result.Destination, true), 30)
+		nameCell := padRight(truncate(result.DisplayName, nameWidth), nameWidth)
 
-		fmt.Printf("%-3s %-30s %-25s %-25s %-30s %-30s\n",
-			statusIcon, name, forwardStr, returnStr, source, dest)
+		forwardPlain := formatForwardStatus(statusInfo, false)
+		forwardDisplay := forwardPlain
+		if colorize {
+			forwardDisplay = formatForwardStatus(statusInfo, true)
+		}
+		forwardCell := padRightWithPlain(forwardDisplay, forwardPlain, forwardWidth)
+
+		returnPlain := formatReturnStatus(statusInfo, false)
+		returnDisplay := returnPlain
+		if colorize {
+			returnDisplay = formatReturnStatus(statusInfo, true)
+		}
+		returnCell := padRightWithPlain(returnDisplay, returnPlain, returnWidth)
+
+		sourceCell := padRight(truncate(formatEndpoint(result.Source, false), sourceWidth), sourceWidth)
+		destCell := padRight(truncate(formatEndpoint(result.Destination, true), destWidth), destWidth)
+
+		fmt.Printf("%-3s %s %s %s %s %s\n",
+			statusIcon, nameCell, forwardCell, returnCell, sourceCell, destCell)
 	}
 
 	return nil
@@ -611,6 +643,24 @@ func displaySingleTrace(trace *gcp.Trace, title string) {
 
 func visibleWidth(s string) int {
 	return runewidth.StringWidth(stripAnsiCodes(s))
+}
+
+func padRight(s string, width int) string {
+	current := visibleWidth(s)
+	if current >= width {
+		return s
+	}
+
+	return s + strings.Repeat(" ", width-current)
+}
+
+func padRightWithPlain(display, plain string, width int) string {
+	plainWidth := runewidth.StringWidth(plain)
+	if plainWidth >= width {
+		return display
+	}
+
+	return display + strings.Repeat(" ", width-plainWidth)
 }
 
 // stripAnsiCodes removes ANSI escape codes from a string for length calculation.

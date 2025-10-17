@@ -20,6 +20,7 @@ go.work
 # Air live reload tool
 tmp/
 
+
 # IDE files
 .vscode/
 .idea/
@@ -37,7 +38,7 @@ ehthumbs.db
 Thumbs.db
 
 # Build output
-/cx
+/compass
 /dist/
 
 # Log files
@@ -59,3 +60,4 @@ coverage.out
 
 
 .gocache/
+.gomodcache/
