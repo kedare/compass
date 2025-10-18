@@ -11,7 +11,7 @@ permissions:
 jobs:
   publish:
     name: Create Release
-    runs-on: ubuntu-latest
+    runs-on: codeberg-tiny
 
     steps:
       - name: Checkout repository
