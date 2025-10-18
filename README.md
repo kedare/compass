@@ -1,8 +1,9 @@
 # compass - Cloud connectivity toolset
 
-> Main project location : [Codeberg](https://codeberg.org/kedare/compass) : This is where you should open issues and PR and download releases
+> Main project on [Github](https://github.com/kedare/compass)
 
-> Mirror on [Github](https://github.com/kedare/compass) : Read only mirror
+> Mirror: [Codeberg](https://codeberg.org/kedare/compass)
+
 
 `compass` is a fast, intuitive CLI for reaching Google Cloud Platform (GCP) instances over SSH. It handles Identity-Aware Proxy (IAP) tunneling, Managed Instance Groups (MIGs), connectivity tests, and advanced SSH scenarios without extra configuration.
 
