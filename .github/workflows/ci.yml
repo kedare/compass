@@ -12,7 +12,7 @@ permissions:
 jobs:
   test:
     name: Lint and Test
-    runs-on: codeberg-tiny
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
