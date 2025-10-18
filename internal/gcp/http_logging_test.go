@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"testing"
 
-	"codeberg.org/kedare/compass/internal/logger"
+	"github.com/kedare/compass/internal/logger"
 	"github.com/sirupsen/logrus"
 )
 

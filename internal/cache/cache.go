@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"codeberg.org/kedare/compass/internal/logger"
+	"github.com/kedare/compass/internal/logger"
 )
 
 const (

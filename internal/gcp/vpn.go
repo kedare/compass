@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"codeberg.org/kedare/compass/internal/logger"
+	"github.com/kedare/compass/internal/logger"
 	"google.golang.org/api/compute/v1"
 )
 

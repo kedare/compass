@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"codeberg.org/kedare/compass/internal/gcp"
+	"github.com/kedare/compass/internal/gcp"
 	"github.com/spf13/cobra"
 )
 

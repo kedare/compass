@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"codeberg.org/kedare/compass/internal/logger"
 	"github.com/briandowns/spinner"
+	"github.com/kedare/compass/internal/logger"
 	"golang.org/x/term"
 )
 

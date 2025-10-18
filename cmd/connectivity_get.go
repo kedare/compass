@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"codeberg.org/kedare/compass/internal/gcp"
-	"codeberg.org/kedare/compass/internal/logger"
-	"codeberg.org/kedare/compass/internal/output"
+	"github.com/kedare/compass/internal/gcp"
+	"github.com/kedare/compass/internal/logger"
+	"github.com/kedare/compass/internal/output"
 	"github.com/spf13/cobra"
 )
 

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"codeberg.org/kedare/compass/internal/gcp"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
+	"github.com/kedare/compass/internal/gcp"
 	"github.com/mattn/go-runewidth"
 	"golang.org/x/term"
 )

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"codeberg.org/kedare/compass/internal/gcp"
+	"github.com/kedare/compass/internal/gcp"
 	"github.com/mattn/go-runewidth"
 )
 

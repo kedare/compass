@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"codeberg.org/kedare/compass/internal/logger"
+	"github.com/kedare/compass/internal/logger"
 	"golang.org/x/oauth2/google"
 )
 

@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"codeberg.org/kedare/compass/internal/version"
+	"github.com/kedare/compass/internal/version"
 	"github.com/spf13/cobra"
 )
 
