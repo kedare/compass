@@ -1,0 +1,34 @@
+when:
+  event:
+    - tag
+
+steps:
+  - name: test-and-build
+    image: golang:1.23
+    commands:
+      # Install go-task
+      - go install github.com/go-task/task/v3/cmd/task@v3.43.3
+      # Install golangci-lint
+      - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.6
+      # Run task check
+      - task check
+      # Verify working tree clean
+      - git diff --exit-code
+      # Test race conditions
+      - task test-race
+      # Build
+      - task build
+
+  - name: create-release
+    image: plugins/gitea-release
+    settings:
+      base_url:
+        from_secret: gitea_base_url
+      api_key:
+        from_secret: gitea_token
+      files:
+        - ./compass
+      title: ${CI_COMMIT_TAG}
+      note: "Release ${CI_COMMIT_TAG}"
+    when:
+      event: tag
