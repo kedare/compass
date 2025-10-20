@@ -119,7 +119,7 @@ compass gcp ssh my-instance --project my-gcp-project --zone us-central1-a
 # Explicitly specify resource type for faster discovery
 compass gcp ssh my-instance --project my-gcp-project --type instance
 
-# Connect to the first running instance from a MIG
+# Connect to a MIG (choose an instance if multiple are available)
 compass gcp ssh my-mig-name --project my-gcp-project --type mig
 
 # Establish a tunnel through IAP
@@ -156,6 +156,8 @@ compass gcp ssh instance-name --project my-project --log-level debug
 # Target a regional MIG
 compass gcp ssh my-regional-mig --project my-project --zone us-central1
 ```
+
+When you target a managed instance group, `compass gcp ssh` lists the running members and lets you choose the instance to connect to; if there's only one, it connects automatically.
 
 **GCP SSH Flags**
 

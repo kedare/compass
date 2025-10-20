@@ -1,6 +1,13 @@
 package cmd
 
-import "testing"
+import (
+	"bufio"
+	"bytes"
+	"strings"
+	"testing"
+
+	"github.com/kedare/compass/internal/gcp"
+)
 
 func TestGcpRootCommand(t *testing.T) {
 	if gcpCmd == nil {
@@ -161,5 +168,84 @@ func TestResourceTypeConstants(t *testing.T) {
 
 	if resourceTypeMIG != "mig" {
 		t.Errorf("Expected resourceTypeMIG to be 'mig', got %q", resourceTypeMIG)
+	}
+}
+
+func TestDefaultMIGSelectionIndex(t *testing.T) {
+	refs := []gcp.ManagedInstanceRef{
+		{Name: "inst-1", Zone: "us-central1-a", Status: "STOPPED"},
+		{Name: "inst-2", Zone: "us-central1-b", Status: gcp.InstanceStatusRunning},
+		{Name: "inst-3", Zone: "us-central1-c", Status: "PROVISIONING"},
+	}
+
+	if idx := defaultMIGSelectionIndex(refs); idx != 1 {
+		t.Fatalf("Expected default index 1, got %d", idx)
+	}
+}
+
+func TestPromptMIGInstanceSelectionFromReader_ExplicitChoice(t *testing.T) {
+	refs := []gcp.ManagedInstanceRef{
+		{Name: "inst-1", Zone: "us-central1-a", Status: "STOPPED"},
+		{Name: "inst-2", Zone: "us-central1-b", Status: gcp.InstanceStatusRunning},
+		{Name: "inst-3", Zone: "us-central1-c", Status: "RUNNING"},
+	}
+
+	reader := bufio.NewReader(strings.NewReader("3\n"))
+	var out bytes.Buffer
+
+	selected, err := promptMIGInstanceSelectionFromReader(reader, &out, "my-mig", refs)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if selected.Name != "inst-3" {
+		t.Fatalf("Expected inst-3, got %s", selected.Name)
+	}
+
+	output := out.String()
+	if !strings.Contains(output, "[2]* inst-2") {
+		t.Fatalf("Expected default marker for inst-2 in output, got %q", output)
+	}
+}
+
+func TestPromptMIGInstanceSelectionFromReader_DefaultChoice(t *testing.T) {
+	refs := []gcp.ManagedInstanceRef{
+		{Name: "inst-1", Zone: "us-central1-a", Status: gcp.InstanceStatusRunning},
+		{Name: "inst-2", Zone: "us-central1-b", Status: "STOPPED"},
+	}
+
+	reader := bufio.NewReader(strings.NewReader("\n"))
+	var out bytes.Buffer
+
+	selected, err := promptMIGInstanceSelectionFromReader(reader, &out, "my-mig", refs)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if selected.Name != "inst-1" {
+		t.Fatalf("Expected default inst-1, got %s", selected.Name)
+	}
+}
+
+func TestPromptMIGInstanceSelectionFromReader_InvalidRetry(t *testing.T) {
+	refs := []gcp.ManagedInstanceRef{
+		{Name: "inst-1", Zone: "us-central1-a", Status: gcp.InstanceStatusRunning},
+		{Name: "inst-2", Zone: "us-central1-b", Status: "STOPPED"},
+	}
+
+	reader := bufio.NewReader(strings.NewReader("abc\n2\n"))
+	var out bytes.Buffer
+
+	selected, err := promptMIGInstanceSelectionFromReader(reader, &out, "my-mig", refs)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if selected.Name != "inst-2" {
+		t.Fatalf("Expected inst-2 after retry, got %s", selected.Name)
+	}
+
+	if !strings.Contains(out.String(), "Invalid selection") {
+		t.Fatalf("Expected invalid selection prompt in output, got %q", out.String())
 	}
 }

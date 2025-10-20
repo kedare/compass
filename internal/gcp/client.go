@@ -50,6 +50,16 @@ type Instance struct {
 	CanUseIAP   bool
 }
 
+type ManagedInstanceRef struct {
+	Name   string
+	Zone   string
+	Status string
+}
+
+func (r ManagedInstanceRef) IsRunning() bool {
+	return r.Status == InstanceStatusRunning
+}
+
 func NewClient(ctx context.Context, project string) (*Client, error) {
 	logger.Log.Debug("Creating new GCP client")
 
@@ -201,127 +211,187 @@ func (c *Client) findInstanceInZone(ctx context.Context, instanceName, zone stri
 func (c *Client) FindInstanceInMIG(ctx context.Context, migName, zone string) (*Instance, error) {
 	logger.Log.Debugf("Looking for MIG: %s", migName)
 
-	// Handle zone/region specified case
-	if zone != "" {
-		return c.findMIGWithZone(ctx, migName, zone)
+	refs, isRegional, err := c.ListMIGInstances(ctx, migName, zone)
+	if err != nil {
+		return nil, err
 	}
 
-	// Try cache first
-	if instance, err := c.tryFindMIGFromCache(ctx, migName); err == nil {
-		return instance, nil
+	if len(refs) == 0 {
+		return nil, fmt.Errorf("MIG '%s': %w", migName, ErrNoInstancesInMIG)
 	}
 
-	// Search using aggregated list
-	if instance, err := c.searchMIGInAggregatedList(ctx, migName); err == nil {
-		return instance, nil
+	selectedRef := selectPreferredManagedInstance(refs)
+
+	instance, err := c.findInstanceInZone(ctx, selectedRef.Name, selectedRef.Zone)
+	if err != nil {
+		return nil, err
 	}
 
-	// Fallback: search regions individually
-	return c.searchMIGInRegions(ctx, migName)
+	if c.cache != nil {
+		c.cacheMIG(migName, instance, isRegional)
+	}
+
+	return instance, nil
 }
 
-// findMIGWithZone finds a MIG instance when zone/region is specified.
-func (c *Client) findMIGWithZone(ctx context.Context, migName, zone string) (*Instance, error) {
-	logger.Log.Debugf("Zone/region specified: %s (cache bypass)", zone)
+// ListMIGInstances returns the instances managed by the specified MIG along with whether the MIG is regional.
+func (c *Client) ListMIGInstances(ctx context.Context, migName, location string) ([]ManagedInstanceRef, bool, error) {
+	logger.Log.Debugf("Listing instances for MIG: %s", migName)
 
-	var instance *Instance
-	var err error
+	if location != "" {
+		refs, isRegional, err := c.listMIGInstancesWithSpecifiedLocation(ctx, migName, location)
+		if err != nil {
+			return nil, isRegional, err
+		}
 
-	// Check if zone is actually a region
-	if c.isRegion(zone) {
-		logger.Log.Debugf("Zone parameter '%s' appears to be a region, searching regional MIG", zone)
-		instance, err = c.findInstanceInRegionalMIG(ctx, migName, zone)
-	} else {
-		logger.Log.Debugf("Searching for zonal MIG in specific zone: %s", zone)
-		instance, err = c.findInstanceInMIGZone(ctx, migName, zone)
+		c.cacheMIGFromRefs(migName, refs, isRegional)
+
+		return refs, isRegional, nil
 	}
 
-	if err == nil && c.cache != nil {
-		c.cacheMIG(migName, instance, c.isRegion(zone))
+	if refs, isRegional, err := c.listMIGInstancesFromCache(ctx, migName); err == nil {
+		c.cacheMIGFromRefs(migName, refs, isRegional)
+
+		return refs, isRegional, nil
+	} else if err != ErrCacheNotAvailable && err != ErrNoCacheEntry && err != ErrProjectMismatch {
+		return nil, false, err
 	}
 
-	return instance, err
+	if refs, isRegional, err := c.listMIGInstancesFromAggregated(ctx, migName); err == nil {
+		c.cacheMIGFromRefs(migName, refs, isRegional)
+
+		return refs, isRegional, nil
+	} else if !errors.Is(err, ErrMIGNotInAggregatedList) {
+		return nil, false, err
+	}
+
+	refs, isRegional, err := c.listMIGInstancesByRegionScan(ctx, migName)
+	if err != nil {
+		return nil, false, err
+	}
+
+	c.cacheMIGFromRefs(migName, refs, isRegional)
+
+	return refs, isRegional, nil
 }
 
-// tryFindMIGFromCache attempts to find a MIG instance using cached location.
-func (c *Client) tryFindMIGFromCache(ctx context.Context, migName string) (*Instance, error) {
+func (c *Client) listMIGInstancesWithSpecifiedLocation(ctx context.Context, migName, location string) ([]ManagedInstanceRef, bool, error) {
+	if c.isRegion(location) {
+		refs, err := c.listManagedInstancesInRegionalMIG(ctx, migName, location)
+
+		return refs, true, err
+	}
+
+	refs, err := c.listManagedInstancesInMIGZone(ctx, migName, location)
+
+	return refs, false, err
+}
+
+func (c *Client) listMIGInstancesFromCache(ctx context.Context, migName string) ([]ManagedInstanceRef, bool, error) {
 	if c.cache == nil {
-		return nil, ErrCacheNotAvailable
+		return nil, false, ErrCacheNotAvailable
 	}
 
 	cachedInfo, found := c.cache.Get(migName)
 	if !found || cachedInfo.Type != cache.ResourceTypeMIG {
-		return nil, ErrNoCacheEntry
+		return nil, false, ErrNoCacheEntry
 	}
 
 	logger.Log.Debugf("Found MIG location in cache: project=%s, zone=%s, region=%s, isRegional=%v",
 		cachedInfo.Project, cachedInfo.Zone, cachedInfo.Region, cachedInfo.IsRegional)
 
-	// Verify cached project matches current project
 	if cachedInfo.Project != c.project {
 		logger.Log.Debugf("Cached project %s doesn't match current project %s, performing full search",
 			cachedInfo.Project, c.project)
 
-		return nil, ErrProjectMismatch
+		return nil, false, ErrProjectMismatch
 	}
-
-	var instance *Instance
-	var err error
 
 	if cachedInfo.IsRegional {
-		instance, err = c.findInstanceInRegionalMIG(ctx, migName, cachedInfo.Region)
-	} else {
-		instance, err = c.findInstanceInMIGZone(ctx, migName, cachedInfo.Zone)
+		refs, err := c.listManagedInstancesInRegionalMIG(ctx, migName, cachedInfo.Region)
+
+		return refs, true, err
 	}
 
-	if err == nil {
-		logger.Log.Debug("Successfully retrieved MIG instance using cached location")
+	refs, err := c.listManagedInstancesInMIGZone(ctx, migName, cachedInfo.Zone)
 
-		return instance, nil
-	}
-
-	logger.Log.Debugf("Cached location invalid, performing full search: %v", err)
-
-	return nil, err
+	return refs, false, err
 }
 
-// searchMIGInAggregatedList searches for a MIG using aggregated list API.
-func (c *Client) searchMIGInAggregatedList(ctx context.Context, migName string) (*Instance, error) {
-	logger.Log.Debug("Zone not specified, using aggregated list for MIG auto-discovery")
-
+func (c *Client) listMIGInstancesFromAggregated(ctx context.Context, migName string) ([]ManagedInstanceRef, bool, error) {
 	scopeName, err := c.findMIGScopeAcrossAggregatedPages(ctx, migName)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
-	return c.handleFoundMIGInScope(ctx, migName, scopeName)
+	return c.listMIGInstancesInScope(ctx, migName, scopeName)
 }
 
-// handleFoundMIGInScope handles a MIG found in a specific scope.
-func (c *Client) handleFoundMIGInScope(ctx context.Context, migName, scopeName string) (*Instance, error) {
+func (c *Client) listMIGInstancesByRegionScan(ctx context.Context, migName string) ([]ManagedInstanceRef, bool, error) {
+	logger.Log.Debug("MIG not found in aggregated list, searching regions individually")
+
+	regions, err := c.listRegions(ctx)
+	if err != nil {
+		logger.Log.Errorf("Failed to list regions for regional MIG search: %v", err)
+
+		return nil, false, fmt.Errorf("failed to list regions: %w", err)
+	}
+
+	logger.Log.Debugf("Searching for regional MIG through %d regions", len(regions))
+
+	for _, region := range regions {
+		logger.Log.Tracef("Checking for regional MIG in region: %s", region)
+
+		refs, err := c.listManagedInstancesInRegionalMIG(ctx, migName, region)
+		if err == nil {
+			return refs, true, nil
+		}
+	}
+
+	logger.Log.Warnf("MIG '%s' not found in any region or zone", migName)
+
+	return nil, false, fmt.Errorf("MIG '%s': %w", migName, ErrMIGNotFound)
+}
+
+func (c *Client) listMIGInstancesInScope(ctx context.Context, migName, scopeName string) ([]ManagedInstanceRef, bool, error) {
 	if strings.HasPrefix(scopeName, "zones/") {
 		zone := extractZoneFromScope(scopeName)
 		logger.Log.Debugf("Found zonal MIG %s in zone %s", migName, zone)
 
-		instance, err := c.findInstanceInMIGZone(ctx, migName, zone)
-		if err == nil && c.cache != nil {
-			c.cacheMIG(migName, instance, false)
-		}
+		refs, err := c.listManagedInstancesInMIGZone(ctx, migName, zone)
 
-		return instance, err
+		return refs, false, err
 	} else if strings.HasPrefix(scopeName, "regions/") {
 		region := extractRegionFromScope(scopeName)
 		logger.Log.Debugf("Found regional MIG %s in region %s", migName, region)
 
-		instance, err := c.findInstanceInRegionalMIG(ctx, migName, region)
-		if err == nil && c.cache != nil {
-			c.cacheMIG(migName, instance, true)
-		}
+		refs, err := c.listManagedInstancesInRegionalMIG(ctx, migName, region)
 
-		return instance, err
+		return refs, true, err
 	}
 
-	return nil, fmt.Errorf("%w: %s", ErrUnknownScopeType, scopeName)
+	return nil, false, fmt.Errorf("%w: %s", ErrUnknownScopeType, scopeName)
+}
+
+func (c *Client) cacheMIGFromRefs(migName string, refs []ManagedInstanceRef, isRegional bool) {
+	if c.cache == nil || len(refs) == 0 {
+		return
+	}
+
+	c.cacheMIG(migName, &Instance{
+		Name: refs[0].Name,
+		Zone: refs[0].Zone,
+	}, isRegional)
+}
+
+func selectPreferredManagedInstance(refs []ManagedInstanceRef) ManagedInstanceRef {
+	for _, ref := range refs {
+		if ref.IsRunning() {
+			return ref
+		}
+	}
+
+	return refs[0]
 }
 
 func (c *Client) findMIGScopeAcrossAggregatedPages(ctx context.Context, migName string) (string, error) {
@@ -351,39 +421,7 @@ func (c *Client) findMIGScopeAcrossAggregatedPages(ctx context.Context, migName 
 	return scope, nil
 }
 
-// searchMIGInRegions searches for a MIG by iterating through all regions.
-func (c *Client) searchMIGInRegions(ctx context.Context, migName string) (*Instance, error) {
-	logger.Log.Debug("MIG not found in aggregated list, searching regions individually")
-
-	regions, err := c.listRegions(ctx)
-	if err != nil {
-		logger.Log.Errorf("Failed to list regions for regional MIG search: %v", err)
-
-		return nil, fmt.Errorf("failed to list regions: %w", err)
-	}
-
-	logger.Log.Debugf("Searching for regional MIG through %d regions", len(regions))
-
-	for _, r := range regions {
-		logger.Log.Tracef("Checking for regional MIG in region: %s", r)
-
-		if instance, err := c.findInstanceInRegionalMIG(ctx, migName, r); err == nil {
-			logger.Log.Debugf("Found regional MIG %s in region %s", migName, r)
-
-			if c.cache != nil {
-				c.cacheMIG(migName, instance, true)
-			}
-
-			return instance, nil
-		}
-	}
-
-	logger.Log.Warnf("MIG '%s' not found in any region or zone", migName)
-
-	return nil, fmt.Errorf("MIG '%s': %w", migName, ErrMIGNotFound)
-}
-
-func (c *Client) findInstanceInMIGZone(ctx context.Context, migName, zone string) (*Instance, error) {
+func (c *Client) listManagedInstancesInMIGZone(ctx context.Context, migName, zone string) ([]ManagedInstanceRef, error) {
 	logger.Log.Tracef("Searching for MIG %s in zone %s", migName, zone)
 
 	// Check if the managed instance group exists
@@ -423,23 +461,18 @@ func (c *Client) findInstanceInMIGZone(ctx context.Context, migName, zone string
 
 	logger.Log.Debugf("Found %d instances in MIG %s", len(managedInstances), migName)
 
-	// Get the first running instance
+	refs := make([]ManagedInstanceRef, 0, len(managedInstances))
 	for _, managedInstance := range managedInstances {
-		logger.Log.Tracef("Checking instance %s (status: %s)", managedInstance.Instance, managedInstance.InstanceStatus)
+		logger.Log.Tracef("Found instance %s (status: %s)", managedInstance.Instance, managedInstance.InstanceStatus)
 
-		if managedInstance.InstanceStatus == InstanceStatusRunning {
-			instanceName := extractInstanceName(managedInstance.Instance)
-			logger.Log.Debugf("Selected running instance: %s", instanceName)
-
-			return c.findInstanceInZone(ctx, instanceName, zone)
-		}
+		refs = append(refs, ManagedInstanceRef{
+			Name:   extractInstanceName(managedInstance.Instance),
+			Zone:   zone,
+			Status: managedInstance.InstanceStatus,
+		})
 	}
 
-	// If no running instance, get the first one
-	instanceName := extractInstanceName(managedInstances[0].Instance)
-	logger.Log.Debugf("No running instances found, selecting first instance: %s", instanceName)
-
-	return c.findInstanceInZone(ctx, instanceName, zone)
+	return refs, nil
 }
 
 func (c *Client) listRegions(ctx context.Context) ([]string, error) {
@@ -474,7 +507,7 @@ func (c *Client) isRegion(location string) bool {
 	return len(parts) == 2 || (len(parts) == 3 && len(parts[2]) > 1)
 }
 
-func (c *Client) findInstanceInRegionalMIG(ctx context.Context, migName, region string) (*Instance, error) {
+func (c *Client) listManagedInstancesInRegionalMIG(ctx context.Context, migName, region string) ([]ManagedInstanceRef, error) {
 	logger.Log.Tracef("Searching for regional MIG %s in region %s", migName, region)
 
 	// Check if the regional managed instance group exists
@@ -514,25 +547,19 @@ func (c *Client) findInstanceInRegionalMIG(ctx context.Context, migName, region 
 
 	logger.Log.Debugf("Found %d instances in regional MIG %s", len(managedInstances), migName)
 
-	// Get the first running instance
+	refs := make([]ManagedInstanceRef, 0, len(managedInstances))
 	for _, managedInstance := range managedInstances {
-		logger.Log.Tracef("Checking instance %s (status: %s)", managedInstance.Instance, managedInstance.InstanceStatus)
+		instanceZone := extractZoneFromInstanceURL(managedInstance.Instance)
+		logger.Log.Tracef("Found instance %s (status: %s) in zone %s", managedInstance.Instance, managedInstance.InstanceStatus, instanceZone)
 
-		if managedInstance.InstanceStatus == InstanceStatusRunning {
-			instanceName := extractInstanceName(managedInstance.Instance)
-			instanceZone := extractZoneFromInstanceURL(managedInstance.Instance)
-			logger.Log.Debugf("Selected running instance: %s in zone: %s", instanceName, instanceZone)
-
-			return c.findInstanceInZone(ctx, instanceName, instanceZone)
-		}
+		refs = append(refs, ManagedInstanceRef{
+			Name:   extractInstanceName(managedInstance.Instance),
+			Zone:   instanceZone,
+			Status: managedInstance.InstanceStatus,
+		})
 	}
 
-	// If no running instance, get the first one
-	instanceName := extractInstanceName(managedInstances[0].Instance)
-	instanceZone := extractZoneFromInstanceURL(managedInstances[0].Instance)
-	logger.Log.Debugf("No running instances found, selecting first instance: %s in zone: %s", instanceName, instanceZone)
-
-	return c.findInstanceInZone(ctx, instanceName, instanceZone)
+	return refs, nil
 }
 
 func (c *Client) convertInstance(instance *compute.Instance) *Instance {
