@@ -20,6 +20,7 @@
   - [Basic Command](#basic-command)
   - [Advanced Options](#advanced-options)
   - [SSH Tunneling Recipes](#ssh-tunneling-recipes)
+- [Local Cache](#local-cache)
 - [Connectivity Tests](#connectivity-tests)
   - [Create](#create)
   - [Watch Progress](#watch-progress)
@@ -196,6 +197,16 @@ compass gcp ssh multi-service \
   --ssh-flag "-L 4000:service2:4000" \
   --ssh-flag "-L 5000:database:5432"
 ```
+
+## Local Cache
+
+`compass` keeps a small JSON cache on disk so you do not have to repeat the same discovery calls on every run. The cache lives at `~/.compass.cache.json` with `0600` permissions and is refreshed transparently.
+
+- Resource locations: once `compass gcp ssh` or connectivity commands resolve a VM or MIG, their project, zone or region, and resource type are stored for 30 days. When you omit `--project`, `--zone`, or `--type`, the CLI reuses the cached metadata; providing a flag bypasses it.
+- Project history: each project you touch is remembered so shell completion can suggest it later. Entries expire if unused for 30 days.
+- Zone listings: discovered zones for a project are cached for 24 hours to speed up region/zone auto-discovery during later commands.
+
+Every cache access updates its timestamp, and stale entries are pruned automatically. To reset the cache, delete the file with `rm ~/.compass.cache.json`; a fresh one is created as soon as you run the CLI again.
 
 ## Connectivity Tests
 
