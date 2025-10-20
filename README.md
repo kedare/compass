@@ -204,7 +204,7 @@ compass gcp ssh multi-service \
 
 - Resource locations: once `compass gcp ssh` or connectivity commands resolve a VM or MIG, their project, zone or region, and resource type are stored for 30 days. When you omit `--project`, `--zone`, or `--type`, the CLI reuses the cached metadata; providing a flag bypasses it.
 - Project history: each project you touch is remembered so shell completion can suggest it later. Entries expire if unused for 30 days.
-- Zone listings: discovered zones for a project are cached for 24 hours to speed up region/zone auto-discovery during later commands.
+- Zone listings: discovered zones for a project are cached for 30 days, matching other resource metadata retention to speed up future region/zone discovery.
 
 Every cache access updates its timestamp, and stale entries are pruned automatically. To reset the cache, delete the file with `rm ~/.compass.cache.json`; a fresh one is created as soon as you run the CLI again.
 

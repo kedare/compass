@@ -206,16 +206,22 @@ func promptMIGInstanceSelection(cmd *cobra.Command, migName string, refs []gcp.M
 func promptMIGInstanceSelectionFromReader(reader *bufio.Reader, out io.Writer, migName string, refs []gcp.ManagedInstanceRef) (gcp.ManagedInstanceRef, error) {
 	defaultIdx := defaultMIGSelectionIndex(refs)
 
-	fmt.Fprintf(out, "Multiple instances available in MIG %s:\n", migName)
+	if _, err := fmt.Fprintf(out, "Multiple instances available in MIG %s:\n", migName); err != nil {
+		return gcp.ManagedInstanceRef{}, err
+	}
 	for i, ref := range refs {
 		marker := " "
 		if i == defaultIdx {
 			marker = "*"
 		}
 
-		fmt.Fprintf(out, "  [%d]%s %s (zone: %s, status: %s)\n", i+1, marker, ref.Name, ref.Zone, ref.Status)
+		if _, err := fmt.Fprintf(out, "  [%d]%s %s (zone: %s, status: %s)\n", i+1, marker, ref.Name, ref.Zone, ref.Status); err != nil {
+			return gcp.ManagedInstanceRef{}, err
+		}
 	}
-	fmt.Fprintf(out, "Select instance [default %d]: ", defaultIdx+1)
+	if _, err := fmt.Fprintf(out, "Select instance [default %d]: ", defaultIdx+1); err != nil {
+		return gcp.ManagedInstanceRef{}, err
+	}
 
 	selected := defaultIdx
 
@@ -223,7 +229,9 @@ func promptMIGInstanceSelectionFromReader(reader *bufio.Reader, out io.Writer, m
 		input, err := reader.ReadString('\n')
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				fmt.Fprintln(out)
+				if _, writeErr := fmt.Fprintln(out); writeErr != nil {
+					return gcp.ManagedInstanceRef{}, writeErr
+				}
 
 				break
 			}
@@ -233,19 +241,25 @@ func promptMIGInstanceSelectionFromReader(reader *bufio.Reader, out io.Writer, m
 
 		input = strings.TrimSpace(input)
 		if input == "" {
-			fmt.Fprintln(out)
+			if _, writeErr := fmt.Fprintln(out); writeErr != nil {
+				return gcp.ManagedInstanceRef{}, writeErr
+			}
 
 			break
 		}
 
 		value, err := strconv.Atoi(input)
 		if err != nil || value < 1 || value > len(refs) {
-			fmt.Fprintf(out, "Invalid selection. Enter a value between 1 and %d: ", len(refs))
+			if _, writeErr := fmt.Fprintf(out, "Invalid selection. Enter a value between 1 and %d: ", len(refs)); writeErr != nil {
+				return gcp.ManagedInstanceRef{}, writeErr
+			}
 
 			continue
 		}
 
-		fmt.Fprintln(out)
+		if _, writeErr := fmt.Fprintln(out); writeErr != nil {
+			return gcp.ManagedInstanceRef{}, writeErr
+		}
 		selected = value - 1
 
 		break

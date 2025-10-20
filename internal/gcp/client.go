@@ -452,7 +452,7 @@ func (c *Client) ListManagedInstanceGroups(ctx context.Context, location string)
 			}
 
 			isRegional := strings.HasPrefix(scope, "regions/")
-			locationName := scope
+			var locationName string
 			if isRegional {
 				locationName = extractRegionFromScope(scope)
 			} else {

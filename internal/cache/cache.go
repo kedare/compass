@@ -20,8 +20,8 @@ const (
 	CacheExpiry = 30 * 24 * time.Hour
 	// CacheFilePermissions defines the file permissions for the cache file (owner read/write only).
 	CacheFilePermissions = 0o600
-	// ZoneCacheTTL defines how long zone listings stay valid (24 hours).
-	ZoneCacheTTL = 24 * time.Hour
+	// ZoneCacheTTL defines how long zone listings stay valid (30 days).
+	ZoneCacheTTL = CacheExpiry
 )
 
 // ResourceType represents the type of GCP resource.
