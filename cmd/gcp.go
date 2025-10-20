@@ -65,7 +65,8 @@ Examples:
 
   # Combine resource type with zone for fastest search
   compass gcp ssh my-instance --type instance --zone us-central1-a --project my-project`,
-	Args: cobra.ExactArgs(1),
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: gcpSSHCompletion,
 	Run: func(cmd *cobra.Command, args []string) {
 		instanceName := args[0]
 		logger.Log.Infof("Starting connection process for: %s", instanceName)
@@ -266,9 +267,15 @@ func defaultMIGSelectionIndex(refs []gcp.ManagedInstanceRef) int {
 func init() {
 	// Use PersistentFlags for project so it's inherited by subcommands like connectivity-test
 	gcpCmd.PersistentFlags().StringVarP(&project, "project", "p", "", "GCP project ID")
+	if err := gcpCmd.RegisterFlagCompletionFunc("project", gcpProjectCompletion); err != nil {
+		logger.Log.Fatalf("Failed to register project completion: %v", err)
+	}
 	gcpSshCmd.Flags().StringVarP(&zone, "zone", "z", "", "GCP zone (auto-discovered if not specified)")
 	gcpSshCmd.Flags().StringVarP(&resourceType, "type", "t", "", "Resource type: 'instance' or 'mig' (auto-detected if not specified)")
 	gcpSshCmd.Flags().StringSliceVar(&sshFlags, "ssh-flag", []string{}, "Additional SSH flags to pass to the SSH command (can be used multiple times)")
+	if err := gcpSshCmd.RegisterFlagCompletionFunc("zone", gcpSSHZoneCompletion); err != nil {
+		logger.Log.Fatalf("Failed to register zone completion: %v", err)
+	}
 
 	gcpCmd.AddCommand(gcpSshCmd)
 }

@@ -372,6 +372,98 @@ func TestFindMIGScopeAcrossPagesNotFound(t *testing.T) {
 	}
 }
 
+func TestCollectInstances(t *testing.T) {
+	pages := map[string]struct {
+		next  string
+		items []*compute.Instance
+	}{
+		"": {
+			items: []*compute.Instance{{Name: "inst-1"}},
+			next:  "next",
+		},
+		"next": {
+			items: []*compute.Instance{{Name: "inst-2"}},
+		},
+	}
+
+	instances, err := collectInstances(func(token string) ([]*compute.Instance, string, error) {
+		page, ok := pages[token]
+		if !ok {
+			t.Fatalf("unexpected token %s", token)
+		}
+
+		return page.items, page.next, nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(instances) != 2 {
+		t.Fatalf("expected 2 instances, got %d", len(instances))
+	}
+
+	if instances[1].Name != "inst-2" {
+		t.Fatalf("unexpected order: %#v", instances)
+	}
+}
+
+func TestCollectInstancesError(t *testing.T) {
+	sentinel := errors.New("fail")
+
+	_, err := collectInstances(func(string) ([]*compute.Instance, string, error) {
+		return nil, "", sentinel
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected sentinel error, got %v", err)
+	}
+}
+
+func TestCollectInstanceGroupManagers(t *testing.T) {
+	pages := map[string]struct {
+		next  string
+		items []*compute.InstanceGroupManager
+	}{
+		"": {
+			items: []*compute.InstanceGroupManager{{Name: "group-1"}},
+			next:  "token",
+		},
+		"token": {
+			items: []*compute.InstanceGroupManager{{Name: "group-2"}},
+		},
+	}
+
+	groups, err := collectInstanceGroupManagers(func(token string) ([]*compute.InstanceGroupManager, string, error) {
+		page, ok := pages[token]
+		if !ok {
+			t.Fatalf("unexpected token %s", token)
+		}
+
+		return page.items, page.next, nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(groups))
+	}
+
+	if groups[0].Name != "group-1" || groups[1].Name != "group-2" {
+		t.Fatalf("unexpected names: %#v", groups)
+	}
+}
+
+func TestCollectInstanceGroupManagersError(t *testing.T) {
+	sentinel := errors.New("boom")
+
+	_, err := collectInstanceGroupManagers(func(string) ([]*compute.InstanceGroupManager, string, error) {
+		return nil, "", sentinel
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected sentinel error, got %v", err)
+	}
+}
+
 func TestCollectManagedInstances(t *testing.T) {
 	pages := map[string]struct {
 		next  string
@@ -413,6 +505,52 @@ func TestCollectManagedInstancesError(t *testing.T) {
 		return nil, "", sentinel
 	})
 
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected sentinel error, got %v", err)
+	}
+}
+
+func TestCollectZones(t *testing.T) {
+	pages := map[string]struct {
+		next  string
+		items []*compute.Zone
+	}{
+		"": {
+			items: []*compute.Zone{{Name: "us-central1-a"}},
+			next:  "token",
+		},
+		"token": {
+			items: []*compute.Zone{{Name: "us-central1-b"}},
+		},
+	}
+
+	zones, err := collectZones(func(token string) ([]*compute.Zone, string, error) {
+		page, ok := pages[token]
+		if !ok {
+			t.Fatalf("unexpected token %s", token)
+		}
+
+		return page.items, page.next, nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(zones) != 2 {
+		t.Fatalf("expected 2 zones, got %d", len(zones))
+	}
+
+	if zones[1].Name != "us-central1-b" {
+		t.Fatalf("unexpected zone order: %#v", zones)
+	}
+}
+
+func TestCollectZonesError(t *testing.T) {
+	sentinel := errors.New("fail")
+
+	_, err := collectZones(func(string) ([]*compute.Zone, string, error) {
+		return nil, "", sentinel
+	})
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("expected sentinel error, got %v", err)
 	}

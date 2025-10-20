@@ -2,7 +2,7 @@ version: '3'
 
 vars:
   BINARY_NAME: compass
-  BUILD_DIR: ./
+  BUILD_DIR: dist
   MAIN_PATH: ./main.go
   MODULE:
     sh: go list -m
@@ -28,7 +28,8 @@ tasks:
   build:
     desc: Build the application
     cmds:
-      - go build -ldflags="-X {{.MODULE}}/internal/version.Version={{.VERSION}} -X {{.MODULE}}/internal/version.Commit={{.COMMIT}} -X {{.MODULE}}/internal/version.BuildDate={{.BUILD_DATE}} -X {{.MODULE}}/internal/version.BuildUser={{.BUILD_USER}} -X {{.MODULE}}/internal/version.BuildHost={{.BUILD_HOST}} -X {{.MODULE}}/internal/version.BuildArch={{.BUILD_ARCH}}" -o {{.BINARY_NAME}} {{.MAIN_PATH}}
+      - mkdir {{.BUILD_DIR}} || true
+      - go build -ldflags="-X {{.MODULE}}/internal/version.Version={{.VERSION}} -X {{.MODULE}}/internal/version.Commit={{.COMMIT}} -X {{.MODULE}}/internal/version.BuildDate={{.BUILD_DATE}} -X {{.MODULE}}/internal/version.BuildUser={{.BUILD_USER}} -X {{.MODULE}}/internal/version.BuildHost={{.BUILD_HOST}} -X {{.MODULE}}/internal/version.BuildArch={{.BUILD_ARCH}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}} {{.MAIN_PATH}}
 
   build-all:
     desc: Build for multiple platforms
@@ -43,7 +44,8 @@ tasks:
       GOOS: linux
       GOARCH: amd64
     cmds:
-      - go build -ldflags="-X {{.MODULE}}/internal/version.Version={{.VERSION}} -X {{.MODULE}}/internal/version.Commit={{.COMMIT}} -X {{.MODULE}}/internal/version.BuildDate={{.BUILD_DATE}} -X {{.MODULE}}/internal/version.BuildUser={{.BUILD_USER}} -X {{.MODULE}}/internal/version.BuildHost={{.BUILD_HOST}} -X {{.MODULE}}/internal/version.BuildArch={{.BUILD_ARCH}}" -o {{.BINARY_NAME}}-linux-amd64 {{.MAIN_PATH}}
+      - mkdir {{.BUILD_DIR}} || true
+      - go build -ldflags="-X {{.MODULE}}/internal/version.Version={{.VERSION}} -X {{.MODULE}}/internal/version.Commit={{.COMMIT}} -X {{.MODULE}}/internal/version.BuildDate={{.BUILD_DATE}} -X {{.MODULE}}/internal/version.BuildUser={{.BUILD_USER}} -X {{.MODULE}}/internal/version.BuildHost={{.BUILD_HOST}} -X {{.MODULE}}/internal/version.BuildArch={{.BUILD_ARCH}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-linux-amd64 {{.MAIN_PATH}}
 
   build-darwin:
     desc: Build for macOS
@@ -51,7 +53,8 @@ tasks:
       GOOS: darwin
       GOARCH: amd64
     cmds:
-      - go build -ldflags="-X {{.MODULE}}/internal/version.Version={{.VERSION}} -X {{.MODULE}}/internal/version.Commit={{.COMMIT}} -X {{.MODULE}}/internal/version.BuildDate={{.BUILD_DATE}} -X {{.MODULE}}/internal/version.BuildUser={{.BUILD_USER}} -X {{.MODULE}}/internal/version.BuildHost={{.BUILD_HOST}} -X {{.MODULE}}/internal/version.BuildArch={{.BUILD_ARCH}}" -o {{.BINARY_NAME}}-darwin-amd64 {{.MAIN_PATH}}
+      - mkdir {{.BUILD_DIR}} || true
+      - go build -ldflags="-X {{.MODULE}}/internal/version.Version={{.VERSION}} -X {{.MODULE}}/internal/version.Commit={{.COMMIT}} -X {{.MODULE}}/internal/version.BuildDate={{.BUILD_DATE}} -X {{.MODULE}}/internal/version.BuildUser={{.BUILD_USER}} -X {{.MODULE}}/internal/version.BuildHost={{.BUILD_HOST}} -X {{.MODULE}}/internal/version.BuildArch={{.BUILD_ARCH}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-darwin-amd64 {{.MAIN_PATH}}
 
   build-darwin-arm64:
     desc: Build for macOS ARM64
@@ -59,7 +62,8 @@ tasks:
       GOOS: darwin
       GOARCH: arm64
     cmds:
-      - go build -ldflags="-X {{.MODULE}}/internal/version.Version={{.VERSION}} -X {{.MODULE}}/internal/version.Commit={{.COMMIT}} -X {{.MODULE}}/internal/version.BuildDate={{.BUILD_DATE}} -X {{.MODULE}}/internal/version.BuildUser={{.BUILD_USER}} -X {{.MODULE}}/internal/version.BuildHost={{.BUILD_HOST}} -X {{.MODULE}}/internal/version.BuildArch={{.BUILD_ARCH}}" -o {{.BINARY_NAME}}-darwin-arm64 {{.MAIN_PATH}}
+      - mkdir {{.BUILD_DIR}} || true
+      - go build -ldflags="-X {{.MODULE}}/internal/version.Version={{.VERSION}} -X {{.MODULE}}/internal/version.Commit={{.COMMIT}} -X {{.MODULE}}/internal/version.BuildDate={{.BUILD_DATE}} -X {{.MODULE}}/internal/version.BuildUser={{.BUILD_USER}} -X {{.MODULE}}/internal/version.BuildHost={{.BUILD_HOST}} -X {{.MODULE}}/internal/version.BuildArch={{.BUILD_ARCH}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-darwin-arm64 {{.MAIN_PATH}}
 
   build-windows:
     desc: Build for Windows
@@ -67,7 +71,8 @@ tasks:
       GOOS: windows
       GOARCH: amd64
     cmds:
-      - go build -ldflags="-X {{.MODULE}}/internal/version.Version={{.VERSION}} -X {{.MODULE}}/internal/version.Commit={{.COMMIT}} -X {{.MODULE}}/internal/version.BuildDate={{.BUILD_DATE}} -X {{.MODULE}}/internal/version.BuildUser={{.BUILD_USER}} -X {{.MODULE}}/internal/version.BuildHost={{.BUILD_HOST}} -X {{.MODULE}}/internal/version.BuildArch={{.BUILD_ARCH}}" -o {{.BINARY_NAME}}-windows-amd64.exe {{.MAIN_PATH}}
+      - mkdir {{.BUILD_DIR}} || true
+      - go build -ldflags="-X {{.MODULE}}/internal/version.Version={{.VERSION}} -X {{.MODULE}}/internal/version.Commit={{.COMMIT}} -X {{.MODULE}}/internal/version.BuildDate={{.BUILD_DATE}} -X {{.MODULE}}/internal/version.BuildUser={{.BUILD_USER}} -X {{.MODULE}}/internal/version.BuildHost={{.BUILD_HOST}} -X {{.MODULE}}/internal/version.BuildArch={{.BUILD_ARCH}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-windows-amd64.exe {{.MAIN_PATH}}
 
   test:
     desc: Run tests
@@ -154,8 +159,7 @@ tasks:
   clean:
     desc: Clean build artifacts
     cmds:
-      - rm -f {{.BINARY_NAME}}
-      - rm -f {{.BINARY_NAME}}-*
+      - rm -rf {{.BUILD_DIR}}
       - rm -f coverage.out coverage.html
       - rm -rf vendor/
       - rm -rf tmp/
@@ -171,7 +175,7 @@ tasks:
           echo "Backing up existing binary to {{.BINARY_NAME}}.backup"
           cp "$HOME/.local/bin/{{.BINARY_NAME}}" "$HOME/.local/bin/{{.BINARY_NAME}}.backup"
         fi
-      - cp ./{{.BINARY_NAME}} $HOME/.local/bin/
+      - cp {{.BUILD_DIR}}/{{.BINARY_NAME}} $HOME/.local/bin/
       - chmod +x $HOME/.local/bin/{{.BINARY_NAME}}
       - |
         if [ ! -f "$HOME/.local/bin/cps" ] || [ ! -L "$HOME/.local/bin/cps" ]; then

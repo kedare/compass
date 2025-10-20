@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/kedare/compass/internal/gcp"
+	"github.com/spf13/cobra"
 )
 
 func TestGcpRootCommand(t *testing.T) {
@@ -44,6 +45,17 @@ func TestGcpRootProjectFlag(t *testing.T) {
 	if projectFlag.Usage == "" {
 		t.Error("Project flag usage is empty")
 	}
+
+	t.Run("project flag completion runs", func(t *testing.T) {
+		completions, directive := gcpProjectCompletion(gcpCmd, nil, "")
+		if directive != cobra.ShellCompDirectiveNoFileComp {
+			t.Errorf("unexpected directive %v", directive)
+		}
+
+		if len(completions) == 0 {
+			t.Log("project completion returned no suggestions (may be empty cache)")
+		}
+	})
 }
 
 func TestGcpSshCommand(t *testing.T) {
@@ -74,6 +86,10 @@ func TestGcpSshCommand(t *testing.T) {
 	if err := gcpSshCmd.Args(gcpSshCmd, []string{"instance1"}); err != nil {
 		t.Errorf("Unexpected error for single argument: %v", err)
 	}
+
+	if gcpSshCmd.ValidArgsFunction == nil {
+		t.Error("Expected ssh command to provide argument completion")
+	}
 }
 
 func TestGcpSshCommandFlags(t *testing.T) {
@@ -88,6 +104,10 @@ func TestGcpSshCommandFlags(t *testing.T) {
 
 	if zoneFlag.Usage == "" {
 		t.Error("Zone flag usage is empty")
+	}
+
+	if _, directive := gcpSSHZoneCompletion(gcpSshCmd, nil, ""); directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Error("Zone completion directive mismatch")
 	}
 
 	typeFlag := gcpSshCmd.Flags().Lookup("type")

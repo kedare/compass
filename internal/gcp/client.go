@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/kedare/compass/internal/cache"
@@ -60,6 +61,13 @@ func (r ManagedInstanceRef) IsRunning() bool {
 	return r.Status == InstanceStatusRunning
 }
 
+// ManagedInstanceGroup represents a managed instance group scope.
+type ManagedInstanceGroup struct {
+	Name       string
+	Location   string
+	IsRegional bool
+}
+
 func NewClient(ctx context.Context, project string) (*Client, error) {
 	logger.Log.Debug("Creating new GCP client")
 
@@ -104,11 +112,19 @@ func NewClient(ctx context.Context, project string) (*Client, error) {
 		c = nil
 	}
 
-	return &Client{
+	client := &Client{
 		service: service,
 		project: project,
 		cache:   c,
-	}, nil
+	}
+
+	if client.cache != nil {
+		if err := client.cache.AddProject(client.project); err != nil {
+			logger.Log.Warnf("Failed to remember project %s: %v", client.project, err)
+		}
+	}
+
+	return client, nil
 }
 
 func (c *Client) FindInstance(ctx context.Context, instanceName, zone string) (*Instance, error) {
@@ -169,6 +185,88 @@ func (c *Client) FindInstance(ctx context.Context, instanceName, zone string) (*
 	}
 
 	return result, nil
+}
+
+// ListInstances returns the instances available in the current project, optionally filtered by zone.
+func (c *Client) ListInstances(ctx context.Context, zone string) ([]*Instance, error) {
+	logger.Log.Debugf("Listing instances (zone filter: %s)", zone)
+
+	if zone != "" {
+		items, err := collectInstances(func(pageToken string) ([]*compute.Instance, string, error) {
+			call := c.service.Instances.List(c.project, zone).Context(ctx)
+			if pageToken != "" {
+				call = call.PageToken(pageToken)
+			}
+
+			resp, err := call.Do()
+			if err != nil {
+				logger.Log.Errorf("Failed to list instances in zone %s: %v", zone, err)
+
+				return nil, "", fmt.Errorf("failed to list instances in zone %s: %w", zone, err)
+			}
+
+			return resp.Items, resp.NextPageToken, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		results := make([]*Instance, 0, len(items))
+		for _, item := range items {
+			if item == nil {
+				continue
+			}
+			results = append(results, c.convertInstance(item))
+		}
+
+		return results, nil
+	}
+
+	pageToken := ""
+	var results []*Instance
+
+	for {
+		call := c.service.Instances.AggregatedList(c.project).Context(ctx)
+		if pageToken != "" {
+			call = call.PageToken(pageToken)
+		}
+
+		list, err := call.Do()
+		if err != nil {
+			logger.Log.Errorf("Failed to list aggregated instances: %v", err)
+
+			return nil, fmt.Errorf("failed to list instances: %w", err)
+		}
+
+		for scope, scopedList := range list.Items {
+			if len(scopedList.Instances) == 0 {
+				continue
+			}
+
+			zoneName := extractZoneFromScope(scope)
+
+			for _, inst := range scopedList.Instances {
+				if inst == nil {
+					continue
+				}
+
+				converted := c.convertInstance(inst)
+				if converted.Zone == "" {
+					converted.Zone = zoneName
+				}
+
+				results = append(results, converted)
+			}
+		}
+
+		if list.NextPageToken == "" {
+			break
+		}
+
+		pageToken = list.NextPageToken
+	}
+
+	return results, nil
 }
 
 func (c *Client) findInstanceAcrossAggregatedPages(ctx context.Context, instanceName string) (*compute.Instance, error) {
@@ -273,6 +371,207 @@ func (c *Client) ListMIGInstances(ctx context.Context, migName, location string)
 	c.cacheMIGFromRefs(migName, refs, isRegional)
 
 	return refs, isRegional, nil
+}
+
+// ListManagedInstanceGroups returns the managed instance groups available in the project, optionally filtered by location.
+func (c *Client) ListManagedInstanceGroups(ctx context.Context, location string) ([]ManagedInstanceGroup, error) {
+	logger.Log.Debugf("Listing managed instance groups (location filter: %s)", location)
+
+	if location != "" {
+		isRegional := c.isRegion(location)
+		items, err := collectInstanceGroupManagers(func(pageToken string) ([]*compute.InstanceGroupManager, string, error) {
+			if isRegional {
+				call := c.service.RegionInstanceGroupManagers.List(c.project, location).Context(ctx)
+				if pageToken != "" {
+					call = call.PageToken(pageToken)
+				}
+
+				resp, err := call.Do()
+				if err != nil {
+					logger.Log.Errorf("Failed to list managed instance groups in region %s: %v", location, err)
+
+					return nil, "", fmt.Errorf("failed to list managed instance groups in region %s: %w", location, err)
+				}
+
+				return resp.Items, resp.NextPageToken, nil
+			}
+
+			call := c.service.InstanceGroupManagers.List(c.project, location).Context(ctx)
+			if pageToken != "" {
+				call = call.PageToken(pageToken)
+			}
+
+			resp, err := call.Do()
+			if err != nil {
+				logger.Log.Errorf("Failed to list managed instance groups in zone %s: %v", location, err)
+
+				return nil, "", fmt.Errorf("failed to list managed instance groups in zone %s: %w", location, err)
+			}
+
+			return resp.Items, resp.NextPageToken, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		results := make([]ManagedInstanceGroup, 0, len(items))
+		for _, item := range items {
+			if item == nil {
+				continue
+			}
+
+			results = append(results, ManagedInstanceGroup{
+				Name:       item.Name,
+				Location:   location,
+				IsRegional: isRegional,
+			})
+		}
+
+		return results, nil
+	}
+
+	pageToken := ""
+	var results []ManagedInstanceGroup
+
+	for {
+		call := c.service.InstanceGroupManagers.AggregatedList(c.project).Context(ctx)
+		if pageToken != "" {
+			call = call.PageToken(pageToken)
+		}
+
+		list, err := call.Do()
+		if err != nil {
+			logger.Log.Errorf("Failed to list aggregated managed instance groups: %v", err)
+
+			return nil, fmt.Errorf("failed to list managed instance groups: %w", err)
+		}
+
+		for scope, scopedList := range list.Items {
+			if len(scopedList.InstanceGroupManagers) == 0 {
+				continue
+			}
+
+			isRegional := strings.HasPrefix(scope, "regions/")
+			locationName := scope
+			if isRegional {
+				locationName = extractRegionFromScope(scope)
+			} else {
+				locationName = extractZoneFromScope(scope)
+			}
+
+			for _, mig := range scopedList.InstanceGroupManagers {
+				if mig == nil {
+					continue
+				}
+
+				results = append(results, ManagedInstanceGroup{
+					Name:       mig.Name,
+					Location:   locationName,
+					IsRegional: isRegional,
+				})
+			}
+		}
+
+		if list.NextPageToken == "" {
+			break
+		}
+
+		pageToken = list.NextPageToken
+	}
+
+	return results, nil
+}
+
+// ListRegions returns the available regions in the project.
+func (c *Client) ListRegions(ctx context.Context) ([]string, error) {
+	if c.cache != nil {
+		if zones, ok := c.cache.GetZones(c.project); ok && len(zones) > 0 {
+			regionSet := make(map[string]struct{})
+			for _, zone := range zones {
+				region := extractRegionFromZone(zone)
+				if region == "" {
+					continue
+				}
+
+				regionSet[region] = struct{}{}
+			}
+
+			regions := make([]string, 0, len(regionSet))
+			for region := range regionSet {
+				regions = append(regions, region)
+			}
+
+			sort.Strings(regions)
+
+			logger.Log.Debugf("Derived %d regions from cached zones", len(regions))
+
+			return regions, nil
+		}
+	}
+
+	regions, err := c.listRegions(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return regions, nil
+}
+
+// ListZones returns the available zones in the project.
+func (c *Client) ListZones(ctx context.Context) ([]string, error) {
+	logger.Log.Debug("Listing compute zones")
+
+	if c.cache != nil {
+		if zones, ok := c.cache.GetZones(c.project); ok {
+			logger.Log.Debugf("Using %d zones from cache", len(zones))
+
+			return zones, nil
+		}
+	}
+
+	items, err := collectZones(func(pageToken string) ([]*compute.Zone, string, error) {
+		call := c.service.Zones.List(c.project).Context(ctx)
+		if pageToken != "" {
+			call = call.PageToken(pageToken)
+		}
+
+		resp, err := call.Do()
+		if err != nil {
+			logger.Log.Errorf("Failed to list zones: %v", err)
+
+			return nil, "", fmt.Errorf("failed to list zones: %w", err)
+		}
+
+		return resp.Items, resp.NextPageToken, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(items))
+	for _, zone := range items {
+		if zone == nil {
+			continue
+		}
+
+		if strings.ToUpper(zone.Status) != "UP" {
+			continue
+		}
+
+		names = append(names, zone.Name)
+	}
+
+	sort.Strings(names)
+
+	logger.Log.Debugf("Found %d zones", len(names))
+
+	if c.cache != nil {
+		if err := c.cache.SetZones(c.project, names); err != nil {
+			logger.Log.Warnf("Failed to cache zones for project %s: %v", c.project, err)
+		}
+	}
+
+	return names, nil
 }
 
 func (c *Client) listMIGInstancesWithSpecifiedLocation(ctx context.Context, migName, location string) ([]ManagedInstanceRef, bool, error) {
@@ -493,6 +792,8 @@ func (c *Client) listRegions(ctx context.Context) ([]string, error) {
 			logger.Log.Tracef("Available region: %s", region.Name)
 		}
 	}
+
+	sort.Strings(regionNames)
 
 	logger.Log.Debugf("Found %d available regions", len(regionNames))
 
@@ -815,9 +1116,75 @@ func findMIGScopeAcrossPages(migName string, fetch func(pageToken string) (*comp
 	return "", ErrMIGNotInAggregatedList
 }
 
+func collectInstances(fetch func(pageToken string) ([]*compute.Instance, string, error)) ([]*compute.Instance, error) {
+	pageToken := ""
+	var all []*compute.Instance
+
+	for {
+		items, nextToken, err := fetch(pageToken)
+		if err != nil {
+			return nil, err
+		}
+
+		all = append(all, items...)
+
+		if nextToken == "" {
+			break
+		}
+
+		pageToken = nextToken
+	}
+
+	return all, nil
+}
+
+func collectInstanceGroupManagers(fetch func(pageToken string) ([]*compute.InstanceGroupManager, string, error)) ([]*compute.InstanceGroupManager, error) {
+	pageToken := ""
+	var all []*compute.InstanceGroupManager
+
+	for {
+		items, nextToken, err := fetch(pageToken)
+		if err != nil {
+			return nil, err
+		}
+
+		all = append(all, items...)
+
+		if nextToken == "" {
+			break
+		}
+
+		pageToken = nextToken
+	}
+
+	return all, nil
+}
+
 func collectManagedInstances(fetch func(pageToken string) ([]*compute.ManagedInstance, string, error)) ([]*compute.ManagedInstance, error) {
 	pageToken := ""
 	var all []*compute.ManagedInstance
+
+	for {
+		items, nextToken, err := fetch(pageToken)
+		if err != nil {
+			return nil, err
+		}
+
+		all = append(all, items...)
+
+		if nextToken == "" {
+			break
+		}
+
+		pageToken = nextToken
+	}
+
+	return all, nil
+}
+
+func collectZones(fetch func(pageToken string) ([]*compute.Zone, string, error)) ([]*compute.Zone, error) {
+	pageToken := ""
+	var all []*compute.Zone
 
 	for {
 		items, nextToken, err := fetch(pageToken)
