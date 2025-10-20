@@ -1,22 +1,14 @@
 package cmd
 
-import (
-	"testing"
+import "testing"
 
-	"github.com/spf13/cobra"
-)
-
-func TestGcpCommand(t *testing.T) {
-	// Test that the gcp command is properly configured
+func TestGcpRootCommand(t *testing.T) {
 	if gcpCmd == nil {
-		t.Error("gcpCmd is nil")
-
-		return
+		t.Fatal("gcpCmd is nil")
 	}
 
-	// Test command properties
-	if gcpCmd.Use != "gcp [instance-name]" {
-		t.Errorf("Expected Use to be 'gcp [instance-name]', got %q", gcpCmd.Use)
+	if gcpCmd.Use != "gcp" {
+		t.Errorf("Expected Use to be 'gcp', got %q", gcpCmd.Use)
 	}
 
 	if gcpCmd.Short == "" {
@@ -27,178 +19,147 @@ func TestGcpCommand(t *testing.T) {
 		t.Error("Long description is empty")
 	}
 
-	// Test that it expects exactly one argument
-	err := gcpCmd.Args(gcpCmd, []string{})
-	if err == nil {
+	if gcpCmd.Run != nil || gcpCmd.RunE != nil {
+		t.Error("gcpCmd should not execute without a subcommand")
+	}
+}
+
+func TestGcpRootProjectFlag(t *testing.T) {
+	projectFlag := gcpCmd.PersistentFlags().Lookup("project")
+	if projectFlag == nil {
+		t.Fatal("project flag not found on gcp command")
+	}
+
+	if projectFlag.Shorthand != "p" {
+		t.Errorf("Expected project flag shorthand 'p', got %q", projectFlag.Shorthand)
+	}
+
+	if projectFlag.Usage == "" {
+		t.Error("Project flag usage is empty")
+	}
+}
+
+func TestGcpSshCommand(t *testing.T) {
+	if gcpSshCmd == nil {
+		t.Fatal("gcpSshCmd is nil")
+	}
+
+	if gcpSshCmd.Use != "ssh [instance-name]" {
+		t.Errorf("Expected Use to be 'ssh [instance-name]', got %q", gcpSshCmd.Use)
+	}
+
+	if gcpSshCmd.Short == "" {
+		t.Error("Short description is empty")
+	}
+
+	if gcpSshCmd.Long == "" {
+		t.Error("Long description is empty")
+	}
+
+	if err := gcpSshCmd.Args(gcpSshCmd, []string{}); err == nil {
 		t.Error("Expected error for no arguments")
 	}
 
-	err = gcpCmd.Args(gcpCmd, []string{"instance1", "instance2"})
-	if err == nil {
+	if err := gcpSshCmd.Args(gcpSshCmd, []string{"instance1", "instance2"}); err == nil {
 		t.Error("Expected error for too many arguments")
 	}
 
-	err = gcpCmd.Args(gcpCmd, []string{"instance1"})
-	if err != nil {
+	if err := gcpSshCmd.Args(gcpSshCmd, []string{"instance1"}); err != nil {
 		t.Errorf("Unexpected error for single argument: %v", err)
 	}
 }
 
-func TestGcpCommandFlags(t *testing.T) {
-	// Test that flags are properly configured
-	projectFlag := gcpCmd.Flags().Lookup("project")
-	if projectFlag == nil {
-		// Project flag is defined as persistent so it can be shared with
-		// connectivity subcommands; fall back to that flag set for validation.
-		projectFlag = gcpCmd.PersistentFlags().Lookup("project")
-	}
-
-	if projectFlag == nil {
-		t.Error("project flag not found")
-	} else {
-		if projectFlag.Shorthand != "p" {
-			t.Errorf("Expected project flag shorthand 'p', got %q", projectFlag.Shorthand)
-		}
-
-		if projectFlag.Usage == "" {
-			t.Error("Project flag usage is empty")
-		}
-	}
-
-	zoneFlag := gcpCmd.Flags().Lookup("zone")
+func TestGcpSshCommandFlags(t *testing.T) {
+	zoneFlag := gcpSshCmd.Flags().Lookup("zone")
 	if zoneFlag == nil {
-		t.Error("zone flag not found")
-	} else {
-		if zoneFlag.Shorthand != "z" {
-			t.Errorf("Expected zone flag shorthand 'z', got %q", zoneFlag.Shorthand)
-		}
-
-		if zoneFlag.Usage == "" {
-			t.Error("Zone flag usage is empty")
-		}
+		t.Fatal("zone flag not found on ssh command")
 	}
 
-	typeFlag := gcpCmd.Flags().Lookup("type")
+	if zoneFlag.Shorthand != "z" {
+		t.Errorf("Expected zone flag shorthand 'z', got %q", zoneFlag.Shorthand)
+	}
+
+	if zoneFlag.Usage == "" {
+		t.Error("Zone flag usage is empty")
+	}
+
+	typeFlag := gcpSshCmd.Flags().Lookup("type")
 	if typeFlag == nil {
-		t.Error("type flag not found")
-	} else {
-		if typeFlag.Shorthand != "t" {
-			t.Errorf("Expected type flag shorthand 't', got %q", typeFlag.Shorthand)
-		}
-
-		if typeFlag.Usage == "" {
-			t.Error("Type flag usage is empty")
-		}
+		t.Fatal("type flag not found on ssh command")
 	}
 
-	sshFlagFlag := gcpCmd.Flags().Lookup("ssh-flag")
-	if sshFlagFlag == nil {
-		t.Error("ssh-flag flag not found")
-	}
-}
-
-func TestGcpCommandExecution(t *testing.T) {
-	// We can't easily test the full command execution without mocking GCP APIs
-	// but we can test that the command doesn't panic with basic setup
-
-	// Create a test command
-	testCmd := &cobra.Command{
-		Use: "test-gcp [instance-name]",
-		Run: func(cmd *cobra.Command, args []string) {
-			// This is a simplified version of the actual command
-			// In a real test, we would mock the GCP client and SSH client
-			instanceName := args[0]
-			if instanceName == "" {
-				t.Error("instanceName is empty")
-			}
-		},
+	if typeFlag.Shorthand != "t" {
+		t.Errorf("Expected type flag shorthand 't', got %q", typeFlag.Shorthand)
 	}
 
-	// Test with valid arguments
-	testCmd.SetArgs([]string{"test-instance"})
+	if typeFlag.Usage == "" {
+		t.Error("Type flag usage is empty")
+	}
 
-	err := testCmd.Execute()
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
+	sshFlag := gcpSshCmd.Flags().Lookup("ssh-flag")
+	if sshFlag == nil {
+		t.Fatal("ssh-flag not found on ssh command")
+	}
+
+	if sshFlag.Usage == "" {
+		t.Error("ssh-flag usage is empty")
 	}
 }
 
-// Test helper to verify command structure.
 func TestGcpCommandStructure(t *testing.T) {
-	// Verify the command is properly added to root
-	found := false
+	foundGcp := false
 
 	for _, cmd := range rootCmd.Commands() {
 		if cmd.Name() == "gcp" {
-			found = true
+			foundGcp = true
 
 			break
 		}
 	}
 
-	if !found {
-		t.Error("gcp command not found in root command")
+	if !foundGcp {
+		t.Fatal("gcp command not found in root command")
+	}
+
+	foundSsh := false
+
+	for _, cmd := range gcpCmd.Commands() {
+		if cmd.Name() == "ssh" {
+			foundSsh = true
+
+			break
+		}
+	}
+
+	if !foundSsh {
+		t.Fatal("ssh command not found under gcp command")
 	}
 }
 
 func TestGcpCommandHelp(t *testing.T) {
-	// Test that help can be generated without errors
-	gcpCmd.SetArgs([]string{"--help"})
+	rootCmd.SetArgs([]string{"gcp", "--help"})
+	defer rootCmd.SetArgs([]string{})
 
-	// Capture the help output by temporarily redirecting
-	// In a real scenario, this would show the help text
-	err := gcpCmd.Execute()
-	if err != nil {
+	if err := rootCmd.Execute(); err != nil {
 		t.Errorf("Help command returned error: %v", err)
 	}
 }
 
-func TestResourceTypeValidation(t *testing.T) {
-	tests := []struct {
-		name          string
-		resourceType  string
-		shouldBeValid bool
-	}{
-		{
-			name:          "empty_resource_type",
-			resourceType:  "",
-			shouldBeValid: true, // Empty means auto-detect
-		},
-		{
-			name:          "valid_instance",
-			resourceType:  "instance",
-			shouldBeValid: true,
-		},
-		{
-			name:          "valid_mig",
-			resourceType:  "mig",
-			shouldBeValid: true,
-		},
-		{
-			name:          "invalid_vm",
-			resourceType:  "vm",
-			shouldBeValid: false,
-		},
-		{
-			name:          "invalid_server",
-			resourceType:  "server",
-			shouldBeValid: false,
-		},
-		{
-			name:          "invalid_uppercase",
-			resourceType:  "INSTANCE",
-			shouldBeValid: false,
-		},
+func TestGcpSshHelp(t *testing.T) {
+	rootCmd.SetArgs([]string{"gcp", "ssh", "--help"})
+	defer rootCmd.SetArgs([]string{})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Errorf("Help command returned error: %v", err)
+	}
+}
+
+func TestResourceTypeConstants(t *testing.T) {
+	if resourceTypeInstance != "instance" {
+		t.Errorf("Expected resourceTypeInstance to be 'instance', got %q", resourceTypeInstance)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Test validation logic
-			isValid := tt.resourceType == "" || tt.resourceType == "instance" || tt.resourceType == "mig"
-			if isValid != tt.shouldBeValid {
-				t.Errorf("Resource type '%s': expected valid=%v, got valid=%v",
-					tt.resourceType, tt.shouldBeValid, isValid)
-			}
-		})
+	if resourceTypeMIG != "mig" {
+		t.Errorf("Expected resourceTypeMIG to be 'mig', got %q", resourceTypeMIG)
 	}
 }

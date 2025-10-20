@@ -111,19 +111,19 @@ compass completion powershell | Out-String | Invoke-Expression
 
 ```bash
 # Connect to an instance (auto-discovers zone and resource type)
-compass gcp my-instance --project my-gcp-project
+compass gcp ssh my-instance --project my-gcp-project
 
 # Specify a zone explicitly
-compass gcp my-instance --project my-gcp-project --zone us-central1-a
+compass gcp ssh my-instance --project my-gcp-project --zone us-central1-a
 
 # Explicitly specify resource type for faster discovery
-compass gcp my-instance --project my-gcp-project --type instance
+compass gcp ssh my-instance --project my-gcp-project --type instance
 
 # Connect to the first running instance from a MIG
-compass gcp my-mig-name --project my-gcp-project --type mig
+compass gcp ssh my-mig-name --project my-gcp-project --type mig
 
 # Establish a tunnel through IAP
-compass gcp my-instance --project my-gcp-project --ssh-flag "-L 8080:localhost:8080"
+compass gcp ssh my-instance --project my-gcp-project --ssh-flag "-L 8080:localhost:8080"
 
 # Display build metadata
 compass version
@@ -137,24 +137,24 @@ compass gcp vpn get prod-ha-vpn --type gateway --region us-central1
 ### Basic Command
 
 ```bash
-compass gcp [instance-name] --project [project-id]
+compass gcp ssh [instance-name] --project [project-id]
 ```
 
 ### Advanced Options
 
 ```bash
 # Provide multiple SSH flags
-compass gcp instance-name \
+compass gcp ssh instance-name \
   --project my-project \
   --ssh-flag "-L 8080:localhost:8080" \
   --ssh-flag "-D 1080" \
   --ssh-flag "-X"
 
 # Enable verbose logging
-compass gcp instance-name --project my-project --log-level debug
+compass gcp ssh instance-name --project my-project --log-level debug
 
 # Target a regional MIG
-compass gcp my-regional-mig --project my-project --zone us-central1
+compass gcp ssh my-regional-mig --project my-project --zone us-central1
 ```
 
 **GCP SSH Flags**
@@ -176,19 +176,19 @@ compass gcp my-regional-mig --project my-project --zone us-central1
 
 ```bash
 # Local port forwarding
-compass gcp app-server --project prod --ssh-flag "-L 3000:localhost:3000"
+compass gcp ssh app-server --project prod --ssh-flag "-L 3000:localhost:3000"
 
 # Remote port forwarding
-compass gcp jump-host --project staging --ssh-flag "-R 8080:localhost:8080"
+compass gcp ssh jump-host --project staging --ssh-flag "-R 8080:localhost:8080"
 
 # SOCKS proxy
-compass gcp proxy-server --project dev --ssh-flag "-D 1080"
+compass gcp ssh proxy-server --project dev --ssh-flag "-D 1080"
 
 # X11 forwarding
-compass gcp desktop-instance --project dev --ssh-flag "-X"
+compass gcp ssh desktop-instance --project dev --ssh-flag "-X"
 
 # Multiple tunnels at once
-compass gcp multi-service \
+compass gcp ssh multi-service \
   --project prod \
   --ssh-flag "-L 3000:service1:3000" \
   --ssh-flag "-L 4000:service2:4000" \

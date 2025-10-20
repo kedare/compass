@@ -22,34 +22,43 @@ var (
 )
 
 var gcpCmd = &cobra.Command{
-	Use:   "gcp [instance-name]",
-	Short: "Connect to a GCP instance",
-	Long: `Connect to a GCP instance or MIG using SSH with IAP tunneling
+	Use:   "gcp",
+	Short: "Manage GCP resources",
+	Long: `Access GCP tooling including SSH connections, connectivity tests, and VPN helpers.
 
-The tool caches project and location information after first use,
-so subsequent connections don't need --project or --zone flags.
+Use subcommands like "compass gcp ssh" to open IAP-backed SSH sessions or
+"compass gcp connectivity-test" to manage Network Connectivity Tests.`,
+}
+
+var gcpSshCmd = &cobra.Command{
+	Use:   "ssh [instance-name]",
+	Short: "Connect to a GCP instance",
+	Long: `Connect to a GCP instance or MIG using SSH with IAP tunneling.
+
+The tool caches project and location information after first use, so subsequent
+connections don't need --project or --zone flags.
 
 Examples:
   # First connection (requires project)
-  compass gcp my-instance --project my-project --type instance
+  compass gcp ssh my-instance --project my-project --type instance
 
   # Subsequent connections (uses cached project and zone)
-  compass gcp my-instance
+  compass gcp ssh my-instance
 
   # Auto-detect resource type (tries MIG first, then instance)
-  compass gcp my-resource --project my-project
+  compass gcp ssh my-resource --project my-project
 
   # Explicitly specify it's an instance for faster search
-  compass gcp my-instance --project my-project --type instance
+  compass gcp ssh my-instance --project my-project --type instance
 
   # Explicitly specify it's a MIG for faster search
-  compass gcp my-mig --project my-project --type mig
+  compass gcp ssh my-mig --project my-project --type mig
 
   # Specify zone to bypass cache and auto-detection
-  compass gcp my-instance --zone us-central1-a --project my-project
+  compass gcp ssh my-instance --zone us-central1-a --project my-project
 
   # Combine resource type with zone for fastest search
-  compass gcp my-instance --type instance --zone us-central1-a --project my-project`,
+  compass gcp ssh my-instance --type instance --zone us-central1-a --project my-project`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		instanceName := args[0]
@@ -139,7 +148,9 @@ Examples:
 func init() {
 	// Use PersistentFlags for project so it's inherited by subcommands like connectivity-test
 	gcpCmd.PersistentFlags().StringVarP(&project, "project", "p", "", "GCP project ID")
-	gcpCmd.Flags().StringVarP(&zone, "zone", "z", "", "GCP zone (auto-discovered if not specified)")
-	gcpCmd.Flags().StringVarP(&resourceType, "type", "t", "", "Resource type: 'instance' or 'mig' (auto-detected if not specified)")
-	gcpCmd.Flags().StringSliceVar(&sshFlags, "ssh-flag", []string{}, "Additional SSH flags to pass to the SSH command (can be used multiple times)")
+	gcpSshCmd.Flags().StringVarP(&zone, "zone", "z", "", "GCP zone (auto-discovered if not specified)")
+	gcpSshCmd.Flags().StringVarP(&resourceType, "type", "t", "", "Resource type: 'instance' or 'mig' (auto-detected if not specified)")
+	gcpSshCmd.Flags().StringSliceVar(&sshFlags, "ssh-flag", []string{}, "Additional SSH flags to pass to the SSH command (can be used multiple times)")
+
+	gcpCmd.AddCommand(gcpSshCmd)
 }
