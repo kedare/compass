@@ -7,6 +7,7 @@ import (
 	"net"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/kedare/compass/internal/gcp"
 	"github.com/kedare/compass/internal/logger"
@@ -193,6 +194,24 @@ func executeLookupAcrossClients(ctx context.Context, ip string, clients []*gcp.C
 	progressCh := make(chan string, len(clients))
 	resultCh := make(chan lookupResult, len(clients))
 	waitErrCh := make(chan error, 1)
+	projectSpinners := make(map[string]*output.Spinner)
+	var projectMu sync.Mutex
+
+	stopAllProjectSpinners := func(finalize func(*output.Spinner)) {
+		projectMu.Lock()
+		spinners := make([]*output.Spinner, 0, len(projectSpinners))
+		for key, sp := range projectSpinners {
+			if sp != nil {
+				spinners = append(spinners, sp)
+			}
+			delete(projectSpinners, key)
+		}
+		projectMu.Unlock()
+
+		for _, sp := range spinners {
+			finalize(sp)
+		}
+	}
 
 	for _, client := range clients {
 		client := client
@@ -249,6 +268,9 @@ loop:
 		case <-ctxDone:
 			outcome.canceled = true
 			cancel()
+			stopAllProjectSpinners(func(sp *output.Spinner) {
+				sp.Fail("Lookup canceled")
+			})
 			break loop
 		case projectID, ok := <-progressCh:
 			if !ok {
@@ -256,6 +278,17 @@ loop:
 				continue
 			}
 			started++
+			projectMu.Lock()
+			projSpinner, exists := projectSpinners[projectID]
+			if !exists {
+				projSpinner = output.NewSpinner(fmt.Sprintf("Scanning project %s", projectID))
+				projSpinner.Start()
+				projectSpinners[projectID] = projSpinner
+			} else {
+				projSpinner.Update(fmt.Sprintf("Scanning project %s", projectID))
+			}
+			projectMu.Unlock()
+
 			if spin != nil {
 				spin.Update(fmt.Sprintf("Scanning project %s (%d/%d started)", projectID, started, total))
 			}
@@ -267,10 +300,19 @@ loop:
 
 			processed++
 
+			projectID := res.client.ProjectID()
+			projectMu.Lock()
+			projSpinner := projectSpinners[projectID]
+			delete(projectSpinners, projectID)
+			projectMu.Unlock()
+
 			if res.err != nil {
 				if isContextError(res.err) {
 					outcome.canceled = true
 					cancel()
+					if projSpinner != nil {
+						projSpinner.Fail("Lookup canceled")
+					}
 					break loop
 				}
 
@@ -278,12 +320,23 @@ loop:
 				if spin != nil {
 					spin.Update(fmt.Sprintf("Skipped project %s (%d/%d done)", res.client.ProjectID(), processed, total))
 				}
+				if projSpinner != nil {
+					projSpinner.Fail(fmt.Sprintf("Failed: %v", res.err))
+				}
 
 				continue
 			}
 
 			if spin != nil {
 				spin.Update(fmt.Sprintf("Completed project %s (%d/%d done)", res.client.ProjectID(), processed, total))
+			}
+
+			if projSpinner != nil {
+				summary := "Lookup complete"
+				if len(res.associations) == 0 {
+					summary = "No results"
+				}
+				projSpinner.Success(fmt.Sprintf("%s (%s)", projectID, summary))
 			}
 
 			outcome.hadSuccess = true
@@ -304,6 +357,10 @@ loop:
 	} else if waitErr != nil {
 		logger.Log.Warnf("Lookup workers encountered an error: %v", waitErr)
 	}
+
+	stopAllProjectSpinners(func(sp *output.Spinner) {
+		sp.Stop()
+	})
 
 	outcome.results = results
 	outcome.successClients = successClients
