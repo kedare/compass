@@ -86,6 +86,8 @@ func runVPNGet(ctx context.Context, name string) {
 			logger.Log.Fatalf("Failed to render VPN tunnel: %v", err)
 		}
 	}
+
+	client.RememberProject()
 }
 
 func init() {

@@ -7,7 +7,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/kedare/compass/internal/cache"
 	"github.com/kedare/compass/internal/logger"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/compute/v1"
 )
 
@@ -23,6 +25,8 @@ const (
 	IPAssociationForwardingRule IPAssociationKind = "forwarding_rule"
 	// IPAssociationAddress indicates the IP is reserved as a standalone address resource.
 	IPAssociationAddress IPAssociationKind = "address"
+	// IPAssociationSubnet indicates the IP falls within a subnet CIDR range.
+	IPAssociationSubnet IPAssociationKind = "subnet_range"
 )
 
 // IPAssociation captures metadata about a resource that owns or references an IP address.
@@ -58,20 +62,85 @@ func (c *Client) LookupIPAddress(ctx context.Context, ip string) ([]IPAssociatio
 		ctx = context.Background()
 	}
 
-	results := make([]IPAssociation, 0)
-	seen := make(map[string]struct{})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(3)
+
 	canonicalIP := targetIP.String()
 
-	if err := c.collectInstanceIPMatches(ctx, targetIP, canonicalIP, &results, seen); err != nil {
-		return nil, fmt.Errorf("failed to inspect instances: %w", err)
+	var (
+		instanceResults   []IPAssociation
+		forwardingResults []IPAssociation
+		addressResults    []IPAssociation
+		subnetResults     []IPAssociation
+	)
+
+	group.Go(func() error {
+		results, err := c.collectInstanceIPMatches(groupCtx, targetIP, canonicalIP)
+		if err != nil {
+			return fmt.Errorf("failed to inspect instances: %w", err)
+		}
+		instanceResults = results
+
+		return nil
+	})
+
+	group.Go(func() error {
+		results, err := c.collectForwardingRuleMatches(groupCtx, targetIP, canonicalIP)
+		if err != nil {
+			return fmt.Errorf("failed to inspect forwarding rules: %w", err)
+		}
+		forwardingResults = results
+
+		return nil
+	})
+
+	group.Go(func() error {
+		results, err := c.collectAddressMatches(groupCtx, targetIP, canonicalIP)
+		if err != nil {
+			return fmt.Errorf("failed to inspect addresses: %w", err)
+		}
+		addressResults = results
+
+		return nil
+	})
+
+	if targetIP.IsPrivate() {
+		group.Go(func() error {
+			results, err := c.collectSubnetMatches(groupCtx, targetIP, canonicalIP)
+			if err != nil {
+				return fmt.Errorf("failed to inspect subnets: %w", err)
+			}
+			subnetResults = results
+
+			return nil
+		})
 	}
 
-	if err := c.collectForwardingRuleMatches(ctx, targetIP, canonicalIP, &results, seen); err != nil {
-		return nil, fmt.Errorf("failed to inspect forwarding rules: %w", err)
+	if err := group.Wait(); err != nil {
+		return nil, err
 	}
 
-	if err := c.collectAddressMatches(ctx, targetIP, canonicalIP, &results, seen); err != nil {
-		return nil, fmt.Errorf("failed to inspect addresses: %w", err)
+	results := make([]IPAssociation, 0, len(instanceResults)+len(forwardingResults)+len(addressResults)+len(subnetResults))
+	seen := make(map[string]struct{}, len(results))
+
+	for _, association := range instanceResults {
+		appendAssociation(&results, seen, association)
+	}
+
+	for _, association := range forwardingResults {
+		appendAssociation(&results, seen, association)
+	}
+
+	for _, association := range addressResults {
+		appendAssociation(&results, seen, association)
+	}
+
+	for _, association := range subnetResults {
+		appendAssociation(&results, seen, association)
 	}
 
 	sort.Slice(results, func(i, j int) bool {
@@ -89,17 +158,33 @@ func (c *Client) LookupIPAddress(ctx context.Context, ip string) ([]IPAssociatio
 	return results, nil
 }
 
-func (c *Client) collectInstanceIPMatches(ctx context.Context, target net.IP, canonical string, results *[]IPAssociation, seen map[string]struct{}) error {
+// collectInstanceIPMatches gathers instance-level IP matches across all zones in the project.
+func (c *Client) collectInstanceIPMatches(ctx context.Context, target net.IP, canonical string) ([]IPAssociation, error) {
+	results := make([]IPAssociation, 0)
+	seen := make(map[string]struct{})
+
 	call := c.service.Instances.AggregatedList(c.project).Context(ctx)
 
-	return call.Pages(ctx, func(page *compute.InstanceAggregatedList) error {
+	err := call.Pages(ctx, func(page *compute.InstanceAggregatedList) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		for scope, scopedList := range page.Items {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+
 			if scopedList.Instances == nil {
 				continue
 			}
 
 			location := locationFromScope(scope)
 			for _, inst := range scopedList.Instances {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+
 				if inst == nil {
 					continue
 				}
@@ -116,7 +201,7 @@ func (c *Client) collectInstanceIPMatches(ctx context.Context, target net.IP, ca
 							ResourceLink: inst.SelfLink,
 						}
 
-						appendAssociation(results, seen, association)
+						appendAssociation(&results, seen, association)
 					}
 				}
 			}
@@ -124,19 +209,41 @@ func (c *Client) collectInstanceIPMatches(ctx context.Context, target net.IP, ca
 
 		return nil
 	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return results, nil
 }
 
-func (c *Client) collectForwardingRuleMatches(ctx context.Context, target net.IP, canonical string, results *[]IPAssociation, seen map[string]struct{}) error {
+// collectForwardingRuleMatches adds forwarding rule associations that match the target IP.
+func (c *Client) collectForwardingRuleMatches(ctx context.Context, target net.IP, canonical string) ([]IPAssociation, error) {
+	results := make([]IPAssociation, 0)
+	seen := make(map[string]struct{})
+
 	call := c.service.ForwardingRules.AggregatedList(c.project).Context(ctx)
 
-	return call.Pages(ctx, func(page *compute.ForwardingRuleAggregatedList) error {
+	err := call.Pages(ctx, func(page *compute.ForwardingRuleAggregatedList) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		for scope, scopedList := range page.Items {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+
 			if len(scopedList.ForwardingRules) == 0 {
 				continue
 			}
 
 			location := locationFromScope(scope)
 			for _, rule := range scopedList.ForwardingRules {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+
 				if rule == nil {
 					continue
 				}
@@ -155,25 +262,47 @@ func (c *Client) collectForwardingRuleMatches(ctx context.Context, target net.IP
 					ResourceLink: rule.SelfLink,
 				}
 
-				appendAssociation(results, seen, association)
+				appendAssociation(&results, seen, association)
 			}
 		}
 
 		return nil
 	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return results, nil
 }
 
-func (c *Client) collectAddressMatches(ctx context.Context, target net.IP, canonical string, results *[]IPAssociation, seen map[string]struct{}) error {
+// collectAddressMatches appends reserved addresses that map to the target IP.
+func (c *Client) collectAddressMatches(ctx context.Context, target net.IP, canonical string) ([]IPAssociation, error) {
+	results := make([]IPAssociation, 0)
+	seen := make(map[string]struct{})
+
 	call := c.service.Addresses.AggregatedList(c.project).Context(ctx)
 
-	return call.Pages(ctx, func(page *compute.AddressAggregatedList) error {
+	err := call.Pages(ctx, func(page *compute.AddressAggregatedList) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		for scope, scopedList := range page.Items {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+
 			if len(scopedList.Addresses) == 0 {
 				continue
 			}
 
 			location := locationFromScope(scope)
 			for _, addr := range scopedList.Addresses {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+
 				if addr == nil {
 					continue
 				}
@@ -192,19 +321,121 @@ func (c *Client) collectAddressMatches(ctx context.Context, target net.IP, canon
 					ResourceLink: addr.SelfLink,
 				}
 
-				appendAssociation(results, seen, association)
+				appendAssociation(&results, seen, association)
 			}
 		}
 
 		return nil
 	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return results, nil
 }
 
+func (c *Client) collectSubnetMatches(ctx context.Context, target net.IP, canonical string) ([]IPAssociation, error) {
+	results := make([]IPAssociation, 0)
+	seen := make(map[string]struct{})
+
+	call := c.service.Subnetworks.AggregatedList(c.project).Context(ctx)
+
+	err := call.Pages(ctx, func(page *compute.SubnetworkAggregatedList) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		for scope, scopedList := range page.Items {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+
+			if scopedList.Subnetworks == nil {
+				continue
+			}
+
+			location := locationFromScope(scope)
+			for _, subnet := range scopedList.Subnetworks {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+
+				if subnet == nil {
+					continue
+				}
+
+				if c.cache != nil {
+					secondary := make([]cache.SubnetSecondaryRange, 0, len(subnet.SecondaryIpRanges))
+					for _, sr := range subnet.SecondaryIpRanges {
+						if sr == nil {
+							continue
+						}
+
+						cidr := strings.TrimSpace(sr.IpCidrRange)
+						if cidr == "" {
+							continue
+						}
+
+						secondary = append(secondary, cache.SubnetSecondaryRange{
+							Name: strings.TrimSpace(sr.RangeName),
+							CIDR: cidr,
+						})
+					}
+
+					entry := &cache.SubnetEntry{
+						Project:         c.project,
+						Network:         lastComponent(subnet.Network),
+						Region:          lastComponent(subnet.Region),
+						Name:            subnet.Name,
+						SelfLink:        strings.TrimSpace(subnet.SelfLink),
+						PrimaryCIDR:     strings.TrimSpace(subnet.IpCidrRange),
+						SecondaryRanges: secondary,
+						IPv6CIDR:        strings.TrimSpace(subnet.Ipv6CidrRange),
+						Gateway:         strings.TrimSpace(subnet.GatewayAddress),
+					}
+
+					if err := c.cache.RememberSubnet(entry); err != nil {
+						logger.Log.Debugf("Failed to cache subnet %s in project %s: %v", subnet.Name, c.project, err)
+					}
+				}
+
+				matched, detail := subnetMatchDetails(subnet, target)
+				if !matched {
+					continue
+				}
+
+				association := IPAssociation{
+					Project:      c.project,
+					Kind:         IPAssociationSubnet,
+					Resource:     subnet.Name,
+					Location:     location,
+					IPAddress:    canonical,
+					Details:      detail,
+					ResourceLink: subnet.SelfLink,
+				}
+
+				appendAssociation(&results, seen, association)
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return results, nil
+}
+
+// ipMatch captures the association kind and descriptive text for a matched interface.
 type ipMatch struct {
 	kind    IPAssociationKind
 	details string
 }
 
+// instanceIPMatches returns instance interface matches for the provided IP address.
 func instanceIPMatches(inst *compute.Instance, target net.IP) []ipMatch {
 	if inst == nil {
 		return nil
@@ -218,14 +449,29 @@ func instanceIPMatches(inst *compute.Instance, target net.IP) []ipMatch {
 		}
 
 		if equalIP(nic.NetworkIP, target) || equalIP(nic.Ipv6Address, target) {
-			desc := "Internal interface"
+			descParts := []string{"Internal interface"}
 			if nic.Name != "" {
-				desc = fmt.Sprintf("Internal interface %s", nic.Name)
+				descParts[0] = fmt.Sprintf("Internal interface %s", nic.Name)
+			}
+
+			networkName := lastComponent(nic.Network)
+			if networkName != "" {
+				descParts = append(descParts, fmt.Sprintf("network=%s", networkName))
+			}
+
+			subnetName := lastComponent(nic.Subnetwork)
+			if subnetName != "" {
+				descParts = append(descParts, fmt.Sprintf("subnet=%s", subnetName))
+			}
+
+			subnetLink := strings.TrimSpace(nic.Subnetwork)
+			if subnetLink != "" {
+				descParts = append(descParts, fmt.Sprintf("subnet_link=%s", subnetLink))
 			}
 
 			matches = append(matches, ipMatch{
 				kind:    IPAssociationInstanceInternal,
-				details: desc,
+				details: strings.Join(descParts, ", "),
 			})
 		}
 
@@ -251,12 +497,13 @@ func instanceIPMatches(inst *compute.Instance, target net.IP) []ipMatch {
 	return matches
 }
 
+// describeForwardingRule summarizes forwarding rule metadata for display.
 func describeForwardingRule(rule *compute.ForwardingRule) string {
 	if rule == nil {
 		return ""
 	}
 
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 6)
 	if scheme := strings.ToLower(strings.TrimSpace(rule.LoadBalancingScheme)); scheme != "" {
 		parts = append(parts, fmt.Sprintf("scheme=%s", scheme))
 	}
@@ -273,6 +520,14 @@ func describeForwardingRule(rule *compute.ForwardingRule) string {
 		parts = append(parts, fmt.Sprintf("backend=%s", lastComponent(rule.BackendService)))
 	}
 
+	if rule.Network != "" {
+		parts = append(parts, fmt.Sprintf("network=%s", lastComponent(rule.Network)))
+	}
+
+	if rule.Subnetwork != "" {
+		parts = append(parts, fmt.Sprintf("subnet=%s", lastComponent(rule.Subnetwork)))
+	}
+
 	if len(parts) == 0 {
 		return "Forwarding rule"
 	}
@@ -280,12 +535,13 @@ func describeForwardingRule(rule *compute.ForwardingRule) string {
 	return strings.Join(parts, ", ")
 }
 
+// describeAddress creates a printable summary of an address resource.
 func describeAddress(addr *compute.Address) string {
 	if addr == nil {
 		return ""
 	}
 
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 8)
 	if addr.Status != "" {
 		parts = append(parts, fmt.Sprintf("status=%s", strings.ToLower(addr.Status)))
 	}
@@ -302,6 +558,18 @@ func describeAddress(addr *compute.Address) string {
 		parts = append(parts, fmt.Sprintf("type=%s", strings.ToLower(addr.AddressType)))
 	}
 
+	if addr.Region != "" {
+		parts = append(parts, fmt.Sprintf("region=%s", lastComponent(addr.Region)))
+	}
+
+	if addr.Network != "" {
+		parts = append(parts, fmt.Sprintf("network=%s", lastComponent(addr.Network)))
+	}
+
+	if addr.Subnetwork != "" {
+		parts = append(parts, fmt.Sprintf("subnet=%s", lastComponent(addr.Subnetwork)))
+	}
+
 	if len(parts) == 0 {
 		return "Reserved address"
 	}
@@ -309,6 +577,7 @@ func describeAddress(addr *compute.Address) string {
 	return strings.Join(parts, ", ")
 }
 
+// locationFromScope extracts a human-friendly location from an aggregated API scope.
 func locationFromScope(scope string) string {
 	scope = strings.TrimSpace(scope)
 	if scope == "" {
@@ -329,6 +598,7 @@ func locationFromScope(scope string) string {
 	return scope
 }
 
+// lastComponent returns the trailing segment of a resource URL.
 func lastComponent(resourceURL string) string {
 	resourceURL = strings.TrimSpace(resourceURL)
 	if resourceURL == "" {
@@ -342,6 +612,7 @@ func lastComponent(resourceURL string) string {
 	return resourceURL
 }
 
+// equalIP compares a string IP to the provided parsed IP value.
 func equalIP(value string, target net.IP) bool {
 	if target == nil {
 		return false
@@ -355,6 +626,86 @@ func equalIP(value string, target net.IP) bool {
 	return parsed.Equal(target)
 }
 
+func ipInCIDR(target net.IP, cidr string) bool {
+	if target == nil {
+		return false
+	}
+
+	cidr = strings.TrimSpace(cidr)
+	if cidr == "" {
+		return false
+	}
+
+	_, network, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return false
+	}
+
+	return network.Contains(target)
+}
+
+func subnetMatchDetails(subnet *compute.Subnetwork, target net.IP) (bool, string) {
+	if subnet == nil || target == nil {
+		return false, ""
+	}
+
+	var (
+		matchedCIDR string
+		source      string
+	)
+
+	if cidr := strings.TrimSpace(subnet.IpCidrRange); cidr != "" && ipInCIDR(target, cidr) {
+		matchedCIDR = cidr
+		source = "primary"
+	}
+
+	if matchedCIDR == "" {
+		for _, sec := range subnet.SecondaryIpRanges {
+			if sec == nil {
+				continue
+			}
+
+			if cidr := strings.TrimSpace(sec.IpCidrRange); cidr != "" && ipInCIDR(target, cidr) {
+				matchedCIDR = cidr
+				if sec.RangeName != "" {
+					source = fmt.Sprintf("secondary:%s", sec.RangeName)
+				} else {
+					source = "secondary"
+				}
+				break
+			}
+		}
+	}
+
+	if matchedCIDR == "" {
+		if cidr := strings.TrimSpace(subnet.Ipv6CidrRange); cidr != "" && ipInCIDR(target, cidr) {
+			matchedCIDR = cidr
+			source = "ipv6"
+		}
+	}
+
+	if matchedCIDR == "" {
+		return false, ""
+	}
+
+	detailParts := make([]string, 0, 4)
+	if networkName := lastComponent(subnet.Network); networkName != "" {
+		detailParts = append(detailParts, fmt.Sprintf("network=%s", networkName))
+	}
+
+	detailParts = append(detailParts, fmt.Sprintf("cidr=%s", matchedCIDR))
+	if source != "" {
+		detailParts = append(detailParts, fmt.Sprintf("range=%s", source))
+	}
+
+	if subnet.GatewayAddress != "" && equalIP(subnet.GatewayAddress, target) {
+		detailParts = append(detailParts, "gateway=true")
+	}
+
+	return true, strings.Join(detailParts, ", ")
+}
+
+// appendAssociation adds a unique association to the results slice while preventing duplicates.
 func appendAssociation(results *[]IPAssociation, seen map[string]struct{}, association IPAssociation) {
 	key := fmt.Sprintf("%s|%s|%s|%s", association.Project, association.Kind, association.Resource, association.Location)
 	if _, exists := seen[key]; exists {

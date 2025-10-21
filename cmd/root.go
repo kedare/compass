@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/kedare/compass/internal/cache"
 	"github.com/kedare/compass/internal/logger"
 	"github.com/spf13/cobra"
 )
 
-var logLevel string
+var (
+	logLevel string
+	useCache bool
+)
 
 var rootCmd = &cobra.Command{
 	Use:     "compass",
@@ -26,6 +30,11 @@ diagnostics without leaving the CLI.`,
 			os.Exit(1)
 		}
 		logger.Log.Debugf("Log level set to: %s", logLevel)
+
+		cache.SetEnabled(useCache)
+		if !useCache {
+			logger.Log.Debug("Global cache disabled via --cache=false")
+		}
 	},
 }
 
@@ -43,5 +52,6 @@ func ExecuteContext(ctx context.Context) error {
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "Set the logging level (trace, debug, info, warn, error, fatal, panic)")
+	rootCmd.PersistentFlags().BoolVar(&useCache, "cache", true, "Enable cache usage across commands")
 	rootCmd.AddCommand(gcpCmd)
 }
