@@ -37,11 +37,12 @@ jobs:
       - name: Test race conditions
         run: task test-race
 
-      - name: Build
-        run: task build
+      - name: Build release binaries
+        run: task build-all
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: ./compass
+          files: |
+            dist/*
