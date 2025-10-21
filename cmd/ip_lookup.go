@@ -42,6 +42,8 @@ projects are scanned automatically.`,
 	},
 }
 
+var loadCacheFunc = gcp.LoadCache
+
 func init() {
 	// init registers the IP lookup command on the parent IP command and configures flags.
 	ipCmd.AddCommand(ipLookupCmd)
@@ -139,7 +141,7 @@ func preferredProjectsForIP(ip net.IP) []string {
 		return nil
 	}
 
-	cacheInst, err := gcp.LoadCache()
+	cacheInst, err := loadCacheFunc()
 	if err != nil || cacheInst == nil {
 		return nil
 	}

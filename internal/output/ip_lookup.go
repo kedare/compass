@@ -48,10 +48,10 @@ func displayIPTable(results []gcp.IPAssociation) error {
 			ipValue = assoc.IPAddress
 		}
 
-		detail := assoc.Details
-		note := formatDetailNote(assoc, subnetCIDRs)
-		if note == "" {
-			note = assoc.Details
+		detail := detailForDisplay(assoc)
+		note, hasNote := formatDetailNote(assoc, subnetCIDRs)
+		if !hasNote {
+			note = ""
 		}
 
 		t.AppendRow(table.Row{
@@ -84,7 +84,16 @@ func displayIPText(results []gcp.IPAssociation) error {
 		fmt.Printf("- %s • %s\n", assoc.Project, describeAssociationKind(assoc.Kind))
 		fmt.Printf("  Resource: %s\n", assoc.Resource)
 
-		if ipValue := formatIPWithMask(assoc, subnetCIDRs); ipValue != "" {
+		if assoc.Kind == gcp.IPAssociationSubnet {
+			cidr := extractDetailComponent(assoc.Details, "cidr")
+			if assoc.Resource != "" && cidr != "" {
+				fmt.Printf("  CIDR:     %s\n", cidr)
+			} else if assoc.Resource != "" {
+				fmt.Printf("  Subnet:   %s\n", assoc.Resource)
+			} else if cidr != "" {
+				fmt.Printf("  Subnet:   %s\n", cidr)
+			}
+		} else if ipValue := formatIPWithMask(assoc, subnetCIDRs); ipValue != "" {
 			fmt.Printf("  IP:       %s\n", ipValue)
 		}
 
@@ -93,11 +102,11 @@ func displayIPText(results []gcp.IPAssociation) error {
 			fmt.Printf("  Path:     %s\n", path)
 		}
 
-		if assoc.Details != "" {
-			fmt.Printf("  Details:  %s\n", assoc.Details)
+		if detail := detailForDisplay(assoc); detail != "" {
+			fmt.Printf("  Details:  %s\n", detail)
 		}
 
-		if note := formatDetailNote(assoc, subnetCIDRs); note != "" {
+		if note, hasNote := formatDetailNote(assoc, subnetCIDRs); hasNote {
 			fmt.Printf("  Notes:    %s\n", note)
 		}
 
@@ -162,33 +171,39 @@ func buildSubnetCIDRMap(results []gcp.IPAssociation) map[string]string {
 }
 
 func formatIPWithMask(assoc gcp.IPAssociation, subnetCIDRs map[string]string) string {
-	ip := strings.TrimSpace(assoc.IPAddress)
-	if ip == "" {
-		return ""
-	}
-
 	var cidr string
 	switch assoc.Kind {
 	case gcp.IPAssociationSubnet:
 		cidr = extractDetailComponent(assoc.Details, "cidr")
+		if cidr != "" {
+			return cidr
+		}
+		if assoc.Resource != "" {
+			return assoc.Resource
+		}
+		return strings.TrimSpace(assoc.IPAddress)
 	default:
+		ip := strings.TrimSpace(assoc.IPAddress)
+		if ip == "" {
+			return ""
+		}
+
 		subnet := extractDetailComponent(assoc.Details, "subnet")
 		subnetLink := extractDetailComponent(assoc.Details, "subnet_link")
 		cidr = lookupSubnetCIDR(subnetCIDRs, assoc.Project, assoc.Location, subnet, subnetLink)
 		if cidr == "" {
 			cidr = extractDetailComponent(assoc.Details, "cidr")
 		}
-	}
+		if cidr == "" {
+			return ip
+		}
 
-	if cidr == "" {
+		if mask := maskBits(cidr); mask != "" {
+			return fmt.Sprintf("%s/%s", ip, mask)
+		}
+
 		return ip
 	}
-
-	if mask := maskBits(cidr); mask != "" {
-		return fmt.Sprintf("%s/%s", ip, mask)
-	}
-
-	return ip
 }
 
 func maskBits(cidr string) string {
@@ -233,36 +248,38 @@ func formatAssociationPath(assoc gcp.IPAssociation) string {
 	return strings.Join(filterSegments(segments), " > ")
 }
 
-func formatDetailNote(assoc gcp.IPAssociation, subnetCIDRs map[string]string) string {
+func formatDetailNote(assoc gcp.IPAssociation, subnetCIDRs map[string]string) (string, bool) {
 	detail := strings.TrimSpace(assoc.Details)
+	displayDetail := detailForDisplay(assoc)
+	var note string
+
 	switch assoc.Kind {
 	case gcp.IPAssociationSubnet:
 		if strings.Contains(detail, "gateway=true") {
 			cidr := extractDetailComponent(detail, "cidr")
 			if cidr != "" {
-				return fmt.Sprintf("Google Cloud default gateway for subnet %s (%s)", assoc.Resource, cidr)
+				note = fmt.Sprintf("Google Cloud default gateway for subnet %s (%s)", assoc.Resource, cidr)
+			} else {
+				note = fmt.Sprintf("Google Cloud default gateway for subnet %s", assoc.Resource)
 			}
-			return fmt.Sprintf("Google Cloud default gateway for subnet %s", assoc.Resource)
+			break
 		}
 
 		cidr := extractDetailComponent(detail, "cidr")
 		if cidr != "" {
 			rangeType := humanizeRange(extractDetailComponent(detail, "range"))
 			if rangeType != "" {
-				note := fmt.Sprintf("Subnet range %s (%s)", cidr, rangeType)
-				if extra := classifySpecialIP(assoc, subnetCIDRs); extra != "" {
-					note = note + "; " + extra
-				}
-				return note
+				note = fmt.Sprintf("Subnet range %s (%s)", cidr, rangeType)
+			} else {
+				note = fmt.Sprintf("Subnet range %s", cidr)
 			}
-			note := fmt.Sprintf("Subnet range %s", cidr)
 			if extra := classifySpecialIP(assoc, subnetCIDRs); extra != "" {
 				note = note + "; " + extra
 			}
-			return note
+			break
 		}
 
-		note := stripDetailKeys(detail, []string{"network", "cidr", "range"})
+		note = stripDetailKeys(detail, []string{"network", "cidr", "range", "subnet_link", "region"})
 		if extra := classifySpecialIP(assoc, subnetCIDRs); extra != "" {
 			if note != "" {
 				note = note + "; " + extra
@@ -270,9 +287,8 @@ func formatDetailNote(assoc gcp.IPAssociation, subnetCIDRs map[string]string) st
 				note = extra
 			}
 		}
-		return note
 	default:
-		clean := stripDetailKeys(detail, []string{"network", "subnet", "cidr"})
+		clean := stripDetailKeys(detail, []string{"network", "subnet", "cidr", "subnet_link", "region"})
 		clean = strings.ReplaceAll(clean, "gateway=true", "Google Cloud default gateway for this subnet")
 		extra := classifySpecialIP(assoc, subnetCIDRs)
 		if extra != "" {
@@ -282,8 +298,267 @@ func formatDetailNote(assoc gcp.IPAssociation, subnetCIDRs map[string]string) st
 				clean = extra
 			}
 		}
-		return strings.TrimSpace(clean)
+		note = strings.TrimSpace(clean)
 	}
+
+	note = strings.TrimSpace(note)
+	if note == "" {
+		return "", false
+	}
+
+	if normalizeDetailValue(displayDetail) == normalizeDetailValue(note) {
+		return "", false
+	}
+
+	if segment := firstDetailSegment(displayDetail); segment != "" && normalizeDetailValue(segment) == normalizeDetailValue(note) {
+		return "", false
+	}
+
+	if detail != "" && normalizeDetailValue(detail) == normalizeDetailValue(note) {
+		return "", false
+	}
+
+	return note, true
+}
+
+func normalizeDetailValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+
+	replacer := strings.NewReplacer(
+		";", ",",
+		" ", "",
+		"\t", "",
+		"\n", "",
+		"\r", "",
+	)
+
+	value = replacer.Replace(strings.ToLower(value))
+
+	return value
+}
+
+func detailForDisplay(assoc gcp.IPAssociation) string {
+	detail := strings.TrimSpace(assoc.Details)
+	if detail == "" {
+		return ""
+	}
+
+	if assoc.Kind == gcp.IPAssociationSubnet {
+		return detailForSubnet(assoc, detail)
+	}
+
+	cleaned := stripDetailKeys(detail, []string{"subnet_link", "network", "subnet", "region"})
+
+	return strings.TrimSpace(cleaned)
+}
+
+func detailForSubnet(assoc gcp.IPAssociation, detail string) string {
+	parts := make([]string, 0, 4)
+
+	rangeComponent := strings.TrimSpace(extractDetailComponent(detail, "range"))
+	if rangeComponent != "" {
+		if human := humanizeRange(rangeComponent); human != "" {
+			rangeComponent = human
+		}
+		parts = append(parts, fmt.Sprintf("range=%s", rangeComponent))
+	}
+
+	if usable := usableRangeString(extractDetailComponent(detail, "cidr")); usable != "" {
+		parts = append(parts, fmt.Sprintf("usable=%s", usable))
+	}
+
+	gateway := extractDetailComponent(detail, "gateway_ip")
+	if gateway == "" && strings.Contains(detail, "gateway=true") {
+		gateway = strings.TrimSpace(assoc.IPAddress)
+	}
+	if gateway != "" {
+		parts = append(parts, fmt.Sprintf("gateway=%s", gateway))
+	}
+
+	extra := stripDetailKeys(detail, []string{
+		"subnet_link",
+		"network",
+		"subnet",
+		"region",
+		"cidr",
+		"gateway_ip",
+		"range",
+	})
+
+	for _, segment := range strings.Split(extra, ",") {
+		trimmed := strings.TrimSpace(segment)
+		if trimmed == "" {
+			continue
+		}
+		if strings.EqualFold(trimmed, "gateway=true") {
+			continue
+		}
+		parts = append(parts, trimmed)
+	}
+
+	return strings.Join(parts, ", ")
+}
+
+func usableRangeString(cidr string) string {
+	cidr = strings.TrimSpace(cidr)
+	if cidr == "" {
+		return ""
+	}
+
+	_, network, err := net.ParseCIDR(cidr)
+	if err != nil || network == nil {
+		return ""
+	}
+
+	baseIP := network.IP
+	if baseIP == nil {
+		return ""
+	}
+
+	if ipv4 := baseIP.To4(); ipv4 != nil {
+		start := cloneIP(ipv4)
+		end := broadcastAddr(network)
+		if end == nil {
+			return ""
+		}
+		end = cloneIP(end.To4())
+		if end == nil {
+			return ""
+		}
+
+		ones, bits := network.Mask.Size()
+		if bits != net.IPv4len*8 || ones < 0 {
+			return ""
+		}
+
+		switch {
+		case ones <= 30:
+			first := incrementIP(start)
+			last := decrementIP(end)
+			if first == nil || last == nil || compareIPs(first, last) > 0 {
+				return ""
+			}
+			if compareIPs(first, last) == 0 {
+				return net.IP(first).String()
+			}
+
+			return fmt.Sprintf("%s-%s", net.IP(first).String(), net.IP(last).String())
+		case ones == 31:
+			return fmt.Sprintf("%s-%s", net.IP(start).String(), net.IP(end).String())
+		default: // /32
+			return net.IP(start).String()
+		}
+	}
+
+	return ""
+}
+
+func cloneIP(ip net.IP) net.IP {
+	if ip == nil {
+		return nil
+	}
+
+	res := make(net.IP, len(ip))
+	copy(res, ip)
+
+	return res
+}
+
+func incrementIP(ip net.IP) net.IP {
+	if ip == nil {
+		return nil
+	}
+
+	res := cloneIP(ip)
+	for i := len(res) - 1; i >= 0; i-- {
+		res[i]++
+		if res[i] != 0 {
+			break
+		}
+	}
+
+	return res
+}
+
+func decrementIP(ip net.IP) net.IP {
+	if ip == nil {
+		return nil
+	}
+
+	res := cloneIP(ip)
+	for i := len(res) - 1; i >= 0; i-- {
+		if res[i] == 0 {
+			res[i] = 0xff
+			continue
+		}
+		res[i]--
+		break
+	}
+
+	return res
+}
+
+func compareIPs(a, b net.IP) int {
+	if a == nil || b == nil {
+		switch {
+		case a == nil && b == nil:
+			return 0
+		case a == nil:
+			return -1
+		default:
+			return 1
+		}
+	}
+
+	if len(a) != len(b) {
+		if a4 := a.To4(); a4 != nil {
+			a = a4
+		} else {
+			a = a.To16()
+		}
+
+		if b4 := b.To4(); b4 != nil {
+			b = b4
+		} else {
+			b = b.To16()
+		}
+	}
+
+	if len(a) != len(b) {
+		if len(a) < len(b) {
+			return -1
+		}
+
+		return 1
+	}
+
+	for i := 0; i < len(a); i++ {
+		if a[i] < b[i] {
+			return -1
+		}
+
+		if a[i] > b[i] {
+			return 1
+		}
+	}
+
+	return 0
+}
+
+func firstDetailSegment(detail string) string {
+	detail = strings.TrimSpace(detail)
+	if detail == "" {
+		return ""
+	}
+
+	if idx := strings.Index(detail, ","); idx != -1 {
+		return strings.TrimSpace(detail[:idx])
+	}
+
+	return detail
 }
 
 // classifySpecialIP identifies whether the IP is a subnet network or broadcast address.
