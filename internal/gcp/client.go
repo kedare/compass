@@ -70,9 +70,9 @@ type ManagedInstanceGroup struct {
 }
 
 var (
- cacheOnce      sync.Once
- sharedCache    *cache.Cache
- cacheInitError error
+	cacheOnce      sync.Once
+	sharedCache    *cache.Cache
+	cacheInitError error
 )
 
 // getSharedCache returns the process-wide cache instance, creating it once on demand.
