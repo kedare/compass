@@ -49,7 +49,8 @@ func (c *Client) LookupIPAddress(ctx context.Context, ip string) ([]IPAssociatio
 		return nil, fmt.Errorf("ip address is required")
 	}
 
-	if parsed := net.ParseIP(target); parsed == nil {
+	targetIP := net.ParseIP(target)
+	if targetIP == nil {
 		return nil, fmt.Errorf("invalid IP address %q", ip)
 	}
 
@@ -59,16 +60,17 @@ func (c *Client) LookupIPAddress(ctx context.Context, ip string) ([]IPAssociatio
 
 	results := make([]IPAssociation, 0)
 	seen := make(map[string]struct{})
+	canonicalIP := targetIP.String()
 
-	if err := c.collectInstanceIPMatches(ctx, target, &results, seen); err != nil {
+	if err := c.collectInstanceIPMatches(ctx, targetIP, canonicalIP, &results, seen); err != nil {
 		return nil, fmt.Errorf("failed to inspect instances: %w", err)
 	}
 
-	if err := c.collectForwardingRuleMatches(ctx, target, &results, seen); err != nil {
+	if err := c.collectForwardingRuleMatches(ctx, targetIP, canonicalIP, &results, seen); err != nil {
 		return nil, fmt.Errorf("failed to inspect forwarding rules: %w", err)
 	}
 
-	if err := c.collectAddressMatches(ctx, target, &results, seen); err != nil {
+	if err := c.collectAddressMatches(ctx, targetIP, canonicalIP, &results, seen); err != nil {
 		return nil, fmt.Errorf("failed to inspect addresses: %w", err)
 	}
 
@@ -87,7 +89,7 @@ func (c *Client) LookupIPAddress(ctx context.Context, ip string) ([]IPAssociatio
 	return results, nil
 }
 
-func (c *Client) collectInstanceIPMatches(ctx context.Context, target string, results *[]IPAssociation, seen map[string]struct{}) error {
+func (c *Client) collectInstanceIPMatches(ctx context.Context, target net.IP, canonical string, results *[]IPAssociation, seen map[string]struct{}) error {
 	call := c.service.Instances.AggregatedList(c.project).Context(ctx)
 
 	return call.Pages(ctx, func(page *compute.InstanceAggregatedList) error {
@@ -109,7 +111,7 @@ func (c *Client) collectInstanceIPMatches(ctx context.Context, target string, re
 							Kind:         match.kind,
 							Resource:     inst.Name,
 							Location:     location,
-							IPAddress:    target,
+							IPAddress:    canonical,
 							Details:      match.details,
 							ResourceLink: inst.SelfLink,
 						}
@@ -124,7 +126,7 @@ func (c *Client) collectInstanceIPMatches(ctx context.Context, target string, re
 	})
 }
 
-func (c *Client) collectForwardingRuleMatches(ctx context.Context, target string, results *[]IPAssociation, seen map[string]struct{}) error {
+func (c *Client) collectForwardingRuleMatches(ctx context.Context, target net.IP, canonical string, results *[]IPAssociation, seen map[string]struct{}) error {
 	call := c.service.ForwardingRules.AggregatedList(c.project).Context(ctx)
 
 	return call.Pages(ctx, func(page *compute.ForwardingRuleAggregatedList) error {
@@ -139,7 +141,7 @@ func (c *Client) collectForwardingRuleMatches(ctx context.Context, target string
 					continue
 				}
 
-				if strings.TrimSpace(rule.IPAddress) != target {
+				if !equalIP(rule.IPAddress, target) {
 					continue
 				}
 
@@ -148,7 +150,7 @@ func (c *Client) collectForwardingRuleMatches(ctx context.Context, target string
 					Kind:         IPAssociationForwardingRule,
 					Resource:     rule.Name,
 					Location:     location,
-					IPAddress:    target,
+					IPAddress:    canonical,
 					Details:      describeForwardingRule(rule),
 					ResourceLink: rule.SelfLink,
 				}
@@ -161,7 +163,7 @@ func (c *Client) collectForwardingRuleMatches(ctx context.Context, target string
 	})
 }
 
-func (c *Client) collectAddressMatches(ctx context.Context, target string, results *[]IPAssociation, seen map[string]struct{}) error {
+func (c *Client) collectAddressMatches(ctx context.Context, target net.IP, canonical string, results *[]IPAssociation, seen map[string]struct{}) error {
 	call := c.service.Addresses.AggregatedList(c.project).Context(ctx)
 
 	return call.Pages(ctx, func(page *compute.AddressAggregatedList) error {
@@ -176,7 +178,7 @@ func (c *Client) collectAddressMatches(ctx context.Context, target string, resul
 					continue
 				}
 
-				if strings.TrimSpace(addr.Address) != target {
+				if !equalIP(addr.Address, target) {
 					continue
 				}
 
@@ -185,7 +187,7 @@ func (c *Client) collectAddressMatches(ctx context.Context, target string, resul
 					Kind:         IPAssociationAddress,
 					Resource:     addr.Name,
 					Location:     location,
-					IPAddress:    target,
+					IPAddress:    canonical,
 					Details:      describeAddress(addr),
 					ResourceLink: addr.SelfLink,
 				}
@@ -203,7 +205,7 @@ type ipMatch struct {
 	details string
 }
 
-func instanceIPMatches(inst *compute.Instance, target string) []ipMatch {
+func instanceIPMatches(inst *compute.Instance, target net.IP) []ipMatch {
 	if inst == nil {
 		return nil
 	}
@@ -215,7 +217,7 @@ func instanceIPMatches(inst *compute.Instance, target string) []ipMatch {
 			continue
 		}
 
-		if strings.TrimSpace(nic.NetworkIP) == target {
+		if equalIP(nic.NetworkIP, target) || equalIP(nic.Ipv6Address, target) {
 			desc := "Internal interface"
 			if nic.Name != "" {
 				desc = fmt.Sprintf("Internal interface %s", nic.Name)
@@ -232,7 +234,7 @@ func instanceIPMatches(inst *compute.Instance, target string) []ipMatch {
 				continue
 			}
 
-			if strings.TrimSpace(cfg.NatIP) == target {
+			if equalIP(cfg.NatIP, target) {
 				desc := "External interface"
 				if cfg.Name != "" {
 					desc = fmt.Sprintf("External access config %s", cfg.Name)
@@ -338,6 +340,19 @@ func lastComponent(resourceURL string) string {
 	}
 
 	return resourceURL
+}
+
+func equalIP(value string, target net.IP) bool {
+	if target == nil {
+		return false
+	}
+
+	parsed := net.ParseIP(strings.TrimSpace(value))
+	if parsed == nil {
+		return false
+	}
+
+	return parsed.Equal(target)
 }
 
 func appendAssociation(results *[]IPAssociation, seen map[string]struct{}, association IPAssociation) {
