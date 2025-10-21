@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/kedare/compass/internal/cache"
 	"github.com/kedare/compass/internal/logger"
@@ -66,6 +67,36 @@ type ManagedInstanceGroup struct {
 	Name       string
 	Location   string
 	IsRegional bool
+}
+
+var (
+ cacheOnce      sync.Once
+ sharedCache    *cache.Cache
+ cacheInitError error
+)
+
+// getSharedCache returns the process-wide cache instance, creating it once on demand.
+func getSharedCache() (*cache.Cache, error) {
+	if !cache.Enabled() {
+		return nil, nil
+	}
+
+	cacheOnce.Do(func() {
+		if !cache.Enabled() {
+			sharedCache = nil
+			cacheInitError = nil
+
+			return
+		}
+
+		sharedCache, cacheInitError = cache.New()
+	})
+
+	if !cache.Enabled() {
+		return nil, nil
+	}
+
+	return sharedCache, cacheInitError
 }
 
 func NewClient(ctx context.Context, project string) (*Client, error) {
@@ -1231,5 +1262,5 @@ func LoadCache() (*cache.Cache, error) {
 		return nil, nil
 	}
 
-	return cache.New()
+	return getSharedCache()
 }
