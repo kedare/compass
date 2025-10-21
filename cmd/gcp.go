@@ -509,18 +509,27 @@ type lookupProgressBar struct {
 	enabled   bool
 	started   bool
 	closed    bool
-	bar       *pterm.ProgressbarPrinter
+	multi     *progressBarMultiManager
+	bars      map[string]*pterm.ProgressbarPrinter
 	seen      map[string]struct{}
 	completed map[string]struct{}
 }
 
 func newLookupProgressBar(title string) *lookupProgressBar {
 	writer := os.Stderr
+	enabled := term.IsTerminal(int(writer.Fd()))
+
+	var multi *progressBarMultiManager
+	if enabled {
+		multi = defaultProgressBarMulti()
+	}
 
 	return &lookupProgressBar{
 		title:     title,
 		writer:    writer,
-		enabled:   term.IsTerminal(int(writer.Fd())),
+		enabled:   enabled,
+		multi:     multi,
+		bars:      make(map[string]*pterm.ProgressbarPrinter),
 		seen:      make(map[string]struct{}),
 		completed: make(map[string]struct{}),
 	}
@@ -536,25 +545,18 @@ func (p *lookupProgressBar) Start() {
 
 	p.started = true
 
-	if p.enabled {
-		bar, err := pterm.DefaultProgressbar.
-			WithTitle(p.title).
-			WithWriter(p.writer).
-			WithRemoveWhenDone(true).
-			WithTotal(0).
-			Start()
-		if err == nil {
-			p.bar = bar
-
-			return
+	if p.enabled && p.multi != nil {
+		if err := p.multi.start(); err != nil {
+			logger.Log.Debugf("Failed to start multi printer: %v", err)
+			p.enabled = false
 		}
-
-		logger.Log.Debugf("Failed to start progress bar: %v", err)
-		p.enabled = false
 	}
 
-	if _, err := fmt.Fprintf(p.writer, "%s...\n", p.title); err != nil {
-		logger.Log.Debugf("Failed to write progress start: %v", err)
+	// Always print the initial message if progress bar is not enabled
+	if !p.enabled {
+		if _, err := fmt.Fprintf(p.writer, "%s...\n", p.title); err != nil {
+			logger.Log.Debugf("Failed to write progress start: %v", err)
+		}
 	}
 }
 
@@ -572,7 +574,7 @@ func (p *lookupProgressBar) Handle(event gcp.ProgressEvent) {
 
 	key := gcp.FormatProgressKey(event.Key)
 
-	if !p.enabled || p.bar == nil {
+	if !p.enabled || p.multi == nil {
 		if event.Message != "" {
 			if _, err := fmt.Fprintln(p.writer, event.Message); err != nil {
 				logger.Log.Debugf("Failed to write progress update: %v", err)
@@ -582,22 +584,41 @@ func (p *lookupProgressBar) Handle(event gcp.ProgressEvent) {
 		return
 	}
 
+	// Create or get progress bar for this key
 	if key != "" {
-		if _, seen := p.seen[key]; !seen {
-			p.bar.Add(1)
+		bar, exists := p.bars[key]
+
+		if !exists && event.Message != "" {
+			// Create new progress bar for this worker
+			writer := p.multi.newWriter()
+			newBar, err := pterm.DefaultProgressbar.
+				WithTitle(event.Message).
+				WithWriter(writer).
+				WithRemoveWhenDone(true).
+				WithShowCount(false).
+				WithShowPercentage(false).
+				WithTotal(1).
+				Start()
+			if err != nil {
+				logger.Log.Debugf("Failed to create progress bar for %s: %v", key, err)
+				return
+			}
+			p.bars[key] = newBar
 			p.seen[key] = struct{}{}
+		} else if event.Message != "" && bar != nil {
+			// Update existing progress bar title
+			bar.UpdateTitle(event.Message)
 		}
 
+		// Increment progress when done to show completion
 		if event.Done {
 			if _, done := p.completed[key]; !done {
-				p.bar.Increment()
+				if bar, exists := p.bars[key]; exists {
+					bar.Increment()
+				}
 				p.completed[key] = struct{}{}
 			}
 		}
-	}
-
-	if event.Message != "" {
-		p.bar.UpdateTitle(event.Message)
 	}
 }
 
@@ -651,14 +672,96 @@ func (p *lookupProgressBar) stopLocked() {
 		return
 	}
 
-	if p.enabled && p.bar != nil {
-		if _, err := p.bar.Stop(); err != nil {
-			logger.Log.Debugf("Failed to stop progress bar: %v", err)
+	if p.enabled && p.multi != nil {
+		// Count how many lines we need to clear (bars + 1 for the "Discovering..." line)
+		numBars := len(p.bars)
+
+		// First increment all bars to complete them (triggers removal with RemoveWhenDone)
+		for _, bar := range p.bars {
+			bar.Increment()
 		}
-		p.bar = nil
+
+		// Stop all individual progress bars
+		for _, bar := range p.bars {
+			if _, err := bar.Stop(); err != nil {
+				logger.Log.Debugf("Failed to stop progress bar: %v", err)
+			}
+		}
+		p.bars = make(map[string]*pterm.ProgressbarPrinter)
+
+		// Stop the multi printer
+		p.multi.stop()
+
+		// Clear the lines left by the progress bars + the initial message line
+		// We need to clear numBars + 1 (for "Discovering instances..." message)
+		linesToClear := numBars + 1
+		for i := 0; i < linesToClear; i++ {
+			fmt.Fprintf(p.writer, "\033[1A\033[2K")
+		}
 	}
 
 	p.closed = true
+}
+
+// progressBarMultiManager manages multiple concurrent progress bars
+type progressBarMultiManager struct {
+	mu      sync.Mutex
+	printer *pterm.MultiPrinter
+	started bool
+}
+
+var (
+	progressBarMultiOnce   sync.Once
+	globalProgressBarMulti *progressBarMultiManager
+)
+
+func defaultProgressBarMulti() *progressBarMultiManager {
+	progressBarMultiOnce.Do(func() {
+		printer := pterm.DefaultMultiPrinter
+		printer.SetWriter(os.Stderr)
+		globalProgressBarMulti = &progressBarMultiManager{
+			printer: &printer,
+		}
+	})
+
+	return globalProgressBarMulti
+}
+
+func (m *progressBarMultiManager) start() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !m.started {
+		if _, err := m.printer.Start(); err != nil {
+			return err
+		}
+		m.started = true
+	}
+
+	return nil
+}
+
+func (m *progressBarMultiManager) newWriter() io.Writer {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.printer.NewWriter()
+}
+
+func (m *progressBarMultiManager) stop() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.started {
+		if _, err := m.printer.Stop(); err != nil {
+			logger.Log.Debugf("Failed to stop multi printer: %v", err)
+		}
+		// Reset the printer for next use
+		printer := pterm.DefaultMultiPrinter
+		printer.SetWriter(os.Stderr)
+		m.printer = &printer
+		m.started = false
+	}
 }
 
 func init() {

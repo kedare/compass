@@ -814,6 +814,12 @@ func (c *Client) listMIGInstancesByRegionScan(ctx context.Context, migName strin
 		slotCount = len(regions)
 	}
 
+	// Pre-initialize progress bar with worker slots
+	for i := 0; i < slotCount; i++ {
+		workerKey := fmt.Sprintf("worker:%02d", i+1)
+		progressUpdate(progress, workerKey, "")
+	}
+
 	slotCh := make(chan int, slotCount)
 	for i := 0; i < slotCount; i++ {
 		slotCh <- i
@@ -828,13 +834,13 @@ func (c *Client) listMIGInstancesByRegionScan(ctx context.Context, migName strin
 			case slotID := <-slotCh:
 				defer func() { slotCh <- slotID }()
 
-				key := FormatProgressKey(fmt.Sprintf("worker:%02d", slotID+1))
-				progressUpdate(progress, key, fmt.Sprintf("Worker %02d scanning %s for MIG %s", slotID+1, region, migName))
+				workerKey := fmt.Sprintf("worker:%02d", slotID+1)
+				progressUpdate(progress, workerKey, fmt.Sprintf("Scanning %s", region))
 				logger.Log.Tracef("Checking for regional MIG in region: %s", region)
 
 				refs, err := c.listManagedInstancesInRegionalMIG(egCtx, migName, region)
 				if err == nil {
-					progressSuccess(progress, key, fmt.Sprintf("Worker %02d found MIG %s in region %s", slotID+1, migName, region))
+					progressUpdate(progress, workerKey, fmt.Sprintf("✓ Found in %s", region))
 					select {
 					case resultCh <- regionResult{refs: refs, region: region}:
 						cancel()
@@ -845,12 +851,13 @@ func (c *Client) listMIGInstancesByRegionScan(ctx context.Context, migName strin
 				}
 
 				if errors.Is(err, context.Canceled) || errors.Is(egCtx.Err(), context.Canceled) {
-					progressFailure(progress, key, fmt.Sprintf("Worker %02d canceled while scanning %s", slotID+1, region), context.Canceled)
+					progressUpdate(progress, workerKey, "Canceled")
 
 					return context.Canceled
 				}
 
-				progressInfo(progress, key, fmt.Sprintf("Worker %02d: no MIG %s in %s", slotID+1, migName, region))
+				// Just update status without marking as done
+				progressUpdate(progress, workerKey, fmt.Sprintf("✓ Not in %s", region))
 
 				return nil
 			}
