@@ -54,18 +54,19 @@ type SubnetSecondaryRange struct {
 
 // SubnetEntry stores metadata about a VPC subnet for quick IP matching.
 type SubnetEntry struct {
-	Timestamp       time.Time             `json:"timestamp"`
-	Project         string                `json:"project"`
-	Network         string                `json:"network"`
-	Region          string                `json:"region"`
-	Name            string                `json:"name"`
-	SelfLink        string                `json:"self_link,omitempty"`
-	PrimaryCIDR     string                `json:"primary_cidr,omitempty"`
+	Timestamp       time.Time              `json:"timestamp"`
+	Project         string                 `json:"project"`
+	Network         string                 `json:"network"`
+	Region          string                 `json:"region"`
+	Name            string                 `json:"name"`
+	SelfLink        string                 `json:"self_link,omitempty"`
+	PrimaryCIDR     string                 `json:"primary_cidr,omitempty"`
 	SecondaryRanges []SubnetSecondaryRange `json:"secondary_ranges,omitempty"`
-	IPv6CIDR        string                `json:"ipv6_cidr,omitempty"`
-	Gateway         string                `json:"gateway,omitempty"`
+	IPv6CIDR        string                 `json:"ipv6_cidr,omitempty"`
+	Gateway         string                 `json:"gateway,omitempty"`
 }
 
+// clone returns a deep copy of the subnet entry to avoid sharing mutable slices.
 func (s *SubnetEntry) clone() *SubnetEntry {
 	if s == nil {
 		return nil
@@ -80,6 +81,7 @@ func (s *SubnetEntry) clone() *SubnetEntry {
 	return &clone
 }
 
+// containsIP reports whether the provided IP falls within any of the subnet's CIDRs.
 func (s *SubnetEntry) containsIP(ip net.IP) bool {
 	if s == nil || ip == nil {
 		return false
@@ -95,11 +97,7 @@ func (s *SubnetEntry) containsIP(ip net.IP) bool {
 		}
 	}
 
-	if cidrContainsIP(s.IPv6CIDR, ip) {
-		return true
-	}
-
-	return false
+	return cidrContainsIP(s.IPv6CIDR, ip)
 }
 
 type cacheFile struct {
@@ -600,6 +598,10 @@ func (c *Cache) cleanExpiredSubnets() {
 
 // RememberSubnet records subnet metadata in the cache for faster future lookups.
 func (c *Cache) RememberSubnet(info *SubnetEntry) error {
+	if !Enabled() {
+		return nil
+	}
+
 	if info == nil {
 		return nil
 	}
@@ -661,7 +663,7 @@ func (c *Cache) RememberSubnet(info *SubnetEntry) error {
 
 // FindSubnetsForIP returns cached subnets whose CIDR ranges contain the specified IP.
 func (c *Cache) FindSubnetsForIP(ip net.IP) []*SubnetEntry {
-	if ip == nil {
+	if !Enabled() || ip == nil {
 		return nil
 	}
 
@@ -709,6 +711,7 @@ func (c *Cache) FindSubnetsForIP(ip net.IP) []*SubnetEntry {
 	return results
 }
 
+// updateSubnetEntry merges metadata from src into dest while preserving slice allocations.
 func updateSubnetEntry(dest, src *SubnetEntry) {
 	if dest == nil || src == nil {
 		return
@@ -732,6 +735,7 @@ func updateSubnetEntry(dest, src *SubnetEntry) {
 	}
 }
 
+// subnetKey builds a normalized cache key for subnet entries.
 func subnetKey(parts ...string) string {
 	if len(parts) == 0 {
 		return ""
@@ -748,6 +752,7 @@ func subnetKey(parts ...string) string {
 	return strings.Join(normalized, "|")
 }
 
+// cidrContainsIP reports whether the given IP is inside the provided CIDR.
 func cidrContainsIP(cidr string, ip net.IP) bool {
 	cidr = strings.TrimSpace(cidr)
 	if cidr == "" || ip == nil {

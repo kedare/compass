@@ -133,48 +133,50 @@ func runIPLookup(ctx context.Context, rawIP string) {
 	}
 }
 
+// preferredProjectsForIP returns projects whose cached subnets already contain the IP.
 func preferredProjectsForIP(ip net.IP) []string {
 	if ip == nil {
 		return nil
 	}
 
- cacheInst, err := gcp.LoadCache()
- if err != nil || cacheInst == nil {
-  return nil
- }
+	cacheInst, err := gcp.LoadCache()
+	if err != nil || cacheInst == nil {
+		return nil
+	}
 
- entries := cacheInst.FindSubnetsForIP(ip)
- if len(entries) == 0 {
-  return nil
- }
+	entries := cacheInst.FindSubnetsForIP(ip)
+	if len(entries) == 0 {
+		return nil
+	}
 
- seen := make(map[string]struct{}, len(entries))
- ordered := make([]string, 0, len(entries))
- for _, entry := range entries {
-  if entry == nil {
-   continue
-  }
+	seen := make(map[string]struct{}, len(entries))
+	ordered := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry == nil {
+			continue
+		}
 
-  projectID := strings.TrimSpace(entry.Project)
-  if projectID == "" {
-   continue
-  }
+		projectID := strings.TrimSpace(entry.Project)
+		if projectID == "" {
+			continue
+		}
 
-  key := strings.ToLower(projectID)
-  if _, exists := seen[key]; exists {
-   continue
-  }
-  seen[key] = struct{}{}
-  ordered = append(ordered, projectID)
- }
+		key := strings.ToLower(projectID)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		ordered = append(ordered, projectID)
+	}
 
- if len(ordered) > 0 {
-  logger.Log.Debugf("Cached subnet data suggests %d project(s): %v", len(ordered), ordered)
- }
+	if len(ordered) > 0 {
+		logger.Log.Debugf("Cached subnet data suggests %d project(s): %v", len(ordered), ordered)
+	}
 
 	return ordered
 }
 
+// executeLookupAcrossClients scans each client and aggregates the results while updating the spinner.
 func executeLookupAcrossClients(ctx context.Context, ip string, clients []*gcp.Client, spin *output.Spinner) lookupAttemptOutcome {
 	outcome := lookupAttemptOutcome{}
 	if len(clients) == 0 {
@@ -307,6 +309,7 @@ loop:
 	return outcome
 }
 
+// dedupeAssociations removes duplicate associations based on key fields.
 func dedupeAssociations(input []gcp.IPAssociation) []gcp.IPAssociation {
 	if len(input) <= 1 {
 		return input
@@ -328,6 +331,7 @@ func dedupeAssociations(input []gcp.IPAssociation) []gcp.IPAssociation {
 	return result
 }
 
+// lookupClients builds unique GCP clients that will participate in the lookup.
 // lookupClients builds unique GCP clients that will participate in the lookup.
 func lookupClients(ctx context.Context, limitProjects []string) []*gcp.Client {
 	seen := make(map[string]struct{})
