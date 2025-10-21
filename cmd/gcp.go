@@ -167,6 +167,8 @@ Examples:
 		if err := sshClient.ConnectWithIAP(ctx, instance, project, sshFlags); err != nil {
 			logger.Log.Fatalf("Failed to connect via SSH: %v", err)
 		}
+
+		gcpClient.RememberProject()
 	},
 }
 

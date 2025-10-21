@@ -5,18 +5,20 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"runtime"
 	"strings"
 
 	"github.com/kedare/compass/internal/gcp"
 	"github.com/kedare/compass/internal/logger"
 	"github.com/kedare/compass/internal/output"
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 )
 
 var ipLookupOutputFormat string
 
-// ipLookupResult captures the outcome of querying a single project for IP associations.
-type ipLookupResult struct {
+type lookupResult struct {
+	client       *gcp.Client
 	associations []gcp.IPAssociation
 	err          error
 }
@@ -42,7 +44,7 @@ func init() {
 		"Output format: table, text, json")
 }
 
-// runIPLookup orchestrates the lookup by iterating over all candidate projects and gathering matches.
+// runIPLookup orchestrates the lookup by querying all candidate projects in parallel and gathering matches.
 func runIPLookup(ctx context.Context, rawIP string) {
 	ip := strings.TrimSpace(rawIP)
 	if net.ParseIP(ip) == nil {
@@ -61,48 +63,126 @@ func runIPLookup(ctx context.Context, rawIP string) {
 	spin := output.NewSpinner("Searching IP associations")
 	spin.Start()
 
-	var results []gcp.IPAssociation
+	results := make([]gcp.IPAssociation, 0)
 	hadSuccess := false
 	canceled := false
 
+	lookupCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	group, groupCtx := errgroup.WithContext(lookupCtx)
+	group.SetLimit(lookupConcurrency(len(clients)))
+	progressCh := make(chan string, len(clients))
+	resultCh := make(chan lookupResult, len(clients))
+	waitErrCh := make(chan error, 1)
+
 	for _, client := range clients {
-		if err := ctx.Err(); err != nil {
-			canceled = true
-			break
-		}
+		client := client
 
-		projectID := client.ProjectID()
-		spin.Update(fmt.Sprintf("Scanning project %s…", projectID))
-		logger.Log.Debugf("Looking up IP %s in project %s", ip, projectID)
-
-		resultCh := make(chan ipLookupResult, 1)
-		go func(c *gcp.Client) {
-			associations, err := c.LookupIPAddress(ctx, ip)
-			resultCh <- ipLookupResult{associations: associations, err: err}
-		}(client)
-
-		select {
-		case <-ctx.Done():
-			canceled = true
-		case res := <-resultCh:
-			if isContextError(res.err) || isContextError(ctx.Err()) {
-				canceled = true
-				break
+		group.Go(func() error {
+			select {
+			case progressCh <- client.ProjectID():
+			case <-groupCtx.Done():
+				return groupCtx.Err()
 			}
 
+			associations, err := client.LookupIPAddress(groupCtx, ip)
+
+			res := lookupResult{
+				client:       client,
+				associations: associations,
+				err:          err,
+			}
+
+			select {
+			case resultCh <- res:
+			case <-groupCtx.Done():
+				return groupCtx.Err()
+			}
+
+			if isContextError(err) {
+				return err
+			}
+
+			return nil
+		})
+	}
+
+	go func() {
+		err := group.Wait()
+		cancel()
+		close(progressCh)
+		close(resultCh)
+		waitErrCh <- err
+		close(waitErrCh)
+	}()
+
+	successSeen := make(map[*gcp.Client]struct{}, len(clients))
+	successClients := make([]*gcp.Client, 0, len(clients))
+	ctxDone := ctx.Done()
+	started := 0
+	processed := 0
+	total := len(clients)
+
+loop:
+	for progressCh != nil || resultCh != nil {
+		select {
+		case <-ctxDone:
+			canceled = true
+			cancel()
+			break loop
+		case _, ok := <-progressCh:
+			if !ok {
+				progressCh = nil
+				continue
+			}
+			started++
+		case res, ok := <-resultCh:
+			if !ok {
+				resultCh = nil
+				continue
+			}
+
+			processed++
+
 			if res.err != nil {
-				logger.Log.Warnf("Skipping project %s: %v", projectID, res.err)
+				if isContextError(res.err) {
+					canceled = true
+					cancel()
+					break loop
+				}
+
+				logger.Log.Warnf("Skipping project %s: %v", res.client.ProjectID(), res.err)
+				spin.Update(fmt.Sprintf("Skipped project %s (%d/%d done)", res.client.ProjectID(), processed, total))
 
 				continue
 			}
 
-			hadSuccess = true
-			results = append(results, res.associations...)
-		}
+			spin.Update(fmt.Sprintf("Completed project %s (%d/%d done)", res.client.ProjectID(), processed, total))
 
-		if canceled {
-			break
+			hadSuccess = true
+			if len(res.associations) > 0 {
+				results = append(results, res.associations...)
+			}
+
+			if _, seen := successSeen[res.client]; !seen {
+				successSeen[res.client] = struct{}{}
+				successClients = append(successClients, res.client)
+			}
 		}
+	}
+
+	if canceled {
+		spin.Fail("Lookup canceled")
+
+		return
+	}
+
+	waitErr := <-waitErrCh
+	if isContextError(waitErr) || isContextError(ctx.Err()) {
+		canceled = true
+	} else if waitErr != nil {
+		logger.Log.Warnf("Lookup workers encountered an error: %v", waitErr)
 	}
 
 	if canceled {
@@ -117,6 +197,10 @@ func runIPLookup(ctx context.Context, rawIP string) {
 	}
 
 	spin.Success("Lookup complete")
+
+	for _, client := range successClients {
+		client.RememberProject()
+	}
 
 	if len(results) == 0 {
 		fmt.Printf("No resources found for IP %s\n", ip)
@@ -214,6 +298,24 @@ func enumerateProjects(projects []string) []string {
 	}
 
 	return unique
+}
+
+// lookupConcurrency determines the number of concurrent lookups to run.
+func lookupConcurrency(total int) int {
+	if total <= 1 {
+		return 1
+	}
+
+	max := runtime.NumCPU() * 4
+	if max < 4 {
+		max = 4
+	}
+
+	if total < max {
+		return total
+	}
+
+	return max
 }
 
 // isContextError reports whether the provided error is caused by context cancellation.

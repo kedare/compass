@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/kedare/compass/internal/logger"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/compute/v1"
 )
 
@@ -62,20 +63,64 @@ func (c *Client) LookupIPAddress(ctx context.Context, ip string) ([]IPAssociatio
 		return nil, err
 	}
 
-	results := make([]IPAssociation, 0)
-	seen := make(map[string]struct{})
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(3)
+
 	canonicalIP := targetIP.String()
 
-	if err := c.collectInstanceIPMatches(ctx, targetIP, canonicalIP, &results, seen); err != nil {
-		return nil, fmt.Errorf("failed to inspect instances: %w", err)
+	var (
+		instanceResults   []IPAssociation
+		forwardingResults []IPAssociation
+		addressResults    []IPAssociation
+	)
+
+	group.Go(func() error {
+		results, err := c.collectInstanceIPMatches(groupCtx, targetIP, canonicalIP)
+		if err != nil {
+			return fmt.Errorf("failed to inspect instances: %w", err)
+		}
+		instanceResults = results
+
+		return nil
+	})
+
+	group.Go(func() error {
+		results, err := c.collectForwardingRuleMatches(groupCtx, targetIP, canonicalIP)
+		if err != nil {
+			return fmt.Errorf("failed to inspect forwarding rules: %w", err)
+		}
+		forwardingResults = results
+
+		return nil
+	})
+
+	group.Go(func() error {
+		results, err := c.collectAddressMatches(groupCtx, targetIP, canonicalIP)
+		if err != nil {
+			return fmt.Errorf("failed to inspect addresses: %w", err)
+		}
+		addressResults = results
+
+		return nil
+	})
+
+	if err := group.Wait(); err != nil {
+		return nil, err
 	}
 
-	if err := c.collectForwardingRuleMatches(ctx, targetIP, canonicalIP, &results, seen); err != nil {
-		return nil, fmt.Errorf("failed to inspect forwarding rules: %w", err)
+	results := make([]IPAssociation, 0, len(instanceResults)+len(forwardingResults)+len(addressResults))
+	seen := make(map[string]struct{}, len(results))
+
+	for _, association := range instanceResults {
+		appendAssociation(&results, seen, association)
 	}
 
-	if err := c.collectAddressMatches(ctx, targetIP, canonicalIP, &results, seen); err != nil {
-		return nil, fmt.Errorf("failed to inspect addresses: %w", err)
+	for _, association := range forwardingResults {
+		appendAssociation(&results, seen, association)
+	}
+
+	for _, association := range addressResults {
+		appendAssociation(&results, seen, association)
 	}
 
 	sort.Slice(results, func(i, j int) bool {
@@ -94,10 +139,13 @@ func (c *Client) LookupIPAddress(ctx context.Context, ip string) ([]IPAssociatio
 }
 
 // collectInstanceIPMatches gathers instance-level IP matches across all zones in the project.
-func (c *Client) collectInstanceIPMatches(ctx context.Context, target net.IP, canonical string, results *[]IPAssociation, seen map[string]struct{}) error {
+func (c *Client) collectInstanceIPMatches(ctx context.Context, target net.IP, canonical string) ([]IPAssociation, error) {
+	results := make([]IPAssociation, 0)
+	seen := make(map[string]struct{})
+
 	call := c.service.Instances.AggregatedList(c.project).Context(ctx)
 
-	return call.Pages(ctx, func(page *compute.InstanceAggregatedList) error {
+	err := call.Pages(ctx, func(page *compute.InstanceAggregatedList) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -133,7 +181,7 @@ func (c *Client) collectInstanceIPMatches(ctx context.Context, target net.IP, ca
 							ResourceLink: inst.SelfLink,
 						}
 
-						appendAssociation(results, seen, association)
+						appendAssociation(&results, seen, association)
 					}
 				}
 			}
@@ -141,13 +189,22 @@ func (c *Client) collectInstanceIPMatches(ctx context.Context, target net.IP, ca
 
 		return nil
 	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return results, nil
 }
 
 // collectForwardingRuleMatches adds forwarding rule associations that match the target IP.
-func (c *Client) collectForwardingRuleMatches(ctx context.Context, target net.IP, canonical string, results *[]IPAssociation, seen map[string]struct{}) error {
+func (c *Client) collectForwardingRuleMatches(ctx context.Context, target net.IP, canonical string) ([]IPAssociation, error) {
+	results := make([]IPAssociation, 0)
+	seen := make(map[string]struct{})
+
 	call := c.service.ForwardingRules.AggregatedList(c.project).Context(ctx)
 
-	return call.Pages(ctx, func(page *compute.ForwardingRuleAggregatedList) error {
+	err := call.Pages(ctx, func(page *compute.ForwardingRuleAggregatedList) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -185,19 +242,28 @@ func (c *Client) collectForwardingRuleMatches(ctx context.Context, target net.IP
 					ResourceLink: rule.SelfLink,
 				}
 
-				appendAssociation(results, seen, association)
+				appendAssociation(&results, seen, association)
 			}
 		}
 
 		return nil
 	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return results, nil
 }
 
 // collectAddressMatches appends reserved addresses that map to the target IP.
-func (c *Client) collectAddressMatches(ctx context.Context, target net.IP, canonical string, results *[]IPAssociation, seen map[string]struct{}) error {
+func (c *Client) collectAddressMatches(ctx context.Context, target net.IP, canonical string) ([]IPAssociation, error) {
+	results := make([]IPAssociation, 0)
+	seen := make(map[string]struct{})
+
 	call := c.service.Addresses.AggregatedList(c.project).Context(ctx)
 
-	return call.Pages(ctx, func(page *compute.AddressAggregatedList) error {
+	err := call.Pages(ctx, func(page *compute.AddressAggregatedList) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -235,12 +301,18 @@ func (c *Client) collectAddressMatches(ctx context.Context, target net.IP, canon
 					ResourceLink: addr.SelfLink,
 				}
 
-				appendAssociation(results, seen, association)
+				appendAssociation(&results, seen, association)
 			}
 		}
 
 		return nil
 	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return results, nil
 }
 
 // ipMatch captures the association kind and descriptive text for a matched interface.
