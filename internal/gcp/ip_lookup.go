@@ -58,6 +58,10 @@ func (c *Client) LookupIPAddress(ctx context.Context, ip string) ([]IPAssociatio
 		ctx = context.Background()
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	results := make([]IPAssociation, 0)
 	seen := make(map[string]struct{})
 	canonicalIP := targetIP.String()
@@ -89,17 +93,30 @@ func (c *Client) LookupIPAddress(ctx context.Context, ip string) ([]IPAssociatio
 	return results, nil
 }
 
+// collectInstanceIPMatches gathers instance-level IP matches across all zones in the project.
 func (c *Client) collectInstanceIPMatches(ctx context.Context, target net.IP, canonical string, results *[]IPAssociation, seen map[string]struct{}) error {
 	call := c.service.Instances.AggregatedList(c.project).Context(ctx)
 
 	return call.Pages(ctx, func(page *compute.InstanceAggregatedList) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		for scope, scopedList := range page.Items {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+
 			if scopedList.Instances == nil {
 				continue
 			}
 
 			location := locationFromScope(scope)
 			for _, inst := range scopedList.Instances {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+
 				if inst == nil {
 					continue
 				}
@@ -126,17 +143,30 @@ func (c *Client) collectInstanceIPMatches(ctx context.Context, target net.IP, ca
 	})
 }
 
+// collectForwardingRuleMatches adds forwarding rule associations that match the target IP.
 func (c *Client) collectForwardingRuleMatches(ctx context.Context, target net.IP, canonical string, results *[]IPAssociation, seen map[string]struct{}) error {
 	call := c.service.ForwardingRules.AggregatedList(c.project).Context(ctx)
 
 	return call.Pages(ctx, func(page *compute.ForwardingRuleAggregatedList) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		for scope, scopedList := range page.Items {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+
 			if len(scopedList.ForwardingRules) == 0 {
 				continue
 			}
 
 			location := locationFromScope(scope)
 			for _, rule := range scopedList.ForwardingRules {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+
 				if rule == nil {
 					continue
 				}
@@ -163,17 +193,30 @@ func (c *Client) collectForwardingRuleMatches(ctx context.Context, target net.IP
 	})
 }
 
+// collectAddressMatches appends reserved addresses that map to the target IP.
 func (c *Client) collectAddressMatches(ctx context.Context, target net.IP, canonical string, results *[]IPAssociation, seen map[string]struct{}) error {
 	call := c.service.Addresses.AggregatedList(c.project).Context(ctx)
 
 	return call.Pages(ctx, func(page *compute.AddressAggregatedList) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		for scope, scopedList := range page.Items {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+
 			if len(scopedList.Addresses) == 0 {
 				continue
 			}
 
 			location := locationFromScope(scope)
 			for _, addr := range scopedList.Addresses {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+
 				if addr == nil {
 					continue
 				}
@@ -200,11 +243,13 @@ func (c *Client) collectAddressMatches(ctx context.Context, target net.IP, canon
 	})
 }
 
+// ipMatch captures the association kind and descriptive text for a matched interface.
 type ipMatch struct {
 	kind    IPAssociationKind
 	details string
 }
 
+// instanceIPMatches returns instance interface matches for the provided IP address.
 func instanceIPMatches(inst *compute.Instance, target net.IP) []ipMatch {
 	if inst == nil {
 		return nil
@@ -251,6 +296,7 @@ func instanceIPMatches(inst *compute.Instance, target net.IP) []ipMatch {
 	return matches
 }
 
+// describeForwardingRule summarizes forwarding rule metadata for display.
 func describeForwardingRule(rule *compute.ForwardingRule) string {
 	if rule == nil {
 		return ""
@@ -280,6 +326,7 @@ func describeForwardingRule(rule *compute.ForwardingRule) string {
 	return strings.Join(parts, ", ")
 }
 
+// describeAddress creates a printable summary of an address resource.
 func describeAddress(addr *compute.Address) string {
 	if addr == nil {
 		return ""
@@ -309,6 +356,7 @@ func describeAddress(addr *compute.Address) string {
 	return strings.Join(parts, ", ")
 }
 
+// locationFromScope extracts a human-friendly location from an aggregated API scope.
 func locationFromScope(scope string) string {
 	scope = strings.TrimSpace(scope)
 	if scope == "" {
@@ -329,6 +377,7 @@ func locationFromScope(scope string) string {
 	return scope
 }
 
+// lastComponent returns the trailing segment of a resource URL.
 func lastComponent(resourceURL string) string {
 	resourceURL = strings.TrimSpace(resourceURL)
 	if resourceURL == "" {
@@ -342,6 +391,7 @@ func lastComponent(resourceURL string) string {
 	return resourceURL
 }
 
+// equalIP compares a string IP to the provided parsed IP value.
 func equalIP(value string, target net.IP) bool {
 	if target == nil {
 		return false
@@ -355,6 +405,7 @@ func equalIP(value string, target net.IP) bool {
 	return parsed.Equal(target)
 }
 
+// appendAssociation adds a unique association to the results slice while preventing duplicates.
 func appendAssociation(results *[]IPAssociation, seen map[string]struct{}, association IPAssociation) {
 	key := fmt.Sprintf("%s|%s|%s|%s", association.Project, association.Kind, association.Resource, association.Location)
 	if _, exists := seen[key]; exists {
