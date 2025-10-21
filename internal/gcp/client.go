@@ -104,18 +104,21 @@ func NewClient(ctx context.Context, project string) (*Client, error) {
 
 	logger.Log.Debug("GCP client created successfully")
 
-	// Initialize cache
-	c, err := cache.New()
-	if err != nil {
-		logger.Log.Warnf("Failed to initialize cache: %v", err)
-		// Continue without cache
-		c = nil
-	}
-
 	client := &Client{
 		service: service,
 		project: project,
-		cache:   c,
+	}
+
+	if cache.Enabled() {
+		// Initialize cache
+		c, err := cache.New()
+		if err != nil {
+			logger.Log.Warnf("Failed to initialize cache: %v", err)
+			// Continue without cache
+			c = nil
+		}
+
+		client.cache = c
 	}
 
 	return client, nil
@@ -136,7 +139,7 @@ func (c *Client) RememberProject() {
 		return
 	}
 
-	if c.cache == nil {
+	if c.cache == nil || !cache.Enabled() {
 		return
 	}
 
@@ -1224,5 +1227,9 @@ func collectZones(fetch func(pageToken string) ([]*compute.Zone, string, error))
 
 // LoadCache loads and returns the cache instance.
 func LoadCache() (*cache.Cache, error) {
+	if !cache.Enabled() {
+		return nil, nil
+	}
+
 	return cache.New()
 }

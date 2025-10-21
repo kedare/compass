@@ -286,6 +286,7 @@ func formatDetailNote(assoc gcp.IPAssociation, subnetCIDRs map[string]string) st
 	}
 }
 
+// classifySpecialIP identifies whether the IP is a subnet network or broadcast address.
 func classifySpecialIP(assoc gcp.IPAssociation, subnetCIDRs map[string]string) string {
 	if assoc.IPAddress == "" {
 		return ""
@@ -436,6 +437,7 @@ func filterSegments(values []string) []string {
 	return filtered
 }
 
+// lookupSubnetCIDR finds the cached CIDR for a given subnet name or self-link.
 func lookupSubnetCIDR(subnetCIDRs map[string]string, project, location, subnetName, subnetLink string) string {
 	keys := make([]string, 0, 4)
 	if subnetName != "" {
@@ -460,6 +462,7 @@ func lookupSubnetCIDR(subnetCIDRs map[string]string, project, location, subnetNa
 	return ""
 }
 
+// makeSubnetKey normalizes subnet identifiers for cache lookups.
 func makeSubnetKey(project string, parts ...string) string {
 	segments := []string{strings.ToLower(strings.TrimSpace(project))}
 	for _, part := range parts {
@@ -472,6 +475,7 @@ func makeSubnetKey(project string, parts ...string) string {
 	return strings.Join(segments, "|")
 }
 
+// lastSegment extracts the trailing component of a self-link or path.
 func lastSegment(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
