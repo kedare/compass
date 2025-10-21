@@ -2,7 +2,7 @@
 
 > Main project on [Github](https://github.com/kedare/compass)
 
-> Mirror: [Codeberg](https://github.com/kedare/compass)
+> Mirror: [Codeberg](https://codeberg.org/kedare/compass)
 
 
 `compass` is a fast, intuitive CLI for reaching Google Cloud Platform (GCP) instances over SSH. It handles Identity-Aware Proxy (IAP) tunneling, Managed Instance Groups (MIGs), connectivity tests, and advanced SSH scenarios without extra configuration.
@@ -11,25 +11,23 @@
 - [Overview](#overview)
 - [Features](#features)
 - [Installation](#installation)
-  - [Prerequisites](#prerequisites)
-  - [Install go-task](#install-go-task)
+  - [Download Pre-built Binary (Recommended)](#download-pre-built-binary-recommended)
   - [Build From Source](#build-from-source)
   - [Shell Completion](#shell-completion)
 - [Quick Start](#quick-start)
-- [Usage](#usage)
-  - [Basic Command](#basic-command)
-  - [Advanced Options](#advanced-options)
+- [Command Examples](#command-examples)
+  - [SSH Connection Examples](#ssh-connection-examples)
+  - [IP Lookup Examples](#ip-lookup-examples)
+  - [VPN Inspection Examples](#vpn-inspection-examples)
+  - [Connectivity Test Examples](#connectivity-test-examples)
+- [Detailed Usage](#detailed-usage)
+  - [SSH to Instances](#ssh-to-instances)
+  - [Project Management](#project-management)
+  - [IP Address Lookup](#ip-address-lookup)
   - [SSH Tunneling Recipes](#ssh-tunneling-recipes)
 - [Local Cache](#local-cache)
 - [Connectivity Tests](#connectivity-tests)
-  - [Create](#create)
-  - [Watch Progress](#watch-progress)
-  - [Get Results](#get-results)
-  - [Rerun a Test](#rerun-a-test)
-  - [List and Delete](#list-and-delete)
-  - [Output Formats](#output-formats)
-  - [Common Use Cases](#common-use-cases)
-- [VPN Overview](#vpn-overview)
+- [VPN Inspection](#vpn-inspection)
 - [Development](#development)
 - [CI/CD](#cicd)
 - [Roadmap](#roadmap)
@@ -46,10 +44,13 @@
 - 🔒 Identity-Aware Proxy (IAP) tunneling support
 - 🎯 Managed Instance Group (MIG) support for regional and zonal groups
 - 🌐 Zone and region auto-discovery when omitted
+- 📁 Multi-project support with interactive project selection and caching
 - 🔧 Pass arbitrary SSH flags for tunneling, forwarding, or X11
-- 🔍 Network connectivity tests powered by Google Cloud Connectivity Tests API
+- 🔍 IP address lookup across projects with subnet caching for fast resolution
+- 🌐 Network connectivity tests powered by Google Cloud Connectivity Tests API
 - 🔭 Cloud VPN inventory across gateways, tunnels, and BGP peers
-- 📊 Structured logging with configurable verbosity
+- 💾 Intelligent local cache for instant connections to known resources
+- 📊 Structured logging with configurable verbosity and clean spinner-based progress
 - ⚡ Zero configuration—relies on existing `gcloud` authentication
 - 🎨 Helpful CLI UX with actionable errors
 
@@ -57,37 +58,68 @@
 
 ### Prerequisites
 
-- Go 1.19 or newer
-- [`go-task`](https://taskfile.dev/)
-- `gcloud` CLI installed and authenticated
+- `gcloud` CLI installed and authenticated ([installation guide](https://cloud.google.com/sdk/docs/install))
 - `ssh` available in your `PATH`
 
-### Install go-task
+### Download Pre-built Binary (Recommended)
 
-macOS:
+Download the latest release for your platform from [GitHub Releases](https://github.com/kedare/compass/releases).
+
+**macOS (Intel):**
 ```bash
-brew install go-task
+curl -L https://github.com/kedare/compass/releases/latest/download/compass-darwin-amd64 -o compass
+chmod +x compass
+sudo mv compass /usr/local/bin/
+compass version
 ```
 
-Linux:
+**macOS (Apple Silicon):**
 ```bash
-sh -c "$(curl -fsSL https://taskfile.dev/install.sh)" -- -d -b ~/.local/bin
+curl -L https://github.com/kedare/compass/releases/latest/download/compass-darwin-arm64 -o compass
+chmod +x compass
+sudo mv compass /usr/local/bin/
+compass version
 ```
 
-Windows:
-```powershell
-choco install go-task
+**Linux (amd64):**
+```bash
+curl -L https://github.com/kedare/compass/releases/latest/download/compass-linux-amd64 -o compass
+chmod +x compass
+sudo mv compass /usr/local/bin/
+compass version
 ```
 
-Alternatively, download binaries from the [go-task releases](https://github.com/go-task/task/releases).
+**Linux (arm64):**
+```bash
+curl -L https://github.com/kedare/compass/releases/latest/download/compass-linux-arm64 -o compass
+chmod +x compass
+sudo mv compass /usr/local/bin/
+compass version
+```
+
+**Windows:**
+
+Download `compass-windows-amd64.exe` from the [releases page](https://github.com/kedare/compass/releases), rename it to `compass.exe`, and add it to your PATH.
 
 ### Build From Source
 
+If you prefer to build from source or want to contribute:
+
+**Prerequisites:**
+- Go 1.19 or newer
+- [`go-task`](https://taskfile.dev/) (optional, for development tasks)
+
+**Build:**
 ```bash
-git clone <repository-url>
+git clone https://github.com/kedare/compass.git
 cd compass
-task build
+go build -o compass .
 ./compass --help
+```
+
+**With go-task (for development):**
+```bash
+task build  # Builds with version metadata
 ```
 
 ### Shell Completion
@@ -111,450 +143,140 @@ compass completion powershell | Out-String | Invoke-Expression
 ## Quick Start
 
 ```bash
-# Connect to an instance (auto-discovers zone and resource type)
+# Simple SSH to an instance (discovers project, zone automatically if cached)
+compass gcp ssh my-instance
+
+# First time connecting - specify the project
 compass gcp ssh my-instance --project my-gcp-project
 
-# Specify a zone explicitly
-compass gcp ssh my-instance --project my-gcp-project --zone us-central1-a
+# Look up which resources use a specific IP address
+compass gcp ip lookup 10.201.0.208
 
-# Explicitly specify resource type for faster discovery
-compass gcp ssh my-instance --project my-gcp-project --type instance
+# Import projects for multi-project operations
+compass gcp projects import
 
-# Connect to a MIG (choose an instance if multiple are available)
-compass gcp ssh my-mig-name --project my-gcp-project --type mig
+# Inspect VPN gateways
+compass gcp vpn list --project prod
 
-# Establish a tunnel through IAP
-compass gcp ssh my-instance --project my-gcp-project --ssh-flag "-L 8080:localhost:8080"
-
-# Display build metadata
-compass version
-
-# Inspect a VPN gateway
-compass gcp vpn get prod-ha-vpn --type gateway --region us-central1
+# Test connectivity between instances
+compass gcp connectivity-test create web-to-db \
+  --project prod \
+  --source-instance web-1 \
+  --destination-instance db-1 \
+  --destination-port 5432
 ```
 
-## Usage
+## Command Examples
 
-### Basic Command
+### SSH Connection Examples
 
-```bash
-compass gcp ssh [instance-name] --project [project-id]
+**Basic connection (cached project and zone):**
+```console
+$ compass gcp ssh db-healer-1
+INFO  Starting connection process for: db-healer-1
+INFO  Connecting to instance: db-healer-1 of project my-project in zone: us-central1-b
+INFO  Establishing SSH connection via IAP tunnel...
+user@db-healer-1:~$
 ```
 
-### Advanced Options
-
+**First-time connection with project:**
 ```bash
-# Provide multiple SSH flags
-compass gcp ssh instance-name \
-  --project my-project \
-  --ssh-flag "-L 8080:localhost:8080" \
-  --ssh-flag "-D 1080" \
-  --ssh-flag "-X"
-
-# Enable verbose logging
-compass gcp ssh instance-name --project my-project --log-level debug
-
-# Target a regional MIG
-compass gcp ssh my-regional-mig --project my-project --zone us-central1
+compass gcp ssh web-server --project prod-project
 ```
 
-When you target a managed instance group, `compass gcp ssh` lists the running members and lets you choose the instance to connect to; if there's only one, it connects automatically.
-
-**GCP SSH Flags**
-
-| Flag | Aliases | Description | Default |
-|------|---------|-------------|---------|
-| `--project` | `-p` | GCP project ID | (required on first use, then cached) |
-| `--zone` | `-z` | GCP zone | Auto-discovered if not specified |
-| `--type` | `-t` | Resource type: `instance` or `mig` | Auto-detected (tries MIG first, then instance) |
-| `--ssh-flag` | | Additional SSH flags (can be used multiple times) | None |
-
-**Global Flags**
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--log-level` | Set logging level (`trace`, `debug`, `info`, `warn`, `error`, `fatal`, `panic`) | `info` |
-
-### SSH Tunneling Recipes
-
+**Connect to a specific zone:**
 ```bash
-# Local port forwarding
+compass gcp ssh api-server --project prod --zone europe-west1-b
+```
+
+**Connect to a Managed Instance Group (MIG):**
+```bash
+# Auto-detects MIG and lets you choose an instance
+compass gcp ssh my-mig --project prod --type mig
+```
+
+**Port forwarding through IAP:**
+```bash
+# Forward local port 3000 to instance port 3000
 compass gcp ssh app-server --project prod --ssh-flag "-L 3000:localhost:3000"
 
-# Remote port forwarding
-compass gcp ssh jump-host --project staging --ssh-flag "-R 8080:localhost:8080"
-
-# SOCKS proxy
-compass gcp ssh proxy-server --project dev --ssh-flag "-D 1080"
-
-# X11 forwarding
-compass gcp ssh desktop-instance --project dev --ssh-flag "-X"
-
-# Multiple tunnels at once
-compass gcp ssh multi-service \
-  --project prod \
-  --ssh-flag "-L 3000:service1:3000" \
-  --ssh-flag "-L 4000:service2:4000" \
-  --ssh-flag "-L 5000:database:5432"
+# Multiple ports
+compass gcp ssh multi-service --project prod \
+  --ssh-flag "-L 3000:localhost:3000" \
+  --ssh-flag "-L 5432:database:5432"
 ```
 
-### IP Lookup
-
-Identify which resources are assigned to a specific IP address:
-
+**SOCKS proxy:**
 ```bash
-# Scan all cached projects for the owner of 34.120.0.10
-compass gcp ip lookup 34.120.0.10
-
-# Restrict the lookup to a single project and emit JSON
-compass gcp ip lookup 10.0.0.5 --project prod --output json
+compass gcp ssh jump-host --project prod --ssh-flag "-D 1080"
 ```
 
-When no project is provided, `compass gcp ip lookup` walks through every project stored in the local cache (and falls back to your gcloud default project when the cache is empty). Matches include Compute Engine instances, forwarding rules (load balancers), and reserved addresses along with descriptive metadata.
-
-Behind the scenes the lookup command also remembers the subnets it encounters (network, region, CIDRs, gateway). On subsequent runs the CLI first checks those cached subnet ranges so private addresses can be resolved without re-querying every project; if a cache miss occurs the lookup gracefully falls back to the live scan.
-
-## Local Cache
-
-`compass` keeps a small JSON cache on disk so you do not have to repeat the same discovery calls on every run. The cache lives at `~/.compass.cache.json` with `0600` permissions and is refreshed transparently.
-
-- Resource locations: once `compass gcp ssh` or connectivity commands resolve a VM or MIG, their project, zone or region, and resource type are stored for 30 days. When you omit `--project`, `--zone`, or `--type`, the CLI reuses the cached metadata; providing a flag bypasses it.
-- Project history: each project you touch is remembered so shell completion can suggest it later. Entries expire if unused for 30 days.
-- Zone listings: discovered zones for a project are cached for 30 days, matching other resource metadata retention to speed up future region/zone discovery.
-- Subnet metadata: as `compass gcp ip lookup` crawls projects it records subnets (primary/secondary CIDRs, IPv6 range, and gateway) so future IP lookups can be short-circuited to matching projects without re-querying every environment.
-
-Every cache access updates its timestamp, and stale entries are pruned automatically. To reset the cache, delete the file with `rm ~/.compass.cache.json`; a fresh one is created as soon as you run the CLI again.
-
-Need to disable caching temporarily? Pass `--cache=false` before your command (e.g. `compass --cache=false gcp ip lookup 10.0.0.1`) to bypass both cache reads and writes for that invocation.
-
-## Connectivity Tests
-
-Connectivity tests let you validate reachability between GCP resources using the Google Cloud Connectivity Tests API.
-
-> **Tip:** Use the shorter `ct` alias for connectivity-test commands: `compass gcp ct list` instead of `compass gcp connectivity-test list`
-
-Set `COMPASS_OUTPUT` to change the default output format (supported values: `text`, `table`, `json`, `detailed`). If the variable is unset, list commands default to `table` while detailed views use `text`.
-
-### Create
-
+**Multi-project search:**
 ```console
-$ compass gcp connectivity-test create web-to-db \
-    --project prod \
-    --source-instance web-server-1 \
-    --destination-instance db-server-1 \
-    --destination-port 5432
-time="12:07:15" level=info msg="Creating connectivity test: web-to-db"
-Creating connectivity test...
-✓ Connectivity test created
-time="12:07:21" level=info msg="Connectivity test created successfully"
-✓ Connectivity Test: web-to-db
-  Console URL:   https://console.cloud.google.com/net-intelligence/connectivity/tests/details/projects/prod/locations/global/tests/web-to-db?project=prod
-  Forward Status: REACHABLE
-  Return Status:  N/A
-  Source:        web-server-1 (10.128.0.5)
-  Destination:   db-server-1 (10.138.0.10:5432)
-  Protocol:      TCP
-
-  Path Analysis:
-    +---+------+-------------+---------------------+---------+
-    | # | Step | Type        | Resource            | Status  |
-    +---+------+-------------+---------------------+---------+
-    | 1 | →    | VM Instance | web-server-1        | OK      |
-    +---+------+-------------+---------------------+---------+
-    | 2 | →    | VPC         | prod-network        | OK      |
-    +---+------+-------------+---------------------+---------+
-    | 3 | →    | Firewall    | allow-internal      | ALLOWED |
-    +---+------+-------------+---------------------+---------+
-    | 4 | ✓    | VM Instance | db-server-1         | OK      |
-    +---+------+-------------+---------------------+---------+
-
-  Result: Connection successful ✓
+$ compass gcp ssh unknown-instance
+INFO  Starting connection process for: unknown-instance
+Searching for instance unknown-instance across 5 projects
+INFO  Completed project staging (1/5 done)
+INFO  Completed project dev (2/5 done)
+INFO  Found in project prod
+INFO  Connecting to instance: unknown-instance of project prod in zone: us-west1-a
+INFO  Establishing SSH connection via IAP tunnel...
+user@unknown-instance:~$
 ```
 
-You can specify sources and destinations using instance names, IP addresses, or network URIs. Use `--source-type` and `--destination-type` flags (or `-s` and `-d` short forms) to explicitly set resource types (`instance` or `mig`).
+### IP Lookup Examples
 
-MIG-to-instance test example:
-
+**Basic IP lookup (scans cached projects):**
 ```bash
-compass gcp connectivity-test create api-to-backend \
-  --project prod \
-  --source-instance api-mig \
-  --source-type mig \
-  --destination-instance backend \
-  --destination-port 8080
+compass gcp ip lookup 10.201.0.208
 ```
 
-IP-based test:
+**Output example:**
+```console
+$ compass gcp ip lookup 10.201.0.208
+INFO  Starting IP lookup for: 10.201.0.208
+Searching IP associations
+INFO  Completed project my-project (1/3 done)
+INFO  Completed project staging-project (2/3 done)
+INFO  Completed project prod-project (3/3 done)
+✓ Lookup complete
 
+IP Address: 10.201.0.208
+
+Instances:
+  • db-server-1 (my-project, us-central1-a)
+    Internal interface, network=default, subnet=default
+
+Subnets:
+  • default (my-project, us-central1)
+    network=default, cidr=10.201.0.0/24, range=primary
+```
+
+**Lookup in specific project:**
 ```bash
-compass gcp connectivity-test create ip-test \
-  --project prod \
-  --source-ip 10.128.0.5 \
-  --destination-ip 10.138.0.10 \
-  --destination-port 443 \
-  --protocol TCP
+compass gcp ip lookup 10.0.0.5 --project prod
 ```
 
-**Supported protocols:** TCP (default), UDP, ICMP, ESP, AH, SCTP, GRE
-
-Add labels when you create the test:
-
+**JSON output for automation:**
 ```bash
---labels env=prod,service=payments
+compass gcp ip lookup 34.120.0.10 --output json | jq '.[] | select(.kind == "instance_internal")'
 ```
 
-Cross-project tests are supported using `--source-project` and `--destination-project` flags. You can also specify custom VPC networks using `--source-network` and `--destination-network`.
-
-### Watch Progress
-
-```console
-$ compass gcp connectivity-test get web-to-db --project prod --watch
-time="12:08:04" level=info msg="Watching connectivity test (polling every 5 seconds)..."
-Checking connectivity test status...
-Waiting for connectivity test completion (elapsed 5s)...
-✓ Connectivity test completed
-✓ Connectivity Test: web-to-db
-  Forward Status: REACHABLE
-  Return Status:  N/A
-  Source:        web-server-1 (10.128.0.5)
-  Destination:   db-server-1 (10.138.0.10:5432)
-  Protocol:      TCP
-  ...
-```
-
-The command finishes by printing the same detailed summary as `get` (shown below).
-
-### Get Results
-
-```console
-$ compass gcp connectivity-test get web-to-db --project prod
-Fetching connectivity test details...
-✓ Connectivity test details received
-✓ Connectivity Test: web-to-db
-  Console URL:   https://console.cloud.google.com/net-intelligence/connectivity/tests/details/projects/prod/locations/global/tests/web-to-db?project=prod
-  Forward Status: REACHABLE
-  Return Status:  N/A
-  Source:        web-server-1 (10.128.0.5)
-  Destination:   db-server-1 (10.138.0.10:5432)
-  Protocol:      TCP
-
-  Path Analysis:
-    +---+------+-------------+---------------------+---------+
-    | # | Step | Type        | Resource            | Status  |
-    +---+------+-------------+---------------------+---------+
-    | 1 | →    | VM Instance | web-server-1        | OK      |
-    +---+------+-------------+---------------------+---------+
-    | 2 | →    | VPC         | prod-network        | OK      |
-    +---+------+-------------+---------------------+---------+
-    | 3 | →    | Firewall    | allow-internal      | ALLOWED |
-    +---+------+-------------+---------------------+---------+
-    | 4 | ✓    | VM Instance | db-server-1         | OK      |
-    +---+------+-------------+---------------------+---------+
-
-  Result: Connection successful ✓
-```
-
-Switch to JSON or detailed output with `--output json` or `--output detailed`. Use `--timeout` with `--watch` to specify a custom timeout in seconds (default: 300).
-
-### Rerun a Test
-
-Rerun an existing test with the same configuration to get updated results:
-
-```console
-$ compass gcp connectivity-test run web-to-db --project prod
-Rerunning connectivity test...
-✓ Connectivity test rerun completed
-✓ Connectivity Test: web-to-db
-  Forward Status: REACHABLE
-  Return Status:  N/A
-  Source:        web-server-1 (10.128.0.5)
-  Destination:   db-server-1 (10.138.0.10:5432)
-  Protocol:      TCP
-  ...
-```
-
-This is useful for periodic validation or after making network changes. Use `--output detailed` or `--output json` for different output formats.
-
-### List and Delete
-
-List tests in text mode:
-
-```console
-$ compass gcp connectivity-test list --project prod
-Fetching connectivity tests...
-✓ Connectivity tests retrieved
-Found 2 connectivity test(s):
-
-✓ web-to-db
-  Forward Status: REACHABLE
-  Return Status:  N/A
-  Source: web-server-1 (10.128.0.5)
-  Dest:   db-server-1 (10.138.0.10:5432)
-
-✗ web-to-cache
-  Forward Status: UNREACHABLE
-  Return Status:  N/A
-  Source: web-server-1 (10.128.0.5)
-  Dest:   cache-proxy (10.138.0.20:6379)
-```
-
-Render a compact table instead:
-
-```console
-$ compass gcp connectivity-test list --project prod --output table
-Fetching connectivity tests...
-✓ Connectivity tests retrieved
-ST  NAME                          FORWARD STATUS              RETURN STATUS               SOURCE                        DESTINATION
----------------------------------------------------------------------------------------------------------------------------------------------------
-✓   web-to-db                     REACHABLE                   N/A                         web-server-1 (10.128.0.5)     db-server-1 (10.138.0.10:5432)
-✗   web-to-cache                  UNREACHABLE                 N/A                         web-server-1 (10.128.0.5)     cache-proxy (10.138.0.20:6379)
-```
-
-Filter and limit results:
-
+**Table format:**
 ```bash
-# Filter by labels
-compass gcp connectivity-test list --project prod --filter "labels.env=prod"
-
-# Limit results
-compass gcp connectivity-test list --project prod --limit 10
+compass gcp ip lookup 10.201.0.208 --output table
 ```
 
-Delete a test with confirmation:
+### VPN Inspection Examples
 
-```console
-$ compass gcp connectivity-test delete web-to-db --project prod
-Are you sure you want to delete connectivity test 'web-to-db'? (y/N): y
-time="12:12:40" level=info msg="Deleting connectivity test: web-to-db"
-Deleting connectivity test...
-✓ Connectivity test deleted
-time="12:12:43" level=info msg="Connectivity test 'web-to-db' deleted successfully"
-```
-
-Use `--force` to skip the prompt.
-
-### Output Formats
-
-Success example:
-```
-✓ Connectivity Test: web-to-db
-  Console URL:   https://console.cloud.google.com/net-intelligence/connectivity/tests/details/projects/prod/locations/global/tests/web-to-db?project=prod
-  Forward Status: REACHABLE
-  Return Status:  N/A
-  Source:        web-server-1 (10.128.0.5)
-  Destination:   db-server-1 (10.138.0.10:5432)
-  Protocol:      TCP
-
-  Path Analysis:
-    +---+------+-------------+---------------------+---------+
-    | # | Step | Type        | Resource            | Status  |
-    +---+------+-------------+---------------------+---------+
-    | 1 | →    | VM Instance | web-server-1        | OK      |
-    +---+------+-------------+---------------------+---------+
-    | 2 | →    | VPC         | prod-network        | OK      |
-    +---+------+-------------+---------------------+---------+
-    | 3 | →    | Firewall    | allow-internal      | ALLOWED |
-    +---+------+-------------+---------------------+---------+
-    | 4 | ✓    | VM Instance | db-server-1         | OK      |
-    +---+------+-------------+---------------------+---------+
-
-  Result: Connection successful ✓
-```
-
-Failure example:
-```
-✗ Connectivity Test: web-to-db
-  Console URL:   https://console.cloud.google.com/net-intelligence/connectivity/tests/details/projects/prod/locations/global/tests/web-to-db?project=prod
-  Forward Status: UNREACHABLE
-  Return Status:  N/A
-  Source:        web-server-1 (10.128.0.5)
-  Destination:   db-server-1 (10.138.0.10:5432)
-  Protocol:      TCP
-
-  Path Analysis:
-    +---+------+-------------+---------------------+----------+
-    | # | Step | Type        | Resource            | Status   |
-    +---+------+-------------+---------------------+----------+
-    | 1 | →    | VM Instance | web-server-1        | OK       |
-    +---+------+-------------+---------------------+----------+
-    | 2 | →    | VPC         | prod-network        | OK       |
-    +---+------+-------------+---------------------+----------+
-    | 3 | ✗    | Firewall    | deny-egress         | BLOCKED  |
-    +---+------+-------------+---------------------+----------+
-
-  Result: Connection failed ✗
-
-  Suggested Fix:
-  Add firewall rule allowing TCP traffic from 10.128.0.5 to 10.138.0.10:5432
-```
-
-### Common Use Cases
-
-**Troubleshoot connectivity**
-
-```console
-$ compass gcp connectivity-test create quick-check \
-    --project prod \
-    --source-instance app-1 \
-    --destination-instance db-primary \
-    --destination-port 5432
-time="12:20:11" level=info msg="Creating connectivity test: quick-check"
-...
-
-$ compass gcp connectivity-test get quick-check --project prod --watch
-time="12:20:20" level=info msg="Watching connectivity test (polling every 5 seconds)..."
-...
-```
-
-**Pre-deployment validation**
-
-```bash
-for service in auth billing; do
-  compass gcp connectivity-test create "${service}-egress" \
-    --project staging \
-    --source-instance "new-${service}" \
-    --destination-ip 10.0.1.100 \
-    --destination-port 443 \
-    --labels env=staging
-done
-```
-
-**Network policy verification**
-
-```bash
-for port in 80 443 8080; do
-  compass gcp connectivity-test create "web-port-${port}" \
-    --project prod \
-    --source-instance web-frontend \
-    --destination-instance backend \
-    --destination-port $port
-done
-
-compass gcp connectivity-test list --project prod --output table
-```
-
-**CI/CD automation**
-
-```bash
-compass gcp connectivity-test create ci-check \
-  --project staging \
-  --source-instance app \
-  --destination-instance db \
-  --destination-port 5432 \
-  --output json | jq -e '.reachabilityDetails.result == "REACHABLE"'
-```
-
-## VPN Overview
-
-Inspect Cloud VPN gateways, tunnels, and Cloud Router BGP sessions across your project. The output includes BGP route information (advertised and learned routes) and configuration warnings.
-
+**List all VPN gateways:**
 ```console
 $ compass gcp vpn list --project prod
 🔐 Gateway: prod-ha-vpn (us-central1)
   Network:     prod-vpc
   Interfaces:
-    - #0 IP: 10.10.0.2
-    - #1 IP: 10.10.1.2
+    - #0 IP: 35.242.106.234
+    - #1 IP: 35.220.88.140
   Tunnels:
     • prod-to-eu (us-central1)
       Peer IP:      203.0.113.10
@@ -565,61 +287,349 @@ $ compass gcp vpn list --project prod
         - prod-peer-eu (169.254.0.2, ASN 65001, enabled)
           Advertised Routes: 5
           Learned Routes: 3
-
-⚠️  Orphan Tunnels (not attached to HA VPN gateways):
-  • legacy-hub (us-east1) peer 198.51.100.10
-    Router: legacy-router
-
-⚠️  Configuration Warnings:
-  • Gateway 'staging-vpn' has no attached tunnels
-  • BGP peer 'backup-peer' has routing issues
 ```
 
-Use `--warnings=false` to hide the warnings section if you only want to see the active configuration.
+**Table view:**
+```bash
+compass gcp vpn list --project prod --output table
+```
 
-Switch to a concise table summary:
+**Inspect specific gateway:**
+```bash
+compass gcp vpn get prod-ha-vpn --type gateway --region us-central1
+```
 
+**Inspect specific tunnel:**
+```bash
+compass gcp vpn get prod-to-eu --type tunnel --region us-central1 --output json
+```
+
+**Hide warnings:**
+```bash
+compass gcp vpn list --project prod --warnings=false
+```
+
+### Connectivity Test Examples
+
+**Create a connectivity test:**
+```bash
+compass gcp connectivity-test create web-to-db \
+  --project prod \
+  --source-instance web-server-1 \
+  --destination-instance db-server-1 \
+  --destination-port 5432
+```
+
+**Watch test progress:**
+```bash
+compass gcp connectivity-test get web-to-db --project prod --watch
+```
+
+**List all tests:**
+```bash
+# Text format
+compass gcp connectivity-test list --project prod
+
+# Table format
+compass gcp ct list --project prod --output table
+```
+
+**IP-to-IP test:**
+```bash
+compass gcp ct create ip-test \
+  --project prod \
+  --source-ip 10.128.0.5 \
+  --destination-ip 10.138.0.10 \
+  --destination-port 443 \
+  --protocol TCP
+```
+
+**Rerun existing test:**
+```bash
+compass gcp ct run web-to-db --project prod
+```
+
+**Delete test:**
+```bash
+compass gcp ct delete web-to-db --project prod --force
+```
+
+## Detailed Usage
+
+### SSH to Instances
+
+**Basic command:**
+```bash
+compass gcp ssh [instance-name] [flags]
+```
+
+**Flags:**
+
+| Flag | Aliases | Description | Default |
+|------|---------|-------------|---------|
+| `--project` | `-p` | GCP project ID | Auto-discovered from cache if available |
+| `--zone` | `-z` | GCP zone | Auto-discovered from cache or API |
+| `--type` | `-t` | Resource type: `instance` or `mig` | Auto-detected (tries MIG first, then instance) |
+| `--ssh-flag` | | Additional SSH flags (can be used multiple times) | None |
+
+**Global flags:**
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--cache` | Enable/disable cache usage | `true` |
+| `--concurrency` | Maximum number of concurrent operations (worker pool size) | `10` |
+| `--log-level` | Set logging level (`trace`, `debug`, `info`, `warn`, `error`, `fatal`) | `info` |
+
+> **Note:** The `--concurrency` flag controls how many projects are scanned simultaneously during multi-project searches (SSH instance discovery, IP lookups) and also limits the number of concurrent progress spinners displayed. Increase this value for faster searches across many projects, or decrease it to reduce API rate limit usage.
+
+**When you target a managed instance group**, `compass gcp ssh` lists the running members and lets you choose the instance to connect to; if there's only one, it connects automatically.
+
+### Project Management
+
+Import and manage the list of GCP projects that Compass will search across for multi-project operations:
+
+```bash
+compass gcp projects import
+```
+
+This command discovers all GCP projects you have access to and presents an interactive selection menu. Choose which projects to cache for future operations like IP lookups or instance searches. Only selected projects will be scanned during multi-project operations.
+
+**Output example:**
 ```console
-$ compass gcp vpn list --project prod --output table
-┌────────────┬──────────────┬──────────────┬─────────────┬──────────┐
-│ GATEWAY    │ REGION       │ NETWORK      │ #INTERFACES │ #TUNNELS │
-├────────────┼──────────────┼──────────────┼─────────────┼──────────┤
-│ prod-ha-vpn│ us-central1  │ prod-vpc     │           2 │        2 │
-└────────────┴──────────────┴──────────────┴─────────────┴──────────┘
-
-┌────────────┬──────────────┬────────────┬─────────────┬─────────┬────────────┐
-│ GATEWAY    │ TUNNEL       │ REGION     │ PEER IP     │ ROUTER  │ BGP PEERS  │
-├────────────┼──────────────┼────────────┼─────────────┼─────────┼────────────┤
-│ prod-ha-vpn│ prod-to-eu   │ us-central1│ 203.0.113.10│ prod-router │ prod-peer-eu │
-└────────────┴──────────────┴────────────┴─────────────┴─────────┴────────────┘
+INFO  Discovering all accessible GCP projects...
+INFO  Found 47 projects
+Select projects to cache (use arrow keys, space to select, enter to confirm):
+  [ ] project-dev-123
+  [x] project-staging-456
+  [x] project-prod-789
+  [ ] project-archive-old
+  ...
+INFO  Selected 2 projects
+INFO  Successfully cached 2 projects
+✓ Projects imported successfully! You can now use 'compass gcp ssh' without --project flag.
 ```
 
-Use `--output json` to consume the inventory programmatically.
+### IP Address Lookup
 
-### Inspect a Single Gateway or Tunnel
+Identify which resources are assigned to a specific IP address:
 
-```console
-$ compass gcp vpn get prod-ha-vpn --type gateway --region us-central1
+```bash
+# Scan all cached projects
+compass gcp ip lookup <ip-address>
 
-$ compass gcp vpn get prod-to-eu --type tunnel --region us-central1 --output json
+# Specific project
+compass gcp ip lookup <ip-address> --project <project-id>
+
+# Different output formats
+compass gcp ip lookup <ip-address> --output [text|table|json]
 ```
+
+**What it finds:**
+- Compute Engine VM instances (internal and external IPs)
+- Forwarding rules (load balancers)
+- Reserved addresses
+- Subnet ranges (primary, secondary, IPv6)
+
+**How it works:**
+1. When no project is specified, scans all cached projects
+2. Remembers subnets during scanning
+3. On subsequent runs, checks cached subnet ranges first to identify likely projects
+4. Falls back to full scan if cache miss occurs
+
+**Requirements:**
+- At least one cached project (use `compass gcp projects import`), OR
+- Explicit `--project` flag
+
+### SSH Tunneling Recipes
+
+**Local port forwarding:**
+```bash
+compass gcp ssh app-server --project prod --ssh-flag "-L 3000:localhost:3000"
+```
+
+**Remote port forwarding:**
+```bash
+compass gcp ssh jump-host --project staging --ssh-flag "-R 8080:localhost:8080"
+```
+
+**SOCKS proxy:**
+```bash
+compass gcp ssh proxy-server --project dev --ssh-flag "-D 1080"
+```
+
+**X11 forwarding:**
+```bash
+compass gcp ssh desktop-instance --project dev --ssh-flag "-X"
+```
+
+**Multiple tunnels at once:**
+```bash
+compass gcp ssh multi-service \
+  --project prod \
+  --ssh-flag "-L 3000:service1:3000" \
+  --ssh-flag "-L 4000:service2:4000" \
+  --ssh-flag "-L 5000:database:5432"
+```
+
+**Jump host / bastion:**
+```bash
+compass gcp ssh internal-server \
+  --project prod \
+  --ssh-flag "-J bastion.example.com"
+```
+
+## Local Cache
+
+`compass` keeps a small JSON cache on disk so you do not have to repeat the same discovery calls on every run. The cache lives at `~/.compass.cache.json` with `0600` permissions and is refreshed transparently.
+
+**What's cached:**
+
+- **Project list**: Projects you've selected via `compass gcp projects import` are stored for multi-project operations. These are used when you run commands like `compass gcp ssh` or `compass gcp ip lookup` without specifying a `--project` flag. Entries expire after 30 days of inactivity.
+
+- **Resource locations**: Once `compass gcp ssh` resolves a VM or MIG, its project, zone/region, and resource type are stored for 30 days. When you omit `--project`, `--zone`, or `--type` on subsequent connections, the CLI reuses the cached metadata instantly without making API calls. Providing any of these flags bypasses the cache for that specific parameter.
+
+- **Zone listings**: Discovered zones for a project are cached for 30 days to speed up future region/zone discovery without additional API calls.
+
+- **Subnet metadata**: As `compass gcp ip lookup` crawls projects, it records subnets (primary/secondary CIDRs, IPv6 range, gateway, network, and region). Future IP lookups check these cached subnet ranges first to identify which projects likely contain the IP, dramatically reducing the number of projects that need to be scanned.
+
+**Cache behavior:**
+
+Every cache access updates its timestamp, keeping frequently-used entries fresh. Stale entries are pruned automatically when they exceed 30 days of inactivity.
+
+**Cache management:**
+
+```bash
+# Reset cache completely
+rm ~/.compass.cache.json
+
+# Disable cache for a single command
+compass --cache=false gcp ip lookup 10.0.0.1
+compass --cache=false gcp ssh my-instance
+```
+
+## Connectivity Tests
+
+Connectivity tests let you validate reachability between GCP resources using the Google Cloud Connectivity Tests API.
+
+> **Tip:** Use the shorter `ct` alias for connectivity-test commands: `compass gcp ct list` instead of `compass gcp connectivity-test list`
+
+**Environment variable:** Set `COMPASS_OUTPUT` to change the default output format (supported values: `text`, `table`, `json`, `detailed`). If the variable is unset, list commands default to `table` while detailed views use `text`.
+
+### Create a Test
+
+```bash
+compass gcp connectivity-test create <test-name> \
+  --project <project> \
+  --source-instance <instance> \
+  --destination-instance <instance> \
+  --destination-port <port>
+```
+
+**Options:**
+- `--source-instance` / `--source-ip` - Source endpoint
+- `--destination-instance` / `--destination-ip` - Destination endpoint
+- `--source-type` / `--destination-type` - Resource type (`instance` or `mig`)
+- `--destination-port` - Port number
+- `--protocol` - Protocol (TCP, UDP, ICMP, ESP, AH, SCTP, GRE)
+- `--labels` - Labels in `key=value,key2=value2` format
+- `--source-network` / `--destination-network` - Custom VPC networks
+- `--source-project` / `--destination-project` - Cross-project tests
+
+### Watch, Get, Rerun
+
+```bash
+# Watch test until completion
+compass gcp ct get <test-name> --project <project> --watch
+
+# Get test results
+compass gcp ct get <test-name> --project <project>
+
+# Rerun test
+compass gcp ct run <test-name> --project <project>
+```
+
+### List and Delete
+
+```bash
+# List tests
+compass gcp ct list --project <project>
+compass gcp ct list --project <project> --output table
+
+# Filter by labels
+compass gcp ct list --project <project> --filter "labels.env=prod"
+
+# Limit results
+compass gcp ct list --project <project> --limit 10
+
+# Delete test
+compass gcp ct delete <test-name> --project <project>
+compass gcp ct delete <test-name> --project <project> --force  # Skip confirmation
+```
+
+**See [Command Examples](#connectivity-test-examples) for detailed output examples.**
+
+## VPN Inspection
+
+Inspect Cloud VPN gateways, tunnels, and Cloud Router BGP sessions across your project.
+
+```bash
+# List all VPN resources
+compass gcp vpn list --project <project>
+
+# Table format
+compass gcp vpn list --project <project> --output table
+
+# JSON format for automation
+compass gcp vpn list --project <project> --output json
+
+# Hide warnings
+compass gcp vpn list --project <project> --warnings=false
+
+# Inspect specific gateway
+compass gcp vpn get <gateway-name> --type gateway --region <region>
+
+# Inspect specific tunnel
+compass gcp vpn get <tunnel-name> --type tunnel --region <region>
+```
+
+**Output includes:**
+- Gateway interfaces and IPs
+- Tunnel status and peer information
+- BGP peer configuration
+- Advertised and learned routes
+- Configuration warnings (orphaned tunnels, missing configurations, etc.)
+
+**See [VPN Inspection Examples](#vpn-inspection-examples) for detailed output examples.**
 
 ## Development
 
 Use the `Taskfile.yml` to build, lint, and test consistently.
 
-- `task build` – compile the `compass` binary with version metadata
-- `task run -- gcp <instance> --project <id>` – run the CLI without generating a binary
-- `task fmt` / `task lint` / `task vet` – formatting, linting, and static analysis
-- `task test` / `task test-short` / `task test-integration` – full, unit, and integration test suites
-- `task test-coverage` – generate coverage reports
-- `task dev` – hot-reload workflow (requires [`air`](https://github.com/cosmtrek/air))
+**Common tasks:**
+```bash
+task build              # Compile binary with version metadata
+task run -- gcp ssh my-instance --project my-project  # Run without building
+task fmt                # Format code
+task lint               # Run linters
+task vet                # Static analysis
+task test               # Run all tests
+task test-short         # Run unit tests only
+task test-integration   # Run integration tests
+task test-coverage      # Generate coverage reports
+task dev                # Hot-reload development (requires air)
+```
+
+**Requirements for development:**
+- Go 1.19 or newer
+- [`go-task`](https://taskfile.dev/)
+- [`golangci-lint`](https://golangci-lint.run/) for linting
+- [`air`](https://github.com/cosmtrek/air) for hot-reload (optional)
 
 Remove compiled binaries like `./compass` before committing changes.
 
 ## CI/CD
 
-GitHub Actions run `task check` (fmt, vet, lint, test) and `task test-race` on pull requests and pushes to `main`. Tagging a commit triggers an automated release that repeats `task check`, verifies formatting stays clean, rebuilds via `task build`, and publishes notes.
+GitHub Actions run `task check` (fmt, vet, lint, test) and `task test-race` on pull requests and pushes to `main`. Tagging a commit triggers an automated release that repeats `task check`, verifies formatting stays clean, rebuilds via `task build`, and publishes release notes with pre-built binaries for multiple platforms.
 
 ## Roadmap
 
@@ -627,6 +637,8 @@ GitHub Actions run `task check` (fmt, vet, lint, test) and `task test-race` on p
 - [ ] Connectivity test templates and presets
 - [ ] Bulk connectivity test operations
 - [ ] Export connectivity results to additional formats
+- [ ] Cache management commands (list, remove specific entries)
+- [ ] Interactive MIG instance selection improvements
 
 ## License
 
@@ -634,4 +646,4 @@ Licensed under the [Apache License 2.0](LICENSE).
 
 ## Support
 
-For issues or feature requests, open an issue in this repository.
+For issues or feature requests, open an issue on [GitHub](https://github.com/kedare/compass/issues).

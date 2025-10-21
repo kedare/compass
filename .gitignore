@@ -63,3 +63,4 @@ coverage.out
 .gocache/
 .gomodcache/
 .cache/
+vendor/

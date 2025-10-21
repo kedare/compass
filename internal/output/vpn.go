@@ -5,13 +5,11 @@ package output
 
 import (
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
-	"github.com/jedib0t/go-pretty/v6/table"
-	"github.com/jedib0t/go-pretty/v6/text"
 	"github.com/kedare/compass/internal/gcp"
+	"github.com/pterm/pterm"
 )
 
 const (
@@ -84,20 +82,18 @@ func DisplayVPNGateway(gw *gcp.VPNGatewayInfo, format string) error {
 	case "json":
 		return displayJSON(gw)
 	case "table":
-		t := table.NewWriter()
-		t.SetOutputMirror(os.Stdout)
-		t.SetStyle(table.StyleLight)
-		t.AppendHeader(table.Row{"Gateway", "Region", "Network", "Interfaces", "Tunnels"})
-		t.AppendRow(table.Row{
-			gw.Name,
-			gw.Region,
-			resourceName(gw.Network),
-			len(gw.Interfaces),
-			len(gw.Tunnels),
-		})
-		t.Render()
+		tableData := pterm.TableData{
+			{"Gateway", "Region", "Network", "Interfaces", "Tunnels"},
+			{
+				gw.Name,
+				gw.Region,
+				resourceName(gw.Network),
+				fmt.Sprintf("%d", len(gw.Interfaces)),
+				fmt.Sprintf("%d", len(gw.Tunnels)),
+			},
+		}
 
-		return nil
+		return pterm.DefaultTable.WithHasHeader().WithData(tableData).Render()
 	default:
 		return renderGatewayText(gw)
 	}
@@ -114,21 +110,19 @@ func DisplayVPNTunnel(tunnel *gcp.VPNTunnelInfo, format string) error {
 	case "json":
 		return displayJSON(tunnel)
 	case "table":
-		t := table.NewWriter()
-		t.SetOutputMirror(os.Stdout)
-		t.SetStyle(table.StyleLight)
-		t.AppendHeader(table.Row{"Tunnel", "Region", "Status", "Router", "BGP Peers"})
 		peers := tunnelPeerSummary(tunnel)
-		t.AppendRow(table.Row{
-			colorTunnelName(tunnel),
-			tunnel.Region,
-			colorStatus(tunnel.Status),
-			tunnel.RouterName,
-			peers,
-		})
-		t.Render()
+		tableData := pterm.TableData{
+			{"Tunnel", "Region", "Status", "Router", "BGP Peers"},
+			{
+				colorTunnelName(tunnel),
+				tunnel.Region,
+				colorStatus(tunnel.Status),
+				tunnel.RouterName,
+				peers,
+			},
+		}
 
-		return nil
+		return pterm.DefaultTable.WithHasHeader().WithData(tableData).Render()
 	default:
 		return renderTunnelText(tunnel)
 	}
@@ -314,7 +308,7 @@ func displayVPNText(data *gcp.VPNOverview, showWarnings bool) error {
 
 			for _, gw := range sortedGateways(gatewaysWithNoTunnels) {
 				fmt.Printf("  • %s (%s) - %d interface(s) configured but no tunnels\n",
-					text.Colors{text.Bold, text.FgYellow}.Sprint(gw.Name),
+					pterm.NewStyle(pterm.Bold, pterm.FgYellow).Sprint(gw.Name),
 					gw.Region,
 					len(gw.Interfaces),
 				)
@@ -333,7 +327,7 @@ func displayVPNText(data *gcp.VPNOverview, showWarnings bool) error {
 					tunnelName = gw.Tunnels[0].Name
 				}
 				fmt.Printf("  • %s (%s) - %d interface(s) but only 1 tunnel: %s\n",
-					text.Colors{text.Bold, text.FgYellow}.Sprint(gw.Name),
+					pterm.NewStyle(pterm.Bold, pterm.FgYellow).Sprint(gw.Name),
 					gw.Region,
 					len(gw.Interfaces),
 					tunnelName,
@@ -398,29 +392,30 @@ func displayVPNTable(data *gcp.VPNOverview, showWarnings bool) error {
 		return nil
 	}
 
-	tw := table.NewWriter()
-	tw.SetOutputMirror(os.Stdout)
-	tw.SetStyle(table.StyleRounded)
-
-	tw.AppendHeader(table.Row{"Gateway", "Region", "Network", "#Interfaces", "#Tunnels"})
+	// First table: Gateway summary
+	tableData := pterm.TableData{
+		{"Gateway", "Region", "Network", "#Interfaces", "#Tunnels"},
+	}
 
 	for _, gw := range sortedGateways(data.Gateways) {
-		tw.AppendRow(table.Row{
+		tableData = append(tableData, []string{
 			gw.Name,
 			gw.Region,
 			resourceName(gw.Network),
-			len(gw.Interfaces),
-			len(gw.Tunnels),
+			fmt.Sprintf("%d", len(gw.Interfaces)),
+			fmt.Sprintf("%d", len(gw.Tunnels)),
 		})
 	}
 
-	tw.Render()
+	if err := pterm.DefaultTable.WithHasHeader().WithData(tableData).Render(); err != nil {
+		return err
+	}
 	fmt.Println()
 
-	detail := table.NewWriter()
-	detail.SetOutputMirror(os.Stdout)
-	detail.SetStyle(table.StyleLight)
-	detail.AppendHeader(table.Row{"Gateway", "Tunnel", "Region", "Status", "Router", "BGP Peers"})
+	// Second table: Tunnel details
+	detailData := pterm.TableData{
+		{"Gateway", "Tunnel", "Region", "Status", "Router", "BGP Peers"},
+	}
 
 	for _, gw := range sortedGateways(data.Gateways) {
 		for _, tunnel := range sortedTunnels(gw.Tunnels) {
@@ -437,7 +432,7 @@ func displayVPNTable(data *gcp.VPNOverview, showWarnings bool) error {
 				peerNames = append(peerNames, display)
 			}
 
-			detail.AppendRow(table.Row{
+			detailData = append(detailData, []string{
 				gw.Name,
 				colorTunnelName(tunnel),
 				tunnel.Region,
@@ -448,19 +443,20 @@ func displayVPNTable(data *gcp.VPNOverview, showWarnings bool) error {
 		}
 	}
 
-	if detail.Length() > 0 {
-		detail.Render()
+	if len(detailData) > 1 { // More than just header
+		if err := pterm.DefaultTable.WithHasHeader().WithData(detailData).Render(); err != nil {
+			return err
+		}
 	}
 
 	if len(data.OrphanTunnels) > 0 {
 		fmt.Println()
-		orphans := table.NewWriter()
-		orphans.SetOutputMirror(os.Stdout)
-		orphans.SetStyle(table.StyleLight)
-		orphans.AppendHeader(table.Row{"Orphan Tunnel", "Region", "Status", "IPSec Peer", "Router"})
+		orphansData := pterm.TableData{
+			{"Orphan Tunnel", "Region", "Status", "IPSec Peer", "Router"},
+		}
 
 		for _, tunnel := range sortedTunnels(data.OrphanTunnels) {
-			orphans.AppendRow(table.Row{
+			orphansData = append(orphansData, []string{
 				colorTunnelName(tunnel),
 				tunnel.Region,
 				colorStatus(tunnel.Status),
@@ -469,29 +465,32 @@ func displayVPNTable(data *gcp.VPNOverview, showWarnings bool) error {
 			})
 		}
 
-		orphans.Render()
+		if err := pterm.DefaultTable.WithHasHeader().WithData(orphansData).Render(); err != nil {
+			return err
+		}
 	}
 
 	if len(data.OrphanSessions) > 0 {
 		fmt.Println()
-		bgps := table.NewWriter()
-		bgps.SetOutputMirror(os.Stdout)
-		bgps.SetStyle(table.StyleLight)
-		bgps.AppendHeader(table.Row{"BGP Peer", "Router", "Region", "BGP Peers", "State", "Received", "Advertised"})
+		bgpsData := pterm.TableData{
+			{"BGP Peer", "Router", "Region", "BGP Peers", "State", "Received", "Advertised"},
+		}
 
 		for _, peer := range sortedPeers(data.OrphanSessions) {
-			bgps.AppendRow(table.Row{
+			bgpsData = append(bgpsData, []string{
 				colorPeerName(peer),
 				peer.RouterName,
 				peer.Region,
 				formatEndpointPair(peer),
 				colorPeerStatus(peer),
-				peer.LearnedRoutes,
-				peer.AdvertisedCount,
+				fmt.Sprintf("%d", peer.LearnedRoutes),
+				fmt.Sprintf("%d", peer.AdvertisedCount),
 			})
 		}
 
-		bgps.Render()
+		if err := pterm.DefaultTable.WithHasHeader().WithData(bgpsData).Render(); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -578,8 +577,6 @@ func colorStatus(status string) string {
 // Green if enabled and UP, yellow if enabled but not UP, red if disabled.
 // Returns an empty string if the peer is nil.
 func colorPeerName(peer *gcp.BGPSessionInfo) string {
-	style := text.Colors{text.Bold, text.FgRed}
-
 	if peer == nil {
 		return ""
 	}
@@ -587,12 +584,12 @@ func colorPeerName(peer *gcp.BGPSessionInfo) string {
 	status := classifyStatus(peer.SessionStatus)
 
 	if peer.Enabled && status == statusClassBad {
-		style = text.Colors{text.Bold, text.FgYellow}
+		return pterm.NewStyle(pterm.Bold, pterm.FgYellow).Sprint(peer.Name)
 	} else if peer.Enabled && status == statusClassGood {
-		style = text.Colors{text.Bold, text.FgGreen}
+		return pterm.NewStyle(pterm.Bold, pterm.FgGreen).Sprint(peer.Name)
 	}
 
-	return style.Sprint(peer.Name)
+	return pterm.NewStyle(pterm.Bold, pterm.FgRed).Sprint(peer.Name)
 }
 
 // colorPeerStatus returns a formatted status string for a BGP peer with color coding.
@@ -663,11 +660,11 @@ func applyStyle(textValue, style string) string {
 
 	switch style {
 	case statusClassGood:
-		return text.Colors{text.Bold, text.FgGreen}.Sprint(textValue)
+		return pterm.NewStyle(pterm.Bold, pterm.FgGreen).Sprint(textValue)
 	case statusClassBad:
-		return text.Colors{text.Bold, text.FgRed}.Sprint(textValue)
+		return pterm.NewStyle(pterm.Bold, pterm.FgRed).Sprint(textValue)
 	case statusClassWarn:
-		return text.Colors{text.Bold, text.FgYellow}.Sprint(textValue)
+		return pterm.NewStyle(pterm.Bold, pterm.FgYellow).Sprint(textValue)
 	default:
 		return textValue
 	}
@@ -790,10 +787,10 @@ func renderBGPPeers(peers []*gcp.BGPSessionInfo, indent string) {
 			for _, prefix := range peer.LearnedPrefixes {
 				if bestRoutes[prefix] {
 					// Highlight best routes in bold
-					formatted = append(formatted, text.Colors{text.Bold}.Sprint(prefix))
+					formatted = append(formatted, pterm.NewStyle(pterm.Bold).Sprint(prefix))
 				} else {
-					// Gray out non-best routes
-					formatted = append(formatted, text.Colors{text.Faint}.Sprint(prefix))
+					// Gray out non-best routes (using FgGray instead of Faint)
+					formatted = append(formatted, pterm.NewStyle(pterm.FgGray).Sprint(prefix))
 				}
 			}
 

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/kedare/compass/internal/gcp"
 	"github.com/kedare/compass/internal/logger"
@@ -17,12 +17,14 @@ import (
 
 var ipLookupOutputFormat string
 
+// lookupResult represents the result of an IP lookup operation for a single GCP client.
 type lookupResult struct {
 	client       *gcp.Client
 	associations []gcp.IPAssociation
 	err          error
 }
 
+// lookupAttemptOutcome aggregates the results from multiple lookup attempts across projects.
 type lookupAttemptOutcome struct {
 	results        []gcp.IPAssociation
 	successClients []*gcp.Client
@@ -41,6 +43,8 @@ projects are scanned automatically.`,
 		runIPLookup(cmd.Context(), args[0])
 	},
 }
+
+var loadCacheFunc = gcp.LoadCache
 
 func init() {
 	// init registers the IP lookup command on the parent IP command and configures flags.
@@ -139,7 +143,7 @@ func preferredProjectsForIP(ip net.IP) []string {
 		return nil
 	}
 
-	cacheInst, err := gcp.LoadCache()
+	cacheInst, err := loadCacheFunc()
 	if err != nil || cacheInst == nil {
 		return nil
 	}
@@ -177,6 +181,8 @@ func preferredProjectsForIP(ip net.IP) []string {
 }
 
 // executeLookupAcrossClients scans each client and aggregates the results while updating the spinner.
+// The function uses the global concurrency setting to limit the number of concurrent operations
+// and the number of concurrent progress spinners displayed.
 func executeLookupAcrossClients(ctx context.Context, ip string, clients []*gcp.Client, spin *output.Spinner) lookupAttemptOutcome {
 	outcome := lookupAttemptOutcome{}
 	if len(clients) == 0 {
@@ -186,16 +192,55 @@ func executeLookupAcrossClients(ctx context.Context, ip string, clients []*gcp.C
 	lookupCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// Use global concurrency setting (limited to reasonable max if needed)
+	workerCount := concurrency
+	if workerCount > len(clients) {
+		workerCount = len(clients)
+	}
+
 	group, groupCtx := errgroup.WithContext(lookupCtx)
-	group.SetLimit(lookupConcurrency(len(clients)))
+	group.SetLimit(workerCount)
 	progressCh := make(chan string, len(clients))
 	resultCh := make(chan lookupResult, len(clients))
 	waitErrCh := make(chan error, 1)
+	projectSpinners := make(map[string]*output.Spinner)
+	var projectMu sync.Mutex
+
+	// Create slot channel for worker pool (controls concurrent spinners)
+	slotCh := make(chan int, workerCount)
+	for i := 0; i < workerCount; i++ {
+		slotCh <- i
+	}
+
+	stopAllProjectSpinners := func(finalize func(*output.Spinner)) {
+		projectMu.Lock()
+		spinners := make([]*output.Spinner, 0, len(projectSpinners))
+		for key, sp := range projectSpinners {
+			if sp != nil {
+				spinners = append(spinners, sp)
+			}
+			delete(projectSpinners, key)
+		}
+		projectMu.Unlock()
+
+		for _, sp := range spinners {
+			finalize(sp)
+		}
+	}
 
 	for _, client := range clients {
 		client := client
 
 		group.Go(func() error {
+			// Acquire a worker slot
+			var slotID int
+			select {
+			case slotID = <-slotCh:
+				defer func() { slotCh <- slotID }() // Return slot when done
+			case <-groupCtx.Done():
+				return groupCtx.Err()
+			}
+
 			select {
 			case progressCh <- client.ProjectID():
 			case <-groupCtx.Done():
@@ -247,6 +292,9 @@ loop:
 		case <-ctxDone:
 			outcome.canceled = true
 			cancel()
+			stopAllProjectSpinners(func(sp *output.Spinner) {
+				sp.Fail("Lookup canceled")
+			})
 			break loop
 		case projectID, ok := <-progressCh:
 			if !ok {
@@ -254,6 +302,17 @@ loop:
 				continue
 			}
 			started++
+			projectMu.Lock()
+			projSpinner, exists := projectSpinners[projectID]
+			if !exists {
+				projSpinner = output.NewSpinner(fmt.Sprintf("Scanning project %s", projectID))
+				projSpinner.Start()
+				projectSpinners[projectID] = projSpinner
+			} else {
+				projSpinner.Update(fmt.Sprintf("Scanning project %s", projectID))
+			}
+			projectMu.Unlock()
+
 			if spin != nil {
 				spin.Update(fmt.Sprintf("Scanning project %s (%d/%d started)", projectID, started, total))
 			}
@@ -265,10 +324,19 @@ loop:
 
 			processed++
 
+			projectID := res.client.ProjectID()
+			projectMu.Lock()
+			projSpinner := projectSpinners[projectID]
+			delete(projectSpinners, projectID)
+			projectMu.Unlock()
+
 			if res.err != nil {
 				if isContextError(res.err) {
 					outcome.canceled = true
 					cancel()
+					if projSpinner != nil {
+						projSpinner.Fail("Lookup canceled")
+					}
 					break loop
 				}
 
@@ -276,12 +344,20 @@ loop:
 				if spin != nil {
 					spin.Update(fmt.Sprintf("Skipped project %s (%d/%d done)", res.client.ProjectID(), processed, total))
 				}
+				if projSpinner != nil {
+					projSpinner.Fail(fmt.Sprintf("Failed: %v", res.err))
+				}
 
 				continue
 			}
 
 			if spin != nil {
 				spin.Update(fmt.Sprintf("Completed project %s (%d/%d done)", res.client.ProjectID(), processed, total))
+			}
+
+			if projSpinner != nil {
+				// Just stop without showing success message to keep output clean
+				projSpinner.Stop()
 			}
 
 			outcome.hadSuccess = true
@@ -302,6 +378,10 @@ loop:
 	} else if waitErr != nil {
 		logger.Log.Warnf("Lookup workers encountered an error: %v", waitErr)
 	}
+
+	stopAllProjectSpinners(func(sp *output.Spinner) {
+		sp.Stop()
+	})
 
 	outcome.results = results
 	outcome.successClients = successClients
@@ -332,7 +412,8 @@ func dedupeAssociations(input []gcp.IPAssociation) []gcp.IPAssociation {
 }
 
 // lookupClients builds unique GCP clients that will participate in the lookup.
-// lookupClients builds unique GCP clients that will participate in the lookup.
+// If limitProjects is provided, only those projects are used. Otherwise, it falls back
+// to the cache or creates a default client.
 func lookupClients(ctx context.Context, limitProjects []string) []*gcp.Client {
 	seen := make(map[string]struct{})
 	clients := make([]*gcp.Client, 0)
@@ -429,24 +510,6 @@ func enumerateProjects(projects []string) []string {
 	}
 
 	return unique
-}
-
-// lookupConcurrency determines the number of concurrent lookups to run.
-func lookupConcurrency(total int) int {
-	if total <= 1 {
-		return 1
-	}
-
-	max := runtime.NumCPU() * 4
-	if max < 4 {
-		max = 4
-	}
-
-	if total < max {
-		return total
-	}
-
-	return max
 }
 
 // isContextError reports whether the provided error is caused by context cancellation.
