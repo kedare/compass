@@ -55,6 +55,8 @@ func runVPNList(ctx context.Context) {
 	if err := output.DisplayVPNOverview(overview, vpnOutputFormat, vpnShowWarnings); err != nil {
 		logger.Log.Fatalf("Failed to render VPN overview: %v", err)
 	}
+
+	client.RememberProject()
 }
 
 func init() {

@@ -134,6 +134,8 @@ func runCreateTest(ctx context.Context) {
 	if err := output.DisplayConnectivityTestResult(result, createOutputFormat); err != nil {
 		logger.Log.Errorf("Failed to display results: %v", err)
 	}
+
+	gcpClient.RememberProject()
 }
 
 func validateCreateInputs() error {

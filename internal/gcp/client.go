@@ -118,12 +118,6 @@ func NewClient(ctx context.Context, project string) (*Client, error) {
 		cache:   c,
 	}
 
-	if client.cache != nil {
-		if err := client.cache.AddProject(client.project); err != nil {
-			logger.Log.Warnf("Failed to remember project %s: %v", client.project, err)
-		}
-	}
-
 	return client, nil
 }
 
@@ -134,6 +128,21 @@ func (c *Client) ProjectID() string {
 	}
 
 	return c.project
+}
+
+// RememberProject persists the client's project in the local cache when available.
+func (c *Client) RememberProject() {
+	if c == nil {
+		return
+	}
+
+	if c.cache == nil {
+		return
+	}
+
+	if err := c.cache.AddProject(c.project); err != nil {
+		logger.Log.Warnf("Failed to remember project %s: %v", c.project, err)
+	}
 }
 
 func (c *Client) FindInstance(ctx context.Context, instanceName, zone string) (*Instance, error) {
