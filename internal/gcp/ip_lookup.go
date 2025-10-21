@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/kedare/compass/internal/cache"
 	"github.com/kedare/compass/internal/logger"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/compute/v1"
@@ -362,6 +363,41 @@ func (c *Client) collectSubnetMatches(ctx context.Context, target net.IP, canoni
 
 				if subnet == nil {
 					continue
+				}
+
+				if c.cache != nil {
+					secondary := make([]cache.SubnetSecondaryRange, 0, len(subnet.SecondaryIpRanges))
+					for _, sr := range subnet.SecondaryIpRanges {
+						if sr == nil {
+							continue
+						}
+
+						cidr := strings.TrimSpace(sr.IpCidrRange)
+						if cidr == "" {
+							continue
+						}
+
+						secondary = append(secondary, cache.SubnetSecondaryRange{
+							Name: strings.TrimSpace(sr.RangeName),
+							CIDR: cidr,
+						})
+					}
+
+					entry := &cache.SubnetEntry{
+						Project:         c.project,
+						Network:         lastComponent(subnet.Network),
+						Region:          lastComponent(subnet.Region),
+						Name:            subnet.Name,
+						SelfLink:        strings.TrimSpace(subnet.SelfLink),
+						PrimaryCIDR:     strings.TrimSpace(subnet.IpCidrRange),
+						SecondaryRanges: secondary,
+						IPv6CIDR:        strings.TrimSpace(subnet.Ipv6CidrRange),
+						Gateway:         strings.TrimSpace(subnet.GatewayAddress),
+					}
+
+					if err := c.cache.RememberSubnet(entry); err != nil {
+						logger.Log.Debugf("Failed to cache subnet %s in project %s: %v", subnet.Name, c.project, err)
+					}
 				}
 
 				matched, detail := subnetMatchDetails(subnet, target)
