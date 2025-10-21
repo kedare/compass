@@ -13,6 +13,7 @@ import (
 
 	"github.com/kedare/compass/internal/gcp"
 	"github.com/kedare/compass/internal/logger"
+	"github.com/kedare/compass/internal/output"
 	"github.com/kedare/compass/internal/ssh"
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
@@ -87,29 +88,76 @@ Examples:
 
 		// If project or resource type is not specified, try to get it from cache
 		var cachedResourceType string
-		if project == "" || resourceType == "" {
-			logger.Log.Debug("Project or resource type not specified, checking cache")
+		var cachedProjects []string
+		var cachedProject string
+		var cachedZone string
+
+		if resourceType == "" || project == "" || zone == "" {
+			logger.Log.Debug("Checking cache for resource information")
 			cache, err := gcp.LoadCache()
 			if err == nil && cache != nil {
 				if cachedInfo, found := cache.Get(instanceName); found {
-					if project == "" {
-						logger.Log.Debugf("Found cached project for resource: %s", cachedInfo.Project)
-						project = cachedInfo.Project
-					}
 					if resourceType == "" {
 						cachedResourceType = string(cachedInfo.Type)
-						logger.Log.Debugf("Found cached resource type for resource: %s", cachedResourceType)
+						logger.Log.Debugf("Found cached resource type: %s", cachedResourceType)
+					}
+					if project == "" && cachedInfo.Project != "" {
+						cachedProject = cachedInfo.Project
+						logger.Log.Debugf("Found cached project: %s", cachedProject)
+					}
+					if zone == "" && cachedInfo.Zone != "" {
+						cachedZone = cachedInfo.Zone
+						logger.Log.Debugf("Found cached zone: %s", cachedZone)
 					}
 				}
 			}
 		}
 
-		gcpClient, err := gcp.NewClient(ctx, project)
-		if err != nil {
-			logger.Log.Fatalf("Failed to create GCP client: %v", err)
+		// Determine which project(s) to use
+		if project == "" {
+			// If we found a cached project for this specific resource, use it directly
+			if cachedProject != "" {
+				logger.Log.Debugf("Using cached project %s for resource %s", cachedProject, instanceName)
+				project = cachedProject
+				// Also use cached zone if available
+				if zone == "" && cachedZone != "" {
+					zone = cachedZone
+					logger.Log.Debugf("Using cached zone %s for resource %s", cachedZone, instanceName)
+				}
+			} else {
+				// No cached resource - need to search across all cached projects
+				logger.Log.Debug("No cached project for this resource, checking for available projects to search")
+
+				// Try to get projects from cache (only if cache is enabled)
+				cache, err := gcp.LoadCache()
+				if err == nil && cache != nil {
+					cachedProjects = cache.GetProjects()
+					if len(cachedProjects) > 0 {
+						logger.Log.Debugf("Will search across %d cached projects", len(cachedProjects))
+					} else {
+						// No cached projects - fail hard
+						logger.Log.Fatalf("No projects found in cache. Please specify a project with --project, or import projects with 'compass gcp projects import'")
+					}
+				} else {
+					// Cache disabled or failed to load - fail hard
+					logger.Log.Fatalf("No project specified and cache is disabled or unavailable. Please specify a project with --project")
+				}
+			}
+		}
+
+		// If we have a specific project or no cached projects, create a single client
+		// Otherwise, we'll search across multiple projects
+		var gcpClient *gcp.Client
+		if project != "" || len(cachedProjects) == 0 {
+			var err error
+			gcpClient, err = gcp.NewClient(ctx, project)
+			if err != nil {
+				logger.Log.Fatalf("Failed to create GCP client: %v", err)
+			}
 		}
 
 		var instance *gcp.Instance
+		var err error
 
 		// Use cached resource type if available and not explicitly specified
 		effectiveResourceType := resourceType
@@ -118,66 +166,41 @@ Examples:
 			logger.Log.Debugf("Using cached resource type: %s", effectiveResourceType)
 		}
 
-		// Check if resource type is specified or cached
-		switch effectiveResourceType {
-		case resourceTypeMIG:
-			logger.Log.Debug("Resource type specified as MIG, presenting instances for selection")
-			instance, err = resolveInstanceFromMIG(ctx, cmd, gcpClient, instanceName, zone)
+		// If we need to search across multiple projects
+		if len(cachedProjects) > 0 && gcpClient == nil {
+			logger.Log.Debugf("Searching for %s across %d projects", instanceName, len(cachedProjects))
+			instance, err = findInstanceAcrossProjects(ctx, cmd, instanceName, zone, effectiveResourceType, cachedProjects)
 			if err != nil {
 				if isContextCanceled(ctx, err) {
 					logger.Log.Info("Instance lookup canceled")
-
 					return
 				}
-				logger.Log.Fatalf("Failed to resolve MIG instances: %v", err)
+				logger.Log.Fatalf("Failed to find instance across projects: %v", err)
 			}
-		case resourceTypeInstance:
-			logger.Log.Debug("Resource type specified as instance, searching instance only")
-			instance, err = findInstanceWithProgress(ctx, gcpClient, instanceName, zone)
-			if err != nil {
-				if isContextCanceled(ctx, err) {
-					logger.Log.Info("Instance lookup canceled")
+		} else {
+			// Single project search
+			// Check if resource type is specified or cached
+			switch effectiveResourceType {
+			case resourceTypeMIG:
+				logger.Log.Debug("Resource type specified as MIG, presenting instances for selection")
+				instance, err = resolveInstanceFromMIG(ctx, cmd, gcpClient, instanceName, zone)
+				if err != nil {
+					if isContextCanceled(ctx, err) {
+						logger.Log.Info("Instance lookup canceled")
 
-					return
-				}
-				logger.Log.Fatalf("Failed to find instance: %v", err)
-			}
-		default:
-			// Auto-detect: Try MIG first, then instance
-			logger.Log.Debug("Attempting to find instance in MIG first")
-			instance, err = resolveInstanceFromMIG(ctx, cmd, gcpClient, instanceName, zone)
-			if err != nil {
-				if errors.Is(err, gcp.ErrMIGNotFound) ||
-					errors.Is(err, gcp.ErrNoInstancesInMIG) ||
-					errors.Is(err, gcp.ErrNoInstancesInRegionalMIG) {
-					logger.Log.Debugf("MIG lookup failed (%v), trying standalone instance", err)
-					instance, err = findInstanceWithProgress(ctx, gcpClient, instanceName, zone)
-					if err != nil {
-						if isContextCanceled(ctx, err) {
-							logger.Log.Info("Instance lookup canceled")
-
-							return
-						}
-						logger.Log.Fatalf("Failed to find instance: %v", err)
+						return
 					}
-
-					break
+					logger.Log.Fatalf("Failed to resolve MIG instances: %v", err)
 				}
-
-				if isContextCanceled(ctx, err) {
-					logger.Log.Info("Instance lookup canceled")
-
-					return
+			case resourceTypeInstance:
+				logger.Log.Debug("Resource type specified as instance, searching instance only")
+				// If we have zone from cache, skip progress indicator as we know exactly where to look
+				if zone != "" && cachedZone != "" {
+					logger.Log.Debug("Using cached location, skipping search spinner")
+					instance, err = findInstanceWithoutProgress(ctx, gcpClient, instanceName, zone)
+				} else {
+					instance, err = findInstanceWithProgress(ctx, gcpClient, instanceName, zone)
 				}
-				logger.Log.Fatalf("Failed to list MIG instances: %v", err)
-
-				return
-			}
-
-			if instance == nil {
-				logger.Log.Debug("No MIG instance selected, attempting standalone instance")
-				// If MIG not found, try to find standalone instance
-				instance, err = findInstanceWithProgress(ctx, gcpClient, instanceName, zone)
 				if err != nil {
 					if isContextCanceled(ctx, err) {
 						logger.Log.Info("Instance lookup canceled")
@@ -186,10 +209,74 @@ Examples:
 					}
 					logger.Log.Fatalf("Failed to find instance: %v", err)
 				}
+			default:
+				// Auto-detect: Try MIG first, then instance
+				logger.Log.Debug("Attempting to find instance in MIG first")
+				instance, err = resolveInstanceFromMIG(ctx, cmd, gcpClient, instanceName, zone)
+				if err != nil {
+					if errors.Is(err, gcp.ErrMIGNotFound) ||
+						errors.Is(err, gcp.ErrNoInstancesInMIG) ||
+						errors.Is(err, gcp.ErrNoInstancesInRegionalMIG) {
+						logger.Log.Debugf("MIG lookup failed (%v), trying standalone instance", err)
+						// If we have zone from cache, skip progress indicator
+						if zone != "" && cachedZone != "" {
+							logger.Log.Debug("Using cached location, skipping search spinner")
+							instance, err = findInstanceWithoutProgress(ctx, gcpClient, instanceName, zone)
+						} else {
+							instance, err = findInstanceWithProgress(ctx, gcpClient, instanceName, zone)
+						}
+						if err != nil {
+							if isContextCanceled(ctx, err) {
+								logger.Log.Info("Instance lookup canceled")
+
+								return
+							}
+							logger.Log.Fatalf("Failed to find instance: %v", err)
+						}
+
+						break
+					}
+
+					if isContextCanceled(ctx, err) {
+						logger.Log.Info("Instance lookup canceled")
+
+						return
+					}
+					logger.Log.Fatalf("Failed to list MIG instances: %v", err)
+
+					return
+				}
+
+				if instance == nil {
+					logger.Log.Debug("No MIG instance selected, attempting standalone instance")
+					// If MIG not found, try to find standalone instance
+					// If we have zone from cache, skip progress indicator
+					if zone != "" && cachedZone != "" {
+						logger.Log.Debug("Using cached location, skipping search spinner")
+						instance, err = findInstanceWithoutProgress(ctx, gcpClient, instanceName, zone)
+					} else {
+						instance, err = findInstanceWithProgress(ctx, gcpClient, instanceName, zone)
+					}
+					if err != nil {
+						if isContextCanceled(ctx, err) {
+							logger.Log.Info("Instance lookup canceled")
+
+							return
+						}
+						logger.Log.Fatalf("Failed to find instance: %v", err)
+					}
+				}
 			}
 		}
 
-		logger.Log.Infof("Connecting to instance: %s of project %s in zone: %s\n", instance.Name, project, instance.Zone)
+		if instance == nil {
+			logger.Log.Fatalf("Failed to locate instance %s", instanceName)
+		}
+
+		// Update project from the found instance's project
+		project = instance.Project
+
+		logger.Log.Infof("Connecting to instance: %s of project %s in zone: %s", instance.Name, project, instance.Zone)
 
 		// Connect via SSH with IAP tunnel
 		sshClient := ssh.NewClient()
@@ -407,6 +494,41 @@ func defaultMIGSelectionIndex(refs []gcp.ManagedInstanceRef) int {
 	return 0
 }
 
+// findInstanceWithoutProgress searches for an instance without creating a spinner (used in multi-project search)
+func findInstanceWithoutProgress(ctx context.Context, client *gcp.Client, instanceName, zone string) (*gcp.Instance, error) {
+	return client.FindInstance(ctx, instanceName, zone)
+}
+
+// resolveInstanceFromMIGWithoutProgress resolves MIG instance without creating a spinner (used in multi-project search)
+func resolveInstanceFromMIGWithoutProgress(ctx context.Context, cmd *cobra.Command, client *gcp.Client, migName, zone string) (*gcp.Instance, error) {
+	// Get MIG instances
+	refs, found, err := client.ListMIGInstances(ctx, migName, zone)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, gcp.ErrMIGNotFound
+	}
+	if len(refs) == 0 {
+		return nil, gcp.ErrNoInstancesInMIG
+	}
+
+	// Select instance (prefer running, otherwise first)
+	var selectedRef gcp.ManagedInstanceRef
+	for _, ref := range refs {
+		if ref.IsRunning() {
+			selectedRef = ref
+			break
+		}
+	}
+	if selectedRef.Name == "" {
+		selectedRef = refs[0]
+	}
+
+	// Get full instance details
+	return client.FindInstance(ctx, selectedRef.Name, selectedRef.Zone)
+}
+
 func findInstanceWithProgress(ctx context.Context, client *gcp.Client, instanceName, zone string) (*gcp.Instance, error) {
 	message := fmt.Sprintf("Searching for instance %s", instanceName)
 	if strings.TrimSpace(zone) != "" {
@@ -492,6 +614,198 @@ func progressSuccess(progress *lookupProgressBar, message string) {
 	progress.Success(message)
 }
 
+// findInstanceAcrossProjects searches for an instance across multiple projects in parallel.
+// The function uses the global concurrency setting to limit the number of concurrent project searches
+// and the number of concurrent progress spinners displayed.
+func findInstanceAcrossProjects(ctx context.Context, cmd *cobra.Command, instanceName, zone, resourceType string, projects []string) (*gcp.Instance, error) {
+	if len(projects) == 0 {
+		return nil, fmt.Errorf("no projects to search")
+	}
+
+	type searchResult struct {
+		instance  *gcp.Instance
+		projectID string
+		err       error
+	}
+
+	mainSpin := output.NewSpinner(fmt.Sprintf("Searching for %s across %d projects", instanceName, len(projects)))
+	mainSpin.Start()
+	defer mainSpin.Stop()
+
+	resultCh := make(chan searchResult, len(projects))
+	progressCh := make(chan string, len(projects))
+	searchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	projectSpinners := make(map[string]*output.Spinner)
+	var spinnerMu sync.Mutex
+
+	stopAllProjectSpinners := func(finalize func(*output.Spinner)) {
+		spinnerMu.Lock()
+		spinners := make([]*output.Spinner, 0, len(projectSpinners))
+		for key, sp := range projectSpinners {
+			if sp != nil {
+				spinners = append(spinners, sp)
+			}
+			delete(projectSpinners, key)
+		}
+		spinnerMu.Unlock()
+
+		for _, sp := range spinners {
+			finalize(sp)
+		}
+	}
+
+	var wg sync.WaitGroup
+	// Use global concurrency setting for worker pool size
+	workerCount := concurrency
+	if workerCount > len(projects) {
+		workerCount = len(projects)
+	}
+	semaphore := make(chan struct{}, workerCount)
+
+	for _, projectID := range projects {
+		projectID := projectID
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			// Acquire semaphore
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-searchCtx.Done():
+				return
+			}
+
+			// Notify that we're starting this project
+			select {
+			case progressCh <- projectID:
+			case <-searchCtx.Done():
+				return
+			}
+
+			// Create client for this project
+			client, err := gcp.NewClient(searchCtx, projectID)
+			if err != nil {
+				logger.Log.Debugf("Failed to create client for project %s: %v", projectID, err)
+				resultCh <- searchResult{projectID: projectID, err: err}
+				return
+			}
+
+			var instance *gcp.Instance
+
+			// Search based on resource type (without creating additional spinners)
+			switch resourceType {
+			case resourceTypeMIG:
+				instance, err = resolveInstanceFromMIGWithoutProgress(searchCtx, cmd, client, instanceName, zone)
+			case resourceTypeInstance:
+				instance, err = findInstanceWithoutProgress(searchCtx, client, instanceName, zone)
+			default:
+				// Try MIG first, then instance
+				instance, err = resolveInstanceFromMIGWithoutProgress(searchCtx, cmd, client, instanceName, zone)
+				if err != nil && (errors.Is(err, gcp.ErrMIGNotFound) ||
+					errors.Is(err, gcp.ErrNoInstancesInMIG) ||
+					errors.Is(err, gcp.ErrNoInstancesInRegionalMIG)) {
+					instance, err = findInstanceWithoutProgress(searchCtx, client, instanceName, zone)
+				}
+			}
+
+			resultCh <- searchResult{instance: instance, projectID: projectID, err: err}
+
+			if instance != nil {
+				cancel() // Found it, stop other searches
+			}
+		}()
+	}
+
+	// Close channels when all goroutines complete
+	go func() {
+		wg.Wait()
+		close(progressCh)
+		close(resultCh)
+	}()
+
+	// Handle progress and results
+	started := 0
+	processed := 0
+	total := len(projects)
+	ctxDone := ctx.Done()
+
+	for progressCh != nil || resultCh != nil {
+		select {
+		case <-ctxDone:
+			cancel()
+			stopAllProjectSpinners(func(sp *output.Spinner) {
+				sp.Fail("Search canceled")
+			})
+			mainSpin.Fail("Search canceled")
+			return nil, ctx.Err()
+
+		case projectID, ok := <-progressCh:
+			if !ok {
+				progressCh = nil
+				continue
+			}
+			started++
+			spinnerMu.Lock()
+			projSpinner := output.NewSpinner(fmt.Sprintf("Searching project %s", projectID))
+			projSpinner.Start()
+			projectSpinners[projectID] = projSpinner
+			spinnerMu.Unlock()
+
+			mainSpin.Update(fmt.Sprintf("Searching %s across projects (%d/%d started)", instanceName, started, total))
+
+		case res, ok := <-resultCh:
+			if !ok {
+				resultCh = nil
+				continue
+			}
+
+			processed++
+
+			spinnerMu.Lock()
+			projSpinner := projectSpinners[res.projectID]
+			delete(projectSpinners, res.projectID)
+			spinnerMu.Unlock()
+
+			if res.err != nil {
+				if !isContextCanceled(searchCtx, res.err) {
+					logger.Log.Debugf("Search in project %s failed: %v", res.projectID, res.err)
+					if projSpinner != nil {
+						projSpinner.Fail(fmt.Sprintf("Failed: %v", res.err))
+					}
+				} else if projSpinner != nil {
+					// Context was canceled (likely because we found the instance) - just stop silently
+					projSpinner.Stop()
+				}
+			} else if res.instance != nil {
+				if projSpinner != nil {
+					projSpinner.Success(fmt.Sprintf("Found in project %s", res.projectID))
+				}
+				mainSpin.Success(fmt.Sprintf("Found %s in project %s", instanceName, res.projectID))
+
+				// Stop remaining spinners
+				stopAllProjectSpinners(func(sp *output.Spinner) {
+					sp.Stop()
+				})
+
+				return res.instance, nil
+			} else {
+				if projSpinner != nil {
+					projSpinner.Stop()
+				}
+			}
+
+			mainSpin.Update(fmt.Sprintf("Searching %s across projects (%d/%d done)", instanceName, processed, total))
+		}
+	}
+
+	mainSpin.Fail(fmt.Sprintf("Instance %s not found in any project", instanceName))
+	return nil, fmt.Errorf("instance %s not found in any of %d projects", instanceName, len(projects))
+}
+
 func isContextCanceled(ctx context.Context, err error) bool {
 	if ctx != nil {
 		if ctxErr := ctx.Err(); errors.Is(ctxErr, context.Canceled) || errors.Is(ctxErr, context.DeadlineExceeded) {
@@ -503,60 +817,52 @@ func isContextCanceled(ctx context.Context, err error) bool {
 }
 
 type lookupProgressBar struct {
-	mu        sync.Mutex
-	title     string
-	writer    io.Writer
-	enabled   bool
-	started   bool
-	closed    bool
-	multi     *progressBarMultiManager
-	bars      map[string]*pterm.ProgressbarPrinter
-	seen      map[string]struct{}
-	completed map[string]struct{}
+	mu          sync.Mutex
+	title       string
+	writer      io.Writer
+	enabled     bool
+	started     bool
+	closed      bool
+	bars        map[string]*pterm.ProgressbarPrinter
+	seen        map[string]struct{}
+	completed   map[string]struct{}
+	mainSpinner *output.Spinner // Fallback spinner when progress bars are disabled
 }
 
 func newLookupProgressBar(title string) *lookupProgressBar {
 	writer := os.Stderr
-	enabled := term.IsTerminal(int(writer.Fd()))
 
-	var multi *progressBarMultiManager
-	if enabled {
-		multi = defaultProgressBarMulti()
-	}
+	// Always use spinner, never progress bars
+	spinner := output.NewSpinner(title)
 
 	return &lookupProgressBar{
-		title:     title,
-		writer:    writer,
-		enabled:   enabled,
-		multi:     multi,
-		bars:      make(map[string]*pterm.ProgressbarPrinter),
-		seen:      make(map[string]struct{}),
-		completed: make(map[string]struct{}),
+		title:       title,
+		writer:      writer,
+		enabled:     false, // Disable progress bars
+		bars:        make(map[string]*pterm.ProgressbarPrinter),
+		seen:        make(map[string]struct{}),
+		completed:   make(map[string]struct{}),
+		mainSpinner: spinner,
 	}
 }
 
 func (p *lookupProgressBar) Start() {
+	if p == nil {
+		return
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p == nil || p.started {
+	if p.started {
 		return
 	}
 
 	p.started = true
 
-	if p.enabled && p.multi != nil {
-		if err := p.multi.start(); err != nil {
-			logger.Log.Debugf("Failed to start multi printer: %v", err)
-			p.enabled = false
-		}
-	}
-
-	// Always print the initial message if progress bar is not enabled
-	if !p.enabled {
-		if _, err := fmt.Fprintf(p.writer, "%s...\n", p.title); err != nil {
-			logger.Log.Debugf("Failed to write progress start: %v", err)
-		}
+	// Always start spinner
+	if p.mainSpinner != nil {
+		p.mainSpinner.Start()
 	}
 }
 
@@ -572,53 +878,9 @@ func (p *lookupProgressBar) Handle(event gcp.ProgressEvent) {
 		return
 	}
 
-	key := gcp.FormatProgressKey(event.Key)
-
-	if !p.enabled || p.multi == nil {
-		if event.Message != "" {
-			if _, err := fmt.Fprintln(p.writer, event.Message); err != nil {
-				logger.Log.Debugf("Failed to write progress update: %v", err)
-			}
-		}
-
-		return
-	}
-
-	// Create or get progress bar for this key
-	if key != "" {
-		bar, exists := p.bars[key]
-
-		if !exists && event.Message != "" {
-			// Create new progress bar for this worker
-			writer := p.multi.newWriter()
-			newBar, err := pterm.DefaultProgressbar.
-				WithTitle(event.Message).
-				WithWriter(writer).
-				WithRemoveWhenDone(true).
-				WithShowCount(false).
-				WithShowPercentage(false).
-				WithTotal(1).
-				Start()
-			if err != nil {
-				logger.Log.Debugf("Failed to create progress bar for %s: %v", key, err)
-				return
-			}
-			p.bars[key] = newBar
-			p.seen[key] = struct{}{}
-		} else if event.Message != "" && bar != nil {
-			// Update existing progress bar title
-			bar.UpdateTitle(event.Message)
-		}
-
-		// Increment progress when done to show completion
-		if event.Done {
-			if _, done := p.completed[key]; !done {
-				if bar, exists := p.bars[key]; exists {
-					bar.Increment()
-				}
-				p.completed[key] = struct{}{}
-			}
-		}
+	// Always update spinner with the message
+	if event.Message != "" && p.mainSpinner != nil {
+		p.mainSpinner.Update(event.Message)
 	}
 }
 
@@ -649,22 +911,26 @@ func (p *lookupProgressBar) stopWithPrinter(printer pterm.PrefixPrinter, message
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	p.stopLocked()
-
 	message = strings.TrimSpace(message)
-	if message == "" {
-		return
+
+	// Always use spinner Success/Fail methods
+	if p.mainSpinner != nil && message != "" {
+		switch printer {
+		case pterm.Success:
+			p.mainSpinner.Success(message)
+		case pterm.Error:
+			p.mainSpinner.Fail(message)
+		default:
+			p.mainSpinner.Info(message)
+		}
+		p.mainSpinner = nil // Mark as stopped
+	} else if p.mainSpinner != nil {
+		// Just stop the spinner without message
+		p.mainSpinner.Stop()
+		p.mainSpinner = nil
 	}
 
-	if p.enabled {
-		printer.WithWriter(p.writer).Printfln("%s", message)
-
-		return
-	}
-
-	if _, err := fmt.Fprintln(p.writer, message); err != nil {
-		logger.Log.Debugf("Failed to write progress completion: %v", err)
-	}
+	p.closed = true
 }
 
 func (p *lookupProgressBar) stopLocked() {
@@ -672,96 +938,13 @@ func (p *lookupProgressBar) stopLocked() {
 		return
 	}
 
-	if p.enabled && p.multi != nil {
-		// Count how many lines we need to clear (bars + 1 for the "Discovering..." line)
-		numBars := len(p.bars)
-
-		// First increment all bars to complete them (triggers removal with RemoveWhenDone)
-		for _, bar := range p.bars {
-			bar.Increment()
-		}
-
-		// Stop all individual progress bars
-		for _, bar := range p.bars {
-			if _, err := bar.Stop(); err != nil {
-				logger.Log.Debugf("Failed to stop progress bar: %v", err)
-			}
-		}
-		p.bars = make(map[string]*pterm.ProgressbarPrinter)
-
-		// Stop the multi printer
-		p.multi.stop()
-
-		// Clear the lines left by the progress bars + the initial message line
-		// We need to clear numBars + 1 (for "Discovering instances..." message)
-		linesToClear := numBars + 1
-		for i := 0; i < linesToClear; i++ {
-			fmt.Fprintf(p.writer, "\033[1A\033[2K")
-		}
+	// Stop spinner if it's running
+	if p.mainSpinner != nil {
+		p.mainSpinner.Stop()
+		p.mainSpinner = nil
 	}
 
 	p.closed = true
-}
-
-// progressBarMultiManager manages multiple concurrent progress bars
-type progressBarMultiManager struct {
-	mu      sync.Mutex
-	printer *pterm.MultiPrinter
-	started bool
-}
-
-var (
-	progressBarMultiOnce   sync.Once
-	globalProgressBarMulti *progressBarMultiManager
-)
-
-func defaultProgressBarMulti() *progressBarMultiManager {
-	progressBarMultiOnce.Do(func() {
-		printer := pterm.DefaultMultiPrinter
-		printer.SetWriter(os.Stderr)
-		globalProgressBarMulti = &progressBarMultiManager{
-			printer: &printer,
-		}
-	})
-
-	return globalProgressBarMulti
-}
-
-func (m *progressBarMultiManager) start() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if !m.started {
-		if _, err := m.printer.Start(); err != nil {
-			return err
-		}
-		m.started = true
-	}
-
-	return nil
-}
-
-func (m *progressBarMultiManager) newWriter() io.Writer {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	return m.printer.NewWriter()
-}
-
-func (m *progressBarMultiManager) stop() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.started {
-		if _, err := m.printer.Stop(); err != nil {
-			logger.Log.Debugf("Failed to stop multi printer: %v", err)
-		}
-		// Reset the printer for next use
-		printer := pterm.DefaultMultiPrinter
-		printer.SetWriter(os.Stderr)
-		m.printer = &printer
-		m.started = false
-	}
 }
 
 func init() {
