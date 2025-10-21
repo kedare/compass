@@ -6,13 +6,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 
 	"github.com/kedare/compass/internal/gcp"
 	"github.com/kedare/compass/internal/logger"
+	"github.com/kedare/compass/internal/output"
 	"github.com/kedare/compass/internal/ssh"
+	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 const (
@@ -120,12 +124,22 @@ Examples:
 			logger.Log.Debug("Resource type specified as MIG, presenting instances for selection")
 			instance, err = resolveInstanceFromMIG(ctx, cmd, gcpClient, instanceName, zone)
 			if err != nil {
+				if isContextCanceled(ctx, err) {
+					logger.Log.Info("Instance lookup canceled")
+
+					return
+				}
 				logger.Log.Fatalf("Failed to resolve MIG instances: %v", err)
 			}
 		case resourceTypeInstance:
 			logger.Log.Debug("Resource type specified as instance, searching instance only")
-			instance, err = gcpClient.FindInstance(ctx, instanceName, zone)
+			instance, err = findInstanceWithSpinner(ctx, gcpClient, instanceName, zone)
 			if err != nil {
+				if isContextCanceled(ctx, err) {
+					logger.Log.Info("Instance lookup canceled")
+
+					return
+				}
 				logger.Log.Fatalf("Failed to find instance: %v", err)
 			}
 		default:
@@ -137,14 +151,24 @@ Examples:
 					errors.Is(err, gcp.ErrNoInstancesInMIG) ||
 					errors.Is(err, gcp.ErrNoInstancesInRegionalMIG) {
 					logger.Log.Debugf("MIG lookup failed (%v), trying standalone instance", err)
-					instance, err = gcpClient.FindInstance(ctx, instanceName, zone)
+					instance, err = findInstanceWithSpinner(ctx, gcpClient, instanceName, zone)
 					if err != nil {
+						if isContextCanceled(ctx, err) {
+							logger.Log.Info("Instance lookup canceled")
+
+							return
+						}
 						logger.Log.Fatalf("Failed to find instance: %v", err)
 					}
 
 					break
 				}
 
+				if isContextCanceled(ctx, err) {
+					logger.Log.Info("Instance lookup canceled")
+
+					return
+				}
 				logger.Log.Fatalf("Failed to list MIG instances: %v", err)
 
 				return
@@ -153,8 +177,13 @@ Examples:
 			if instance == nil {
 				logger.Log.Debug("No MIG instance selected, attempting standalone instance")
 				// If MIG not found, try to find standalone instance
-				instance, err = gcpClient.FindInstance(ctx, instanceName, zone)
+				instance, err = findInstanceWithSpinner(ctx, gcpClient, instanceName, zone)
 				if err != nil {
+					if isContextCanceled(ctx, err) {
+						logger.Log.Info("Instance lookup canceled")
+
+						return
+					}
 					logger.Log.Fatalf("Failed to find instance: %v", err)
 				}
 			}
@@ -173,36 +202,135 @@ Examples:
 }
 
 func resolveInstanceFromMIG(ctx context.Context, cmd *cobra.Command, client *gcp.Client, migName, location string) (*gcp.Instance, error) {
-	refs, _, err := client.ListMIGInstances(ctx, migName, location)
-	if err != nil {
-		return nil, err
+	spin := output.NewSpinner(fmt.Sprintf("Discovering instances in MIG %s", migName))
+	spin.Start()
+
+	type result struct {
+		refs       []gcp.ManagedInstanceRef
+		isRegional bool
+		err        error
 	}
 
+	resCh := make(chan result, 1)
+	go func() {
+		refs, isRegional, err := client.ListMIGInstances(ctx, migName, location, func(msg string) {
+			spin.Update(msg)
+		})
+		resCh <- result{refs: refs, isRegional: isRegional, err: err}
+	}()
+
+	var migRes result
+	select {
+	case <-ctx.Done():
+		spin.Fail("Canceled")
+		return nil, ctx.Err()
+	case migRes = <-resCh:
+	}
+
+	if migRes.err != nil {
+		spinnerFail(spin, ctx, migRes.err, fmt.Sprintf("Failed to list instances in MIG %s", migName))
+
+		return nil, migRes.err
+	}
+
+	refs := migRes.refs
+
 	if len(refs) == 0 {
+		spinnerFail(spin, ctx, nil, fmt.Sprintf("No instances in MIG %s", migName))
+
 		return nil, fmt.Errorf("MIG '%s': %w", migName, gcp.ErrNoInstancesInMIG)
 	}
+
+	spinnerSuccess(spin, fmt.Sprintf("Found %d instance(s) in MIG %s", len(refs), migName))
 
 	if len(refs) == 1 {
 		selected := refs[0]
 		logger.Log.Infof("MIG %s has a single instance: %s (zone %s)", migName, selected.Name, selected.Zone)
 
-		return client.FindInstance(ctx, selected.Name, selected.Zone)
+		return findInstanceWithSpinner(ctx, client, selected.Name, selected.Zone)
 	}
 
-	selectedRef, err := promptMIGInstanceSelection(cmd, migName, refs)
+	selectedRef, err := promptMIGInstanceSelection(ctx, cmd, migName, refs)
 	if err != nil {
 		return nil, err
 	}
 
 	logger.Log.Infof("Selected MIG instance: %s (zone %s)", selectedRef.Name, selectedRef.Zone)
 
-	return client.FindInstance(ctx, selectedRef.Name, selectedRef.Zone)
+	return findInstanceWithSpinner(ctx, client, selectedRef.Name, selectedRef.Zone)
 }
 
-func promptMIGInstanceSelection(cmd *cobra.Command, migName string, refs []gcp.ManagedInstanceRef) (gcp.ManagedInstanceRef, error) {
-	reader := bufio.NewReader(cmd.InOrStdin())
+func promptMIGInstanceSelection(ctx context.Context, cmd *cobra.Command, migName string, refs []gcp.ManagedInstanceRef) (gcp.ManagedInstanceRef, error) {
+	stdin := cmd.InOrStdin()
+	stdout := cmd.OutOrStdout()
 
-	return promptMIGInstanceSelectionFromReader(reader, cmd.OutOrStdout(), migName, refs)
+	if isTerminalReader(stdin) && isTerminalWriter(stdout) {
+		if selected, err := promptMIGInstanceSelectionInteractive(ctx, migName, refs); err == nil {
+			return selected, nil
+		} else if !isContextCanceled(ctx, err) {
+			logger.Log.Debugf("Interactive selection failed, falling back to text prompt: %v", err)
+		} else {
+			return gcp.ManagedInstanceRef{}, err
+		}
+	}
+
+	reader := bufio.NewReader(stdin)
+
+	return promptMIGInstanceSelectionFromReader(reader, stdout, migName, refs)
+}
+
+func isTerminalReader(r io.Reader) bool {
+	if f, ok := r.(*os.File); ok {
+		return term.IsTerminal(int(f.Fd()))
+	}
+
+	return false
+}
+
+func isTerminalWriter(w io.Writer) bool {
+	if f, ok := w.(*os.File); ok {
+		return term.IsTerminal(int(f.Fd()))
+	}
+
+	return false
+}
+
+func promptMIGInstanceSelectionInteractive(ctx context.Context, migName string, refs []gcp.ManagedInstanceRef) (gcp.ManagedInstanceRef, error) {
+	if len(refs) == 0 {
+		return gcp.ManagedInstanceRef{}, fmt.Errorf("no instances available in MIG %s", migName)
+	}
+
+	defaultIdx := defaultMIGSelectionIndex(refs)
+	options := make([]string, len(refs))
+	for i, ref := range refs {
+		options[i] = fmt.Sprintf("%s (zone: %s, status: %s)", ref.Name, ref.Zone, ref.Status)
+	}
+
+	var interrupted bool
+
+	selectedOption, err := pterm.DefaultInteractiveSelect.
+		WithOptions(options).
+		WithDefaultText(fmt.Sprintf("Select instance from MIG %s", migName)).
+		WithDefaultOption(options[defaultIdx]).
+		WithOnInterruptFunc(func() {
+			interrupted = true
+		}).
+		Show()
+	if err != nil {
+		return gcp.ManagedInstanceRef{}, err
+	}
+
+	if interrupted || isContextCanceled(ctx, nil) {
+		return gcp.ManagedInstanceRef{}, context.Canceled
+	}
+
+	for i, option := range options {
+		if option == selectedOption {
+			return refs[i], nil
+		}
+	}
+
+	return refs[defaultIdx], nil
 }
 
 func promptMIGInstanceSelectionFromReader(reader *bufio.Reader, out io.Writer, migName string, refs []gcp.ManagedInstanceRef) (gcp.ManagedInstanceRef, error) {
@@ -278,6 +406,96 @@ func defaultMIGSelectionIndex(refs []gcp.ManagedInstanceRef) int {
 	}
 
 	return 0
+}
+
+func findInstanceWithSpinner(ctx context.Context, client *gcp.Client, instanceName, zone string) (*gcp.Instance, error) {
+	message := fmt.Sprintf("Searching for instance %s", instanceName)
+	if strings.TrimSpace(zone) != "" {
+		message = fmt.Sprintf("Searching for instance %s in %s", instanceName, zone)
+	}
+
+	spin := output.NewSpinner(message)
+	spin.Start()
+
+	type result struct {
+		instance *gcp.Instance
+		err      error
+	}
+
+	resCh := make(chan result, 1)
+	go func() {
+		inst, err := client.FindInstance(ctx, instanceName, zone, func(msg string) {
+			spin.Update(msg)
+		})
+		resCh <- result{instance: inst, err: err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		spin.Fail("Canceled")
+		return nil, ctx.Err()
+	case res := <-resCh:
+		if res.err != nil {
+			spinnerFail(spin, ctx, res.err, fmt.Sprintf("Failed to locate instance %s", instanceName))
+
+			return nil, res.err
+		}
+
+		displayZone := res.instance.Zone
+		if strings.TrimSpace(displayZone) == "" {
+			displayZone = "unknown zone"
+		}
+
+		spinnerSuccess(spin, fmt.Sprintf("Instance %s ready (%s)", res.instance.Name, displayZone))
+
+		return res.instance, nil
+	}
+}
+
+func spinnerFail(spin *output.Spinner, ctx context.Context, err error, message string) {
+	if spin == nil {
+		return
+	}
+
+	if ctx != nil {
+		if ctxErr := ctx.Err(); errors.Is(ctxErr, context.Canceled) || errors.Is(ctxErr, context.DeadlineExceeded) {
+			spin.Fail("Canceled")
+
+			return
+		}
+	}
+
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		spin.Fail("Canceled")
+
+		return
+	}
+
+	if err != nil {
+		spin.Fail(fmt.Sprintf("%s: %v", message, err))
+
+		return
+	}
+
+	spin.Fail(message)
+}
+
+func spinnerSuccess(spin *output.Spinner, message string) {
+	if spin == nil {
+		return
+	}
+
+	spin.Success(message)
+}
+
+func isContextCanceled(ctx context.Context, err error) bool {
+	if ctx != nil {
+		if ctxErr := ctx.Err(); errors.Is(ctxErr, context.Canceled) || errors.Is(ctxErr, context.DeadlineExceeded) {
+			return true
+		}
+	}
+
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func init() {
