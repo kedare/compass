@@ -24,6 +24,8 @@ const (
 	IPAssociationForwardingRule IPAssociationKind = "forwarding_rule"
 	// IPAssociationAddress indicates the IP is reserved as a standalone address resource.
 	IPAssociationAddress IPAssociationKind = "address"
+	// IPAssociationSubnet indicates the IP falls within a subnet CIDR range.
+	IPAssociationSubnet IPAssociationKind = "subnet_range"
 )
 
 // IPAssociation captures metadata about a resource that owns or references an IP address.
@@ -72,6 +74,7 @@ func (c *Client) LookupIPAddress(ctx context.Context, ip string) ([]IPAssociatio
 		instanceResults   []IPAssociation
 		forwardingResults []IPAssociation
 		addressResults    []IPAssociation
+		subnetResults     []IPAssociation
 	)
 
 	group.Go(func() error {
@@ -104,11 +107,23 @@ func (c *Client) LookupIPAddress(ctx context.Context, ip string) ([]IPAssociatio
 		return nil
 	})
 
+	if targetIP.IsPrivate() {
+		group.Go(func() error {
+			results, err := c.collectSubnetMatches(groupCtx, targetIP, canonicalIP)
+			if err != nil {
+				return fmt.Errorf("failed to inspect subnets: %w", err)
+			}
+			subnetResults = results
+
+			return nil
+		})
+	}
+
 	if err := group.Wait(); err != nil {
 		return nil, err
 	}
 
-	results := make([]IPAssociation, 0, len(instanceResults)+len(forwardingResults)+len(addressResults))
+	results := make([]IPAssociation, 0, len(instanceResults)+len(forwardingResults)+len(addressResults)+len(subnetResults))
 	seen := make(map[string]struct{}, len(results))
 
 	for _, association := range instanceResults {
@@ -120,6 +135,10 @@ func (c *Client) LookupIPAddress(ctx context.Context, ip string) ([]IPAssociatio
 	}
 
 	for _, association := range addressResults {
+		appendAssociation(&results, seen, association)
+	}
+
+	for _, association := range subnetResults {
 		appendAssociation(&results, seen, association)
 	}
 
@@ -315,6 +334,65 @@ func (c *Client) collectAddressMatches(ctx context.Context, target net.IP, canon
 	return results, nil
 }
 
+func (c *Client) collectSubnetMatches(ctx context.Context, target net.IP, canonical string) ([]IPAssociation, error) {
+	results := make([]IPAssociation, 0)
+	seen := make(map[string]struct{})
+
+	call := c.service.Subnetworks.AggregatedList(c.project).Context(ctx)
+
+	err := call.Pages(ctx, func(page *compute.SubnetworkAggregatedList) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		for scope, scopedList := range page.Items {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+
+			if scopedList.Subnetworks == nil {
+				continue
+			}
+
+			location := locationFromScope(scope)
+			for _, subnet := range scopedList.Subnetworks {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+
+				if subnet == nil {
+					continue
+				}
+
+				matched, detail := subnetMatchDetails(subnet, target)
+				if !matched {
+					continue
+				}
+
+				association := IPAssociation{
+					Project:      c.project,
+					Kind:         IPAssociationSubnet,
+					Resource:     subnet.Name,
+					Location:     location,
+					IPAddress:    canonical,
+					Details:      detail,
+					ResourceLink: subnet.SelfLink,
+				}
+
+				appendAssociation(&results, seen, association)
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return results, nil
+}
+
 // ipMatch captures the association kind and descriptive text for a matched interface.
 type ipMatch struct {
 	kind    IPAssociationKind
@@ -335,14 +413,24 @@ func instanceIPMatches(inst *compute.Instance, target net.IP) []ipMatch {
 		}
 
 		if equalIP(nic.NetworkIP, target) || equalIP(nic.Ipv6Address, target) {
-			desc := "Internal interface"
+			descParts := []string{"Internal interface"}
 			if nic.Name != "" {
-				desc = fmt.Sprintf("Internal interface %s", nic.Name)
+				descParts[0] = fmt.Sprintf("Internal interface %s", nic.Name)
+			}
+
+			networkName := lastComponent(nic.Network)
+			if networkName != "" {
+				descParts = append(descParts, fmt.Sprintf("network=%s", networkName))
+			}
+
+			subnetName := lastComponent(nic.Subnetwork)
+			if subnetName != "" {
+				descParts = append(descParts, fmt.Sprintf("subnet=%s", subnetName))
 			}
 
 			matches = append(matches, ipMatch{
 				kind:    IPAssociationInstanceInternal,
-				details: desc,
+				details: strings.Join(descParts, ", "),
 			})
 		}
 
@@ -374,7 +462,7 @@ func describeForwardingRule(rule *compute.ForwardingRule) string {
 		return ""
 	}
 
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 6)
 	if scheme := strings.ToLower(strings.TrimSpace(rule.LoadBalancingScheme)); scheme != "" {
 		parts = append(parts, fmt.Sprintf("scheme=%s", scheme))
 	}
@@ -391,6 +479,14 @@ func describeForwardingRule(rule *compute.ForwardingRule) string {
 		parts = append(parts, fmt.Sprintf("backend=%s", lastComponent(rule.BackendService)))
 	}
 
+	if rule.Network != "" {
+		parts = append(parts, fmt.Sprintf("network=%s", lastComponent(rule.Network)))
+	}
+
+	if rule.Subnetwork != "" {
+		parts = append(parts, fmt.Sprintf("subnet=%s", lastComponent(rule.Subnetwork)))
+	}
+
 	if len(parts) == 0 {
 		return "Forwarding rule"
 	}
@@ -404,7 +500,7 @@ func describeAddress(addr *compute.Address) string {
 		return ""
 	}
 
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 8)
 	if addr.Status != "" {
 		parts = append(parts, fmt.Sprintf("status=%s", strings.ToLower(addr.Status)))
 	}
@@ -419,6 +515,18 @@ func describeAddress(addr *compute.Address) string {
 
 	if addr.AddressType != "" {
 		parts = append(parts, fmt.Sprintf("type=%s", strings.ToLower(addr.AddressType)))
+	}
+
+	if addr.Region != "" {
+		parts = append(parts, fmt.Sprintf("region=%s", lastComponent(addr.Region)))
+	}
+
+	if addr.Network != "" {
+		parts = append(parts, fmt.Sprintf("network=%s", lastComponent(addr.Network)))
+	}
+
+	if addr.Subnetwork != "" {
+		parts = append(parts, fmt.Sprintf("subnet=%s", lastComponent(addr.Subnetwork)))
 	}
 
 	if len(parts) == 0 {
@@ -475,6 +583,78 @@ func equalIP(value string, target net.IP) bool {
 	}
 
 	return parsed.Equal(target)
+}
+
+func ipInCIDR(target net.IP, cidr string) bool {
+	if target == nil {
+		return false
+	}
+
+	cidr = strings.TrimSpace(cidr)
+	if cidr == "" {
+		return false
+	}
+
+	_, network, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return false
+	}
+
+	return network.Contains(target)
+}
+
+func subnetMatchDetails(subnet *compute.Subnetwork, target net.IP) (bool, string) {
+	if subnet == nil || target == nil {
+		return false, ""
+	}
+
+	matchParts := make([]string, 0, 3)
+	matched := false
+
+	if cidr := strings.TrimSpace(subnet.IpCidrRange); cidr != "" && ipInCIDR(target, cidr) {
+		matched = true
+		matchParts = append(matchParts, fmt.Sprintf("primary=%s", cidr))
+	}
+
+	for _, sec := range subnet.SecondaryIpRanges {
+		if sec == nil {
+			continue
+		}
+
+		if cidr := strings.TrimSpace(sec.IpCidrRange); cidr != "" && ipInCIDR(target, cidr) {
+			matched = true
+			if sec.RangeName != "" {
+				matchParts = append(matchParts, fmt.Sprintf("secondary[%s]=%s", sec.RangeName, cidr))
+			} else {
+				matchParts = append(matchParts, fmt.Sprintf("secondary=%s", cidr))
+			}
+		}
+	}
+
+	if cidr := strings.TrimSpace(subnet.Ipv6CidrRange); cidr != "" && ipInCIDR(target, cidr) {
+		matched = true
+		matchParts = append(matchParts, fmt.Sprintf("ipv6=%s", cidr))
+	}
+
+	if !matched {
+		return false, ""
+	}
+
+	detailParts := make([]string, 0, 4)
+	networkName := lastComponent(subnet.Network)
+	if networkName != "" {
+		detailParts = append(detailParts, fmt.Sprintf("network=%s", networkName))
+	}
+
+	if len(matchParts) > 0 {
+		detailParts = append(detailParts, fmt.Sprintf("range=%s", strings.Join(matchParts, ", ")))
+	}
+
+	if subnet.GatewayAddress != "" && equalIP(subnet.GatewayAddress, target) {
+		detailParts = append(detailParts, "gateway=true")
+	}
+
+	return true, strings.Join(detailParts, ", ")
 }
 
 // appendAssociation adds a unique association to the results slice while preventing duplicates.
