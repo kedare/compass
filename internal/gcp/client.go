@@ -16,6 +16,7 @@ import (
 	"github.com/kedare/compass/internal/cache"
 	"github.com/kedare/compass/internal/logger"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/api/cloudresourcemanager/v1"
 	"google.golang.org/api/compute/v1"
 	"google.golang.org/api/option"
 )
@@ -46,6 +47,7 @@ type Client struct {
 
 type Instance struct {
 	Name        string
+	Project     string
 	Zone        string
 	ExternalIP  string
 	InternalIP  string
@@ -132,13 +134,6 @@ func progressFailure(cb ProgressCallback, key, message string, err error) {
 	cb(ProgressEvent{Key: key, Message: message, Err: err, Done: true})
 }
 
-func progressInfo(cb ProgressCallback, key, message string) {
-	if cb == nil {
-		return
-	}
-
-	cb(ProgressEvent{Key: key, Message: message, Done: true, Info: true})
-}
 
 // getSharedCache returns the process-wide cache instance, creating it once on demand.
 func getSharedCache() (*cache.Cache, error) {
@@ -229,6 +224,57 @@ func (c *Client) ProjectID() string {
 	return c.project
 }
 
+// ListAllProjects lists all GCP projects the user has access to using Cloud Resource Manager API
+func ListAllProjects(ctx context.Context) ([]string, error) {
+	logger.Log.Debug("Listing all accessible GCP projects")
+
+	httpClient, err := newHTTPClientWithLogging(ctx, cloudresourcemanager.CloudPlatformReadOnlyScope)
+	if err != nil {
+		logger.Log.Errorf("Failed to create HTTP client for Resource Manager: %v", err)
+		return nil, fmt.Errorf("failed to create HTTP client: %w", err)
+	}
+
+	service, err := cloudresourcemanager.NewService(ctx, option.WithHTTPClient(httpClient))
+	if err != nil {
+		logger.Log.Errorf("Failed to create Resource Manager service: %v", err)
+		return nil, fmt.Errorf("failed to create resource manager service: %w", err)
+	}
+
+	var projects []string
+	pageToken := ""
+
+	for {
+		call := service.Projects.List()
+		if pageToken != "" {
+			call = call.PageToken(pageToken)
+		}
+
+		resp, err := call.Context(ctx).Do()
+		if err != nil {
+			logger.Log.Errorf("Failed to list projects: %v", err)
+			return nil, fmt.Errorf("failed to list projects: %w", err)
+		}
+
+		for _, project := range resp.Projects {
+			if project.LifecycleState == "ACTIVE" && project.ProjectId != "" {
+				projects = append(projects, project.ProjectId)
+			}
+		}
+
+		if resp.NextPageToken == "" {
+			break
+		}
+		pageToken = resp.NextPageToken
+	}
+
+	logger.Log.Debugf("Found %d active projects", len(projects))
+
+	// Sort projects by name for better UX
+	sort.Strings(projects)
+
+	return projects, nil
+}
+
 // RememberProject persists the client's project in the local cache when available.
 func (c *Client) RememberProject() {
 	if c == nil {
@@ -269,7 +315,7 @@ func (c *Client) FindInstance(ctx context.Context, instanceName, zone string, pr
 	if c.cache != nil {
 		if cachedInfo, found := c.cache.Get(instanceName); found && cachedInfo.Type == cache.ResourceTypeInstance {
 			logger.Log.Debugf("Found instance location in cache: project=%s, zone=%s", cachedInfo.Project, cachedInfo.Zone)
-			progressUpdate(cb, "", fmt.Sprintf("Checking cached zone %s for instance %s", cachedInfo.Zone, instanceName))
+			//progressUpdate(cb, "", fmt.Sprintf("Checking cached zone %s for instance %s", cachedInfo.Zone, instanceName))
 
 			// Verify cached project matches current project
 			if cachedInfo.Project == c.project {
@@ -294,7 +340,7 @@ func (c *Client) FindInstance(ctx context.Context, instanceName, zone string, pr
 	instanceData, err := c.findInstanceAcrossAggregatedPages(ctx, instanceName, cb)
 	if err != nil {
 		if errors.Is(err, ErrInstanceNotFound) {
-			logger.Log.Warnf("Instance '%s' not found in any zone", instanceName)
+			logger.Log.Debugf("Instance '%s' not found in any zone", instanceName)
 
 			return nil, fmt.Errorf("instance '%s': %w", instanceName, ErrInstanceNotFound)
 		}
@@ -409,13 +455,16 @@ func (c *Client) findInstanceAcrossAggregatedPages(ctx context.Context, instance
 
 		list, err := call.Do()
 		if err != nil {
-			logger.Log.Errorf("Failed to perform aggregated list: %v", err)
+			// Don't log as error if context was cancelled
+			if !errors.Is(err, context.Canceled) && !errors.Is(ctx.Err(), context.Canceled) {
+				logger.Log.Errorf("Failed to perform aggregated list: %v", err)
+			}
 
 			return nil, fmt.Errorf("failed to list instances: %w", err)
 		}
 
 		page++
-	progressUpdate(progress, FormatProgressKey("aggregate"), fmt.Sprintf("Scanning instance aggregate page %d (next token: %s)", page, list.NextPageToken))
+		progressUpdate(progress, FormatProgressKey("aggregate"), fmt.Sprintf("Scanning instance aggregate page %d (next token: %s)", page, list.NextPageToken))
 
 		return list, nil
 	}
@@ -798,7 +847,6 @@ func (c *Client) listMIGInstancesByRegionScan(ctx context.Context, migName strin
 	type regionResult struct {
 		refs   []ManagedInstanceRef
 		region string
-		err    error
 	}
 
 	resultCh := make(chan regionResult, len(regions))
@@ -879,7 +927,7 @@ func (c *Client) listMIGInstancesByRegionScan(ctx context.Context, migName strin
 		return nil, false, err
 	}
 
-	logger.Log.Warnf("MIG '%s' not found in any region or zone", migName)
+	logger.Log.Debugf("MIG '%s' not found in any region or zone", migName)
 	progressFailure(progress, "", fmt.Sprintf("MIG %s not found in any region", migName), ErrMIGNotFound)
 
 	return nil, false, fmt.Errorf("MIG '%s': %w", migName, ErrMIGNotFound)
@@ -1123,6 +1171,7 @@ func (c *Client) listManagedInstancesInRegionalMIG(ctx context.Context, migName,
 func (c *Client) convertInstance(instance *compute.Instance) *Instance {
 	result := &Instance{
 		Name:        instance.Name,
+		Project:     c.project,
 		Zone:        extractZoneName(instance.Zone),
 		Status:      instance.Status,
 		MachineType: extractMachineType(instance.MachineType),

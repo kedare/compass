@@ -132,6 +132,7 @@ func (s *Spinner) Info(message string) {
 	}, "•", message)
 }
 
+// stop is the internal implementation for stopping a spinner with various outcomes.
 func (s *Spinner) stop(fn func(*pterm.SpinnerPrinter), fallbackPrefix, fallbackMessage string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -172,6 +173,7 @@ var (
 	globalMulti *multiSpinnerManager
 )
 
+// defaultMultiManager returns the global singleton multi-spinner manager.
 func defaultMultiManager() *multiSpinnerManager {
 	multiOnce.Do(func() {
 		printer := pterm.DefaultMultiPrinter
@@ -185,6 +187,7 @@ func defaultMultiManager() *multiSpinnerManager {
 	return globalMulti
 }
 
+// acquireWriter starts the multi-printer if needed and returns a writer for a new spinner.
 func (m *multiSpinnerManager) acquireWriter() (io.Writer, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -202,6 +205,7 @@ func (m *multiSpinnerManager) acquireWriter() (io.Writer, error) {
 	return m.printer.NewWriter(), nil
 }
 
+// release decrements the reference count and cleans up when all spinners are done.
 func (m *multiSpinnerManager) release() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -219,7 +223,9 @@ func (m *multiSpinnerManager) release() {
 		// Similar to progress bars, clear totalSpins lines
 		if m.totalSpins > 0 {
 			for i := 0; i < m.totalSpins; i++ {
-				fmt.Fprintf(m.writer, "\033[1A\033[2K")
+				if _, err := fmt.Fprintf(m.writer, "\033[1A\033[2K"); err != nil {
+					logger.Log.Debugf("Failed to clear spinner line: %v", err)
+				}
 			}
 		}
 

@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	logLevel string
-	useCache bool
+	logLevel    string
+	useCache    bool
+	concurrency int
 )
 
 var rootCmd = &cobra.Command{
@@ -35,6 +36,12 @@ diagnostics without leaving the CLI.`,
 		if !useCache {
 			logger.Log.Debug("Global cache disabled via --cache=false")
 		}
+
+		if concurrency < 1 {
+			fmt.Fprintf(os.Stderr, "Invalid concurrency value '%d': must be at least 1\n", concurrency)
+			os.Exit(1)
+		}
+		logger.Log.Debugf("Concurrency set to: %d", concurrency)
 	},
 }
 
@@ -53,5 +60,6 @@ func ExecuteContext(ctx context.Context) error {
 func init() {
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "Set the logging level (trace, debug, info, warn, error, fatal, panic)")
 	rootCmd.PersistentFlags().BoolVar(&useCache, "cache", true, "Enable cache usage across commands")
+	rootCmd.PersistentFlags().IntVar(&concurrency, "concurrency", 10, "Maximum number of concurrent operations (worker pool size)")
 	rootCmd.AddCommand(gcpCmd)
 }

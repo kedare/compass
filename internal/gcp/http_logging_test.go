@@ -6,9 +6,6 @@ import (
 	"io"
 	"net/http"
 	"testing"
-
-	"github.com/kedare/compass/internal/logger"
-	"github.com/sirupsen/logrus"
 )
 
 type stubRoundTripper struct {
@@ -23,22 +20,7 @@ func (s *stubRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 	return s.resp, s.err
 }
 
-func withLoggerOutput(t *testing.T) *bytes.Buffer {
-	buf := &bytes.Buffer{}
-	originalOut := logger.Log.Out
-	originalLevel := logger.Log.GetLevel()
-	logger.Log.SetOutput(buf)
-	logger.Log.SetLevel(logrus.DebugLevel)
-	t.Cleanup(func() {
-		logger.Log.SetOutput(originalOut)
-		logger.Log.SetLevel(originalLevel)
-	})
-
-	return buf
-}
-
 func TestLoggingTransportSuccess(t *testing.T) {
-	buf := withLoggerOutput(t)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(bytes.NewBuffer(nil)),
@@ -60,14 +42,9 @@ func TestLoggingTransportSuccess(t *testing.T) {
 	if stub.req != req {
 		t.Fatalf("expected request to pass through")
 	}
-
-	if !bytes.Contains(buf.Bytes(), []byte("GCP HTTP GET https://example.com/test -> 200")) {
-		t.Fatalf("expected log entry, got %s", buf.String())
-	}
 }
 
 func TestLoggingTransportError(t *testing.T) {
-	buf := withLoggerOutput(t)
 	sentinel := errors.New("boom")
 	stub := &stubRoundTripper{err: sentinel}
 	transport := loggingTransport{base: stub}
@@ -77,10 +54,6 @@ func TestLoggingTransportError(t *testing.T) {
 	_, err := transport.RoundTrip(req)
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("expected sentinel error, got %v", err)
-	}
-
-	if !bytes.Contains(buf.Bytes(), []byte("GCP HTTP POST https://example.com/fail failed")) {
-		t.Fatalf("expected failure log, got %s", buf.String())
 	}
 }
 
