@@ -23,6 +23,13 @@ type lookupResult struct {
 	err          error
 }
 
+type lookupAttemptOutcome struct {
+	results        []gcp.IPAssociation
+	successClients []*gcp.Client
+	hadSuccess     bool
+	canceled       bool
+}
+
 var ipLookupCmd = &cobra.Command{
 	Use:   "lookup <ip-address>",
 	Short: "Find the GCP resources referencing an IP address",
@@ -47,7 +54,8 @@ func init() {
 // runIPLookup orchestrates the lookup by querying all candidate projects in parallel and gathering matches.
 func runIPLookup(ctx context.Context, rawIP string) {
 	ip := strings.TrimSpace(rawIP)
-	if net.ParseIP(ip) == nil {
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil {
 		logger.Log.Fatalf("Invalid IP address: %s", rawIP)
 	}
 
@@ -55,7 +63,14 @@ func runIPLookup(ctx context.Context, rawIP string) {
 		ctx = context.Background()
 	}
 
-	clients := lookupClients(ctx)
+	preferredProjects := preferredProjectsForIP(parsedIP)
+	clients := lookupClients(ctx, preferredProjects)
+	if len(clients) == 0 && len(preferredProjects) > 0 {
+		logger.Log.Debug("Cached subnet matches did not yield any clients; falling back to full discovery")
+		preferredProjects = nil
+		clients = lookupClients(ctx, nil)
+	}
+
 	if len(clients) == 0 {
 		logger.Log.Fatalf("No projects available for lookup. Use --project to specify one explicitly.")
 	}
@@ -63,9 +78,108 @@ func runIPLookup(ctx context.Context, rawIP string) {
 	spin := output.NewSpinner("Searching IP associations")
 	spin.Start()
 
-	results := make([]gcp.IPAssociation, 0)
+	combinedResults := make([]gcp.IPAssociation, 0)
+	successClientSet := make(map[*gcp.Client]struct{})
 	hadSuccess := false
 	canceled := false
+
+	outcome := executeLookupAcrossClients(ctx, ip, clients, spin)
+	combinedResults = append(combinedResults, outcome.results...)
+	for _, client := range outcome.successClients {
+		successClientSet[client] = struct{}{}
+	}
+	hadSuccess = hadSuccess || outcome.hadSuccess
+	canceled = canceled || outcome.canceled
+
+	if !canceled && len(outcome.results) == 0 && len(preferredProjects) > 0 {
+		spin.Update("No matches from cached subnets; scanning all configured projects…")
+		fallbackClients := lookupClients(ctx, nil)
+		outcome = executeLookupAcrossClients(ctx, ip, fallbackClients, spin)
+		combinedResults = append(combinedResults, outcome.results...)
+		for _, client := range outcome.successClients {
+			successClientSet[client] = struct{}{}
+		}
+		hadSuccess = hadSuccess || outcome.hadSuccess
+		canceled = canceled || outcome.canceled
+	}
+
+	if canceled {
+		spin.Fail("Lookup canceled")
+
+		return
+	}
+
+	if !hadSuccess {
+		spin.Fail("Lookup failed for all projects")
+		logger.Log.Fatalf("IP lookup failed for all checked projects")
+	}
+
+	deduped := dedupeAssociations(combinedResults)
+
+	spin.Success("Lookup complete")
+
+	if len(deduped) == 0 {
+		fmt.Printf("No resources found for IP %s\n", ip)
+
+		return
+	}
+
+	for client := range successClientSet {
+		client.RememberProject()
+	}
+
+	if err := output.DisplayIPLookupResults(deduped, ipLookupOutputFormat); err != nil {
+		logger.Log.Fatalf("Failed to render lookup results: %v", err)
+	}
+}
+
+func preferredProjectsForIP(ip net.IP) []string {
+	if ip == nil {
+		return nil
+	}
+
+ cacheInst, err := gcp.LoadCache()
+ if err != nil || cacheInst == nil {
+  return nil
+ }
+
+ entries := cacheInst.FindSubnetsForIP(ip)
+ if len(entries) == 0 {
+  return nil
+ }
+
+ seen := make(map[string]struct{}, len(entries))
+ ordered := make([]string, 0, len(entries))
+ for _, entry := range entries {
+  if entry == nil {
+   continue
+  }
+
+  projectID := strings.TrimSpace(entry.Project)
+  if projectID == "" {
+   continue
+  }
+
+  key := strings.ToLower(projectID)
+  if _, exists := seen[key]; exists {
+   continue
+  }
+  seen[key] = struct{}{}
+  ordered = append(ordered, projectID)
+ }
+
+ if len(ordered) > 0 {
+  logger.Log.Debugf("Cached subnet data suggests %d project(s): %v", len(ordered), ordered)
+ }
+
+	return ordered
+}
+
+func executeLookupAcrossClients(ctx context.Context, ip string, clients []*gcp.Client, spin *output.Spinner) lookupAttemptOutcome {
+	outcome := lookupAttemptOutcome{}
+	if len(clients) == 0 {
+		return outcome
+	}
 
 	lookupCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -119,24 +233,28 @@ func runIPLookup(ctx context.Context, rawIP string) {
 
 	successSeen := make(map[*gcp.Client]struct{}, len(clients))
 	successClients := make([]*gcp.Client, 0, len(clients))
+	results := make([]gcp.IPAssociation, 0)
 	ctxDone := ctx.Done()
+	total := len(clients)
 	started := 0
 	processed := 0
-	total := len(clients)
 
 loop:
 	for progressCh != nil || resultCh != nil {
 		select {
 		case <-ctxDone:
-			canceled = true
+			outcome.canceled = true
 			cancel()
 			break loop
-		case _, ok := <-progressCh:
+		case projectID, ok := <-progressCh:
 			if !ok {
 				progressCh = nil
 				continue
 			}
 			started++
+			if spin != nil {
+				spin.Update(fmt.Sprintf("Scanning project %s (%d/%d started)", projectID, started, total))
+			}
 		case res, ok := <-resultCh:
 			if !ok {
 				resultCh = nil
@@ -147,20 +265,24 @@ loop:
 
 			if res.err != nil {
 				if isContextError(res.err) {
-					canceled = true
+					outcome.canceled = true
 					cancel()
 					break loop
 				}
 
 				logger.Log.Warnf("Skipping project %s: %v", res.client.ProjectID(), res.err)
-				spin.Update(fmt.Sprintf("Skipped project %s (%d/%d done)", res.client.ProjectID(), processed, total))
+				if spin != nil {
+					spin.Update(fmt.Sprintf("Skipped project %s (%d/%d done)", res.client.ProjectID(), processed, total))
+				}
 
 				continue
 			}
 
-			spin.Update(fmt.Sprintf("Completed project %s (%d/%d done)", res.client.ProjectID(), processed, total))
+			if spin != nil {
+				spin.Update(fmt.Sprintf("Completed project %s (%d/%d done)", res.client.ProjectID(), processed, total))
+			}
 
-			hadSuccess = true
+			outcome.hadSuccess = true
 			if len(res.associations) > 0 {
 				results = append(results, res.associations...)
 			}
@@ -172,49 +294,42 @@ loop:
 		}
 	}
 
-	if canceled {
-		spin.Fail("Lookup canceled")
-
-		return
-	}
-
 	waitErr := <-waitErrCh
 	if isContextError(waitErr) || isContextError(ctx.Err()) {
-		canceled = true
+		outcome.canceled = true
 	} else if waitErr != nil {
 		logger.Log.Warnf("Lookup workers encountered an error: %v", waitErr)
 	}
 
-	if canceled {
-		spin.Fail("Lookup canceled")
+	outcome.results = results
+	outcome.successClients = successClients
 
-		return
+	return outcome
+}
+
+func dedupeAssociations(input []gcp.IPAssociation) []gcp.IPAssociation {
+	if len(input) <= 1 {
+		return input
 	}
 
-	if !hadSuccess {
-		spin.Fail("Lookup failed for all projects")
-		logger.Log.Fatalf("IP lookup failed for all checked projects")
+	seen := make(map[string]struct{}, len(input))
+	result := make([]gcp.IPAssociation, 0, len(input))
+
+	for _, assoc := range input {
+		key := fmt.Sprintf("%s|%s|%s|%s|%s|%s", assoc.Project, assoc.Kind, assoc.Resource, assoc.Location, assoc.IPAddress, assoc.Details)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+
+		seen[key] = struct{}{}
+		result = append(result, assoc)
 	}
 
-	spin.Success("Lookup complete")
-
-	for _, client := range successClients {
-		client.RememberProject()
-	}
-
-	if len(results) == 0 {
-		fmt.Printf("No resources found for IP %s\n", ip)
-
-		return
-	}
-
-	if err := output.DisplayIPLookupResults(results, ipLookupOutputFormat); err != nil {
-		logger.Log.Fatalf("Failed to render lookup results: %v", err)
-	}
+	return result
 }
 
 // lookupClients builds unique GCP clients that will participate in the lookup.
-func lookupClients(ctx context.Context) []*gcp.Client {
+func lookupClients(ctx context.Context, limitProjects []string) []*gcp.Client {
 	seen := make(map[string]struct{})
 	clients := make([]*gcp.Client, 0)
 
@@ -225,30 +340,42 @@ func lookupClients(ctx context.Context) []*gcp.Client {
 			}
 		}
 
-		if projectID != "" {
-			if _, exists := seen[projectID]; exists {
+		trimmed := strings.TrimSpace(projectID)
+		if trimmed != "" {
+			key := strings.ToLower(trimmed)
+			if _, exists := seen[key]; exists {
 				return
 			}
 		}
 
-		client, err := gcp.NewClient(ctx, projectID)
+		client, err := gcp.NewClient(ctx, trimmed)
 		if err != nil {
-			logger.Log.Warnf("Failed to initialize GCP client for project %s: %v", projectID, err)
+			logger.Log.Warnf("Failed to initialize GCP client for project %s: %v", trimmed, err)
 
 			return
 		}
 
-		effectiveProject := client.ProjectID()
-		if _, exists := seen[effectiveProject]; exists {
-			return
+		effectiveProject := strings.ToLower(strings.TrimSpace(client.ProjectID()))
+		if effectiveProject != "" {
+			if _, exists := seen[effectiveProject]; exists {
+				return
+			}
+			seen[effectiveProject] = struct{}{}
 		}
 
-		seen[effectiveProject] = struct{}{}
 		clients = append(clients, client)
 	}
 
 	if project != "" {
 		addClient(project)
+
+		return clients
+	}
+
+	if len(limitProjects) > 0 {
+		for _, pid := range limitProjects {
+			addClient(pid)
+		}
 
 		return clients
 	}
