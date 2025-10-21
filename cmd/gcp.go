@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/kedare/compass/internal/gcp"
 	"github.com/kedare/compass/internal/logger"
@@ -204,6 +205,8 @@ Examples:
 func resolveInstanceFromMIG(ctx context.Context, cmd *cobra.Command, client *gcp.Client, migName, location string) (*gcp.Instance, error) {
 	spin := output.NewSpinner(fmt.Sprintf("Discovering instances in MIG %s", migName))
 	spin.Start()
+	manager := newProgressSpinnerManager(spin)
+	defer manager.StopAll()
 
 	type result struct {
 		refs       []gcp.ManagedInstanceRef
@@ -213,9 +216,7 @@ func resolveInstanceFromMIG(ctx context.Context, cmd *cobra.Command, client *gcp
 
 	resCh := make(chan result, 1)
 	go func() {
-		refs, isRegional, err := client.ListMIGInstances(ctx, migName, location, func(msg string) {
-			spin.Update(msg)
-		})
+		refs, isRegional, err := client.ListMIGInstances(ctx, migName, location, manager.Handle)
 		resCh <- result{refs: refs, isRegional: isRegional, err: err}
 	}()
 
@@ -416,6 +417,8 @@ func findInstanceWithSpinner(ctx context.Context, client *gcp.Client, instanceNa
 
 	spin := output.NewSpinner(message)
 	spin.Start()
+	manager := newProgressSpinnerManager(spin)
+	defer manager.StopAll()
 
 	type result struct {
 		instance *gcp.Instance
@@ -424,9 +427,7 @@ func findInstanceWithSpinner(ctx context.Context, client *gcp.Client, instanceNa
 
 	resCh := make(chan result, 1)
 	go func() {
-		inst, err := client.FindInstance(ctx, instanceName, zone, func(msg string) {
-			spin.Update(msg)
-		})
+		inst, err := client.FindInstance(ctx, instanceName, zone, manager.Handle)
 		resCh <- result{instance: inst, err: err}
 	}()
 
@@ -439,6 +440,12 @@ func findInstanceWithSpinner(ctx context.Context, client *gcp.Client, instanceNa
 			spinnerFail(spin, ctx, res.err, fmt.Sprintf("Failed to locate instance %s", instanceName))
 
 			return nil, res.err
+		}
+
+		if res.instance == nil {
+			spinnerFail(spin, ctx, errors.New("instance not found"), fmt.Sprintf("Failed to locate instance %s", instanceName))
+
+			return nil, fmt.Errorf("instance %s not found", instanceName)
 		}
 
 		displayZone := res.instance.Zone
@@ -496,6 +503,91 @@ func isContextCanceled(ctx context.Context, err error) bool {
 	}
 
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+type progressSpinnerManager struct {
+	main   *output.Spinner
+	mu     sync.Mutex
+	scopes map[string]*output.Spinner
+}
+
+func newProgressSpinnerManager(main *output.Spinner) *progressSpinnerManager {
+	return &progressSpinnerManager{
+		main:   main,
+		scopes: make(map[string]*output.Spinner),
+	}
+}
+
+func (m *progressSpinnerManager) Handle(event gcp.ProgressEvent) {
+	if event.Key == "" {
+		if m.main != nil && event.Message != "" {
+			m.main.Update(event.Message)
+		}
+
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	spinner := m.scopes[event.Key]
+	if !event.Done {
+		if spinner == nil {
+			message := event.Message
+			if message == "" {
+				message = event.Key
+			}
+			spinner = output.NewSpinner(message)
+			spinner.Start()
+			m.scopes[event.Key] = spinner
+		} else if event.Message != "" {
+			spinner.Update(event.Message)
+		}
+
+		return
+	}
+
+	if spinner == nil {
+		message := event.Message
+		if message == "" {
+			message = event.Key
+		}
+		spinner = output.NewSpinner(message)
+		spinner.Start()
+	}
+
+	message := event.Message
+	if message == "" {
+		if event.Err != nil {
+			message = fmt.Sprintf("%s failed", event.Key)
+		} else if event.Info {
+			message = fmt.Sprintf("%s", event.Key)
+		} else {
+			message = fmt.Sprintf("%s complete", event.Key)
+		}
+	}
+
+	if event.Err != nil {
+		spinner.Fail(message)
+	} else if event.Info {
+		spinner.Info(message)
+	} else {
+		spinner.Success(message)
+	}
+
+	delete(m.scopes, event.Key)
+}
+
+func (m *progressSpinnerManager) StopAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for key, spinner := range m.scopes {
+		if spinner != nil {
+			spinner.Stop()
+		}
+		delete(m.scopes, key)
+	}
 }
 
 func init() {

@@ -15,12 +15,14 @@ import (
 
 	"github.com/kedare/compass/internal/cache"
 	"github.com/kedare/compass/internal/logger"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/compute/v1"
 	"google.golang.org/api/option"
 )
 
 const (
-	InstanceStatusRunning = "RUNNING"
+	InstanceStatusRunning    = "RUNNING"
+	defaultLookupConcurrency = 10
 )
 
 var (
@@ -58,8 +60,22 @@ type ManagedInstanceRef struct {
 	Status string
 }
 
-// ProgressCallback emits human-readable progress updates for discovery flows.
-type ProgressCallback func(string)
+// ProgressEvent describes a progress update emitted during resource discovery.
+type ProgressEvent struct {
+	// Key identifies the logical task (e.g. "region:us-central1").
+	Key string
+	// Message contains the human-readable update to display.
+	Message string
+	// Err is set when the task finishes with an error.
+	Err error
+	// Done reports whether the task has completed (successfully or with error).
+	Done bool
+	// Info marks the completion as informational (neither success nor failure).
+	Info bool
+}
+
+// ProgressCallback receives progress updates for long running discovery tasks.
+type ProgressCallback func(ProgressEvent)
 
 func (r ManagedInstanceRef) IsRunning() bool {
 	return r.Status == InstanceStatusRunning
@@ -78,12 +94,36 @@ var (
 	cacheInitError error
 )
 
-func notifyProgress(cb ProgressCallback, format string, args ...interface{}) {
+func progressUpdate(cb ProgressCallback, key, message string) {
 	if cb == nil {
 		return
 	}
 
-	cb(fmt.Sprintf(format, args...))
+	cb(ProgressEvent{Key: key, Message: message})
+}
+
+func progressSuccess(cb ProgressCallback, key, message string) {
+	if cb == nil {
+		return
+	}
+
+	cb(ProgressEvent{Key: key, Message: message, Done: true})
+}
+
+func progressFailure(cb ProgressCallback, key, message string, err error) {
+	if cb == nil {
+		return
+	}
+
+	cb(ProgressEvent{Key: key, Message: message, Err: err, Done: true})
+}
+
+func progressInfo(cb ProgressCallback, key, message string) {
+	if cb == nil {
+		return
+	}
+
+	cb(ProgressEvent{Key: key, Message: message, Done: true, Info: true})
 }
 
 // getSharedCache returns the process-wide cache instance, creating it once on demand.
@@ -200,7 +240,7 @@ func (c *Client) FindInstance(ctx context.Context, instanceName, zone string, pr
 
 	if zone != "" {
 		logger.Log.Debugf("Searching in specific zone: %s (cache bypass)", zone)
-		notifyProgress(cb, "Checking zone %s for instance %s", zone, instanceName)
+		progressUpdate(cb, "", fmt.Sprintf("Checking zone %s for instance %s", zone, instanceName))
 		// Zone specified - bypass cache and search directly
 		instance, err := c.findInstanceInZone(ctx, instanceName, zone)
 		if err == nil && c.cache != nil {
@@ -215,7 +255,7 @@ func (c *Client) FindInstance(ctx context.Context, instanceName, zone string, pr
 	if c.cache != nil {
 		if cachedInfo, found := c.cache.Get(instanceName); found && cachedInfo.Type == cache.ResourceTypeInstance {
 			logger.Log.Debugf("Found instance location in cache: project=%s, zone=%s", cachedInfo.Project, cachedInfo.Zone)
-			notifyProgress(cb, "Checking cached zone %s for instance %s", cachedInfo.Zone, instanceName)
+			progressUpdate(cb, "", fmt.Sprintf("Checking cached zone %s for instance %s", cachedInfo.Zone, instanceName))
 
 			// Verify cached project matches current project
 			if cachedInfo.Project == c.project {
@@ -235,7 +275,7 @@ func (c *Client) FindInstance(ctx context.Context, instanceName, zone string, pr
 	}
 
 	logger.Log.Debug("Zone not specified, using aggregated list for auto-discovery")
-	notifyProgress(cb, "Zone not specified, scanning aggregated instance list")
+	progressUpdate(cb, "aggregate", fmt.Sprintf("Scanning aggregated instance list for %s", instanceName))
 
 	instanceData, err := c.findInstanceAcrossAggregatedPages(ctx, instanceName, cb)
 	if err != nil {
@@ -250,7 +290,7 @@ func (c *Client) FindInstance(ctx context.Context, instanceName, zone string, pr
 
 	result := c.convertInstance(instanceData)
 	logger.Log.Debugf("Found instance %s in zone %s", instanceName, result.Zone)
-	notifyProgress(cb, "Located instance %s in zone %s", instanceName, result.Zone)
+	progressSuccess(cb, "aggregate", fmt.Sprintf("Located instance %s in zone %s", instanceName, result.Zone))
 
 	if c.cache != nil {
 		c.cacheInstance(instanceName, result)
@@ -342,31 +382,31 @@ func (c *Client) ListInstances(ctx context.Context, zone string) ([]*Instance, e
 }
 
 func (c *Client) findInstanceAcrossAggregatedPages(ctx context.Context, instanceName string, progress ProgressCallback) (*compute.Instance, error) {
-    page := 0
-    fetch := func(pageToken string) (*compute.InstanceAggregatedList, error) {
-        if ctxErr := ctx.Err(); ctxErr != nil {
-            return nil, ctxErr
-        }
+	page := 0
+	fetch := func(pageToken string) (*compute.InstanceAggregatedList, error) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 
-        call := c.service.Instances.AggregatedList(c.project).Context(ctx)
-        if pageToken != "" {
-            call = call.PageToken(pageToken)
-        }
+		call := c.service.Instances.AggregatedList(c.project).Context(ctx)
+		if pageToken != "" {
+			call = call.PageToken(pageToken)
+		}
 
-        list, err := call.Do()
-        if err != nil {
-            logger.Log.Errorf("Failed to perform aggregated list: %v", err)
+		list, err := call.Do()
+		if err != nil {
+			logger.Log.Errorf("Failed to perform aggregated list: %v", err)
 
-            return nil, fmt.Errorf("failed to list instances: %w", err)
-        }
+			return nil, fmt.Errorf("failed to list instances: %w", err)
+		}
 
-        page++
-        notifyProgress(progress, "Scanning instance aggregate page %d (next token: %s)", page, list.NextPageToken)
+		page++
+		progressUpdate(progress, "aggregate", fmt.Sprintf("Scanning instance aggregate page %d (next token: %s)", page, list.NextPageToken))
 
-        return list, nil
-    }
+		return list, nil
+	}
 
-    return findInstanceInAggregatedPages(instanceName, fetch)
+	return findInstanceInAggregatedPages(instanceName, fetch)
 }
 
 func (c *Client) findInstanceInZone(ctx context.Context, instanceName, zone string) (*Instance, error) {
@@ -424,12 +464,17 @@ func (c *Client) listMIGInstances(ctx context.Context, migName, location string,
 	logger.Log.Debugf("Listing instances for MIG: %s", migName)
 
 	if location != "" {
-		notifyProgress(progress, "Looking up MIG %s in %s", migName, strings.TrimSpace(location))
+		scopeKey := fmt.Sprintf("scope:%s", strings.TrimSpace(location))
+		progressUpdate(progress, scopeKey, fmt.Sprintf("Locating MIG %s in %s", migName, strings.TrimSpace(location)))
 
 		refs, isRegional, err := c.listMIGInstancesWithSpecifiedLocation(ctx, migName, location)
 		if err != nil {
+			progressFailure(progress, scopeKey, fmt.Sprintf("Failed to locate MIG %s in %s", migName, strings.TrimSpace(location)), err)
+
 			return nil, isRegional, err
 		}
+
+		progressSuccess(progress, scopeKey, fmt.Sprintf("Found MIG %s in %s", migName, strings.TrimSpace(location)))
 
 		c.cacheMIGFromRefs(migName, refs, isRegional)
 
@@ -437,7 +482,7 @@ func (c *Client) listMIGInstances(ctx context.Context, migName, location string,
 	}
 
 	if refs, isRegional, err := c.listMIGInstancesFromCache(ctx, migName); err == nil {
-		notifyProgress(progress, "Using cached location for MIG %s", migName)
+		progressUpdate(progress, "", fmt.Sprintf("Using cached location for MIG %s", migName))
 		c.cacheMIGFromRefs(migName, refs, isRegional)
 
 		return refs, isRegional, nil
@@ -599,7 +644,7 @@ func (c *Client) ListRegions(ctx context.Context) ([]string, error) {
 		}
 	}
 
-    regions, err := c.listRegions(ctx)
+	regions, err := c.listRegions(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -708,40 +753,96 @@ func (c *Client) listMIGInstancesFromCache(ctx context.Context, migName string) 
 }
 
 func (c *Client) listMIGInstancesFromAggregated(ctx context.Context, migName string, progress ProgressCallback) ([]ManagedInstanceRef, bool, error) {
-    scopeName, err := c.findMIGScopeAcrossAggregatedPages(ctx, migName, progress)
-    if err != nil {
-        return nil, false, err
-    }
+	scopeName, err := c.findMIGScopeAcrossAggregatedPages(ctx, migName, progress)
+	if err != nil {
+		return nil, false, err
+	}
 
-    notifyProgress(progress, "Discovered MIG %s in %s", migName, scopeName)
+	progressSuccess(progress, "aggregate", fmt.Sprintf("Discovered MIG %s in %s", migName, scopeName))
 
-    return c.listMIGInstancesInScope(ctx, migName, scopeName, progress)
+	return c.listMIGInstancesInScope(ctx, migName, scopeName, progress)
 }
 
 func (c *Client) listMIGInstancesByRegionScan(ctx context.Context, migName string, progress ProgressCallback) ([]ManagedInstanceRef, bool, error) {
-    logger.Log.Debug("MIG not found in aggregated list, searching regions individually")
+	logger.Log.Debug("MIG not found in aggregated list, searching regions individually")
 
-    regions, err := c.listRegions(ctx)
-    if err != nil {
-        logger.Log.Errorf("Failed to list regions for regional MIG search: %v", err)
+	regions, err := c.listRegions(ctx)
+	if err != nil {
+		logger.Log.Errorf("Failed to list regions for regional MIG search: %v", err)
 
-        return nil, false, fmt.Errorf("failed to list regions: %w", err)
-    }
+		return nil, false, fmt.Errorf("failed to list regions: %w", err)
+	}
 
-    logger.Log.Debugf("Searching for regional MIG through %d regions", len(regions))
+	if len(regions) == 0 {
+		logger.Log.Warnf("No regions available while searching for MIG '%s'", migName)
+
+		return nil, false, fmt.Errorf("MIG '%s': %w", migName, ErrMIGNotFound)
+	}
+
+	logger.Log.Debugf("Searching for regional MIG through %d regions", len(regions))
+
+	type regionResult struct {
+		refs   []ManagedInstanceRef
+		region string
+		err    error
+	}
+
+	resultCh := make(chan regionResult, len(regions))
+
+	searchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	eg, egCtx := errgroup.WithContext(searchCtx)
+	eg.SetLimit(defaultLookupConcurrency)
 
 	for _, region := range regions {
-		notifyProgress(progress, "Scanning region %s for MIG %s", region, migName)
-		logger.Log.Tracef("Checking for regional MIG in region: %s", region)
+		region := region
+		eg.Go(func() error {
+			key := "region:" + region
+			progressUpdate(progress, key, fmt.Sprintf("Scanning region %s for MIG %s", region, migName))
+			logger.Log.Tracef("Checking for regional MIG in region: %s", region)
 
-		refs, err := c.listManagedInstancesInRegionalMIG(ctx, migName, region)
-		if err == nil {
-			return refs, true, nil
+			refs, err := c.listManagedInstancesInRegionalMIG(egCtx, migName, region)
+			if err == nil {
+				progressSuccess(progress, key, fmt.Sprintf("Found MIG %s in region %s", migName, region))
+				select {
+				case resultCh <- regionResult{refs: refs, region: region}:
+					cancel()
+				case <-egCtx.Done():
+				}
+
+				return nil
+			}
+
+			if errors.Is(err, context.Canceled) || errors.Is(egCtx.Err(), context.Canceled) {
+				progressFailure(progress, key, fmt.Sprintf("Canceled scanning region %s", region), context.Canceled)
+
+				return context.Canceled
+			}
+
+			progressInfo(progress, key, fmt.Sprintf("No MIG %s in region %s", migName, region))
+
+			return nil
+		})
+	}
+
+	go func() {
+		_ = eg.Wait()
+		close(resultCh)
+	}()
+
+	for res := range resultCh {
+		if res.refs != nil {
+			return res.refs, true, nil
 		}
 	}
 
+	if err := eg.Wait(); err != nil && !errors.Is(err, context.Canceled) {
+		return nil, false, err
+	}
+
 	logger.Log.Warnf("MIG '%s' not found in any region or zone", migName)
-	notifyProgress(progress, "MIG %s not found in any region", migName)
+	progressFailure(progress, "", fmt.Sprintf("MIG %s not found in any region", migName), ErrMIGNotFound)
 
 	return nil, false, fmt.Errorf("MIG '%s': %w", migName, ErrMIGNotFound)
 }
@@ -750,19 +851,35 @@ func (c *Client) listMIGInstancesInScope(ctx context.Context, migName, scopeName
 	if strings.HasPrefix(scopeName, "zones/") {
 		zone := extractZoneFromScope(scopeName)
 		logger.Log.Debugf("Found zonal MIG %s in zone %s", migName, zone)
-		notifyProgress(progress, "Inspecting zone %s for MIG %s", zone, migName)
+		key := "zone:" + zone
+		progressUpdate(progress, key, fmt.Sprintf("Inspecting zone %s for MIG %s", zone, migName))
 
 		refs, err := c.listManagedInstancesInMIGZone(ctx, migName, zone)
+		if err != nil {
+			progressFailure(progress, key, fmt.Sprintf("Failed to list instances for MIG %s in zone %s", migName, zone), err)
 
-		return refs, false, err
+			return nil, false, err
+		}
+
+		progressSuccess(progress, key, fmt.Sprintf("Found MIG %s in zone %s", migName, zone))
+
+		return refs, false, nil
 	} else if strings.HasPrefix(scopeName, "regions/") {
 		region := extractRegionFromScope(scopeName)
 		logger.Log.Debugf("Found regional MIG %s in region %s", migName, region)
-		notifyProgress(progress, "Inspecting region %s for MIG %s", region, migName)
+		key := "region:" + region
+		progressUpdate(progress, key, fmt.Sprintf("Inspecting region %s for MIG %s", region, migName))
 
 		refs, err := c.listManagedInstancesInRegionalMIG(ctx, migName, region)
+		if err != nil {
+			progressFailure(progress, key, fmt.Sprintf("Failed to list instances for MIG %s in region %s", migName, region), err)
 
-		return refs, true, err
+			return nil, true, err
+		}
+
+		progressSuccess(progress, key, fmt.Sprintf("Found MIG %s in region %s", migName, region))
+
+		return refs, true, nil
 	}
 
 	return nil, false, fmt.Errorf("%w: %s", ErrUnknownScopeType, scopeName)
@@ -809,7 +926,7 @@ func (c *Client) findMIGScopeAcrossAggregatedPages(ctx context.Context, migName 
 		}
 
 		page++
-		notifyProgress(progress, "Scanning MIG aggregate page %d (next token: %s)", page, list.NextPageToken)
+		//progressUpdate(progress, "aggregate", fmt.Sprintf("Scanning MIG aggregate page %d (next token: %s)", page, list.NextPageToken))
 
 		return list, nil
 	}
