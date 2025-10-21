@@ -164,7 +164,7 @@ type multiSpinnerManager struct {
 	printer    *pterm.MultiPrinter
 	started    bool
 	refs       int
-	totalSpins int     // Total spinners created
+	totalSpins int      // Total spinners created
 	writer     *os.File // Writer for cleanup
 }
 

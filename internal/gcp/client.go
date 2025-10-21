@@ -134,7 +134,6 @@ func progressFailure(cb ProgressCallback, key, message string, err error) {
 	cb(ProgressEvent{Key: key, Message: message, Err: err, Done: true})
 }
 
-
 // getSharedCache returns the process-wide cache instance, creating it once on demand.
 func getSharedCache() (*cache.Cache, error) {
 	if !cache.Enabled() {
