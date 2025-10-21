@@ -428,6 +428,11 @@ func instanceIPMatches(inst *compute.Instance, target net.IP) []ipMatch {
 				descParts = append(descParts, fmt.Sprintf("subnet=%s", subnetName))
 			}
 
+			subnetLink := strings.TrimSpace(nic.Subnetwork)
+			if subnetLink != "" {
+				descParts = append(descParts, fmt.Sprintf("subnet_link=%s", subnetLink))
+			}
+
 			matches = append(matches, ipMatch{
 				kind:    IPAssociationInstanceInternal,
 				details: strings.Join(descParts, ", "),
@@ -608,46 +613,53 @@ func subnetMatchDetails(subnet *compute.Subnetwork, target net.IP) (bool, string
 		return false, ""
 	}
 
-	matchParts := make([]string, 0, 3)
-	matched := false
+	var (
+		matchedCIDR string
+		source      string
+	)
 
 	if cidr := strings.TrimSpace(subnet.IpCidrRange); cidr != "" && ipInCIDR(target, cidr) {
-		matched = true
-		matchParts = append(matchParts, fmt.Sprintf("primary=%s", cidr))
+		matchedCIDR = cidr
+		source = "primary"
 	}
 
-	for _, sec := range subnet.SecondaryIpRanges {
-		if sec == nil {
-			continue
-		}
+	if matchedCIDR == "" {
+		for _, sec := range subnet.SecondaryIpRanges {
+			if sec == nil {
+				continue
+			}
 
-		if cidr := strings.TrimSpace(sec.IpCidrRange); cidr != "" && ipInCIDR(target, cidr) {
-			matched = true
-			if sec.RangeName != "" {
-				matchParts = append(matchParts, fmt.Sprintf("secondary[%s]=%s", sec.RangeName, cidr))
-			} else {
-				matchParts = append(matchParts, fmt.Sprintf("secondary=%s", cidr))
+			if cidr := strings.TrimSpace(sec.IpCidrRange); cidr != "" && ipInCIDR(target, cidr) {
+				matchedCIDR = cidr
+				if sec.RangeName != "" {
+					source = fmt.Sprintf("secondary:%s", sec.RangeName)
+				} else {
+					source = "secondary"
+				}
+				break
 			}
 		}
 	}
 
-	if cidr := strings.TrimSpace(subnet.Ipv6CidrRange); cidr != "" && ipInCIDR(target, cidr) {
-		matched = true
-		matchParts = append(matchParts, fmt.Sprintf("ipv6=%s", cidr))
+	if matchedCIDR == "" {
+		if cidr := strings.TrimSpace(subnet.Ipv6CidrRange); cidr != "" && ipInCIDR(target, cidr) {
+			matchedCIDR = cidr
+			source = "ipv6"
+		}
 	}
 
-	if !matched {
+	if matchedCIDR == "" {
 		return false, ""
 	}
 
 	detailParts := make([]string, 0, 4)
-	networkName := lastComponent(subnet.Network)
-	if networkName != "" {
+	if networkName := lastComponent(subnet.Network); networkName != "" {
 		detailParts = append(detailParts, fmt.Sprintf("network=%s", networkName))
 	}
 
-	if len(matchParts) > 0 {
-		detailParts = append(detailParts, fmt.Sprintf("range=%s", strings.Join(matchParts, ", ")))
+	detailParts = append(detailParts, fmt.Sprintf("cidr=%s", matchedCIDR))
+	if source != "" {
+		detailParts = append(detailParts, fmt.Sprintf("range=%s", source))
 	}
 
 	if subnet.GatewayAddress != "" && equalIP(subnet.GatewayAddress, target) {
