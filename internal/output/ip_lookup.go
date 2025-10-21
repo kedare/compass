@@ -37,7 +37,7 @@ func displayIPTable(results []gcp.IPAssociation) error {
 	t.SetOutputMirror(os.Stdout)
 	t.SetStyle(table.StyleLight)
 	t.Style().Format.Header = text.FormatDefault
-	t.AppendHeader(table.Row{"Project", "Type", "Resource", "Location", "Details"})
+	t.AppendHeader(table.Row{"Project", "Type", "Resource", "Location", "IP", "Details"})
 
 	for _, assoc := range results {
 		t.AppendRow(table.Row{
@@ -45,6 +45,7 @@ func displayIPTable(results []gcp.IPAssociation) error {
 			describeAssociationKind(assoc.Kind),
 			assoc.Resource,
 			assoc.Location,
+			assoc.IPAddress,
 			assoc.Details,
 		})
 	}
@@ -65,6 +66,10 @@ func displayIPText(results []gcp.IPAssociation) error {
 	for _, assoc := range results {
 		fmt.Printf("- %s • %s\n", assoc.Project, describeAssociationKind(assoc.Kind))
 		fmt.Printf("  Resource: %s\n", assoc.Resource)
+
+		if assoc.IPAddress != "" {
+			fmt.Printf("  IP:       %s\n", assoc.IPAddress)
+		}
 
 		if assoc.Location != "" {
 			fmt.Printf("  Location: %s\n", assoc.Location)
@@ -90,6 +95,8 @@ func describeAssociationKind(kind gcp.IPAssociationKind) string {
 		return "Forwarding rule"
 	case gcp.IPAssociationAddress:
 		return "Reserved address"
+	case gcp.IPAssociationSubnet:
+		return "Subnet range"
 	default:
 		return string(kind)
 	}

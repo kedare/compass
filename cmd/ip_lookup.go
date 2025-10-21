@@ -40,7 +40,7 @@ func init() {
 	ipCmd.AddCommand(ipLookupCmd)
 
 	ipLookupCmd.Flags().StringVarP(&ipLookupOutputFormat, "output", "o",
-		output.DefaultFormat("table", []string{"table", "text", "json"}),
+		output.DefaultFormat("text", []string{"table", "text", "json"}),
 		"Output format: table, text, json")
 }
 
