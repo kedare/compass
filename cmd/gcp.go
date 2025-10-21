@@ -13,7 +13,6 @@ import (
 
 	"github.com/kedare/compass/internal/gcp"
 	"github.com/kedare/compass/internal/logger"
-	"github.com/kedare/compass/internal/output"
 	"github.com/kedare/compass/internal/ssh"
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
@@ -134,7 +133,7 @@ Examples:
 			}
 		case resourceTypeInstance:
 			logger.Log.Debug("Resource type specified as instance, searching instance only")
-			instance, err = findInstanceWithSpinner(ctx, gcpClient, instanceName, zone)
+			instance, err = findInstanceWithProgress(ctx, gcpClient, instanceName, zone)
 			if err != nil {
 				if isContextCanceled(ctx, err) {
 					logger.Log.Info("Instance lookup canceled")
@@ -152,7 +151,7 @@ Examples:
 					errors.Is(err, gcp.ErrNoInstancesInMIG) ||
 					errors.Is(err, gcp.ErrNoInstancesInRegionalMIG) {
 					logger.Log.Debugf("MIG lookup failed (%v), trying standalone instance", err)
-					instance, err = findInstanceWithSpinner(ctx, gcpClient, instanceName, zone)
+					instance, err = findInstanceWithProgress(ctx, gcpClient, instanceName, zone)
 					if err != nil {
 						if isContextCanceled(ctx, err) {
 							logger.Log.Info("Instance lookup canceled")
@@ -178,7 +177,7 @@ Examples:
 			if instance == nil {
 				logger.Log.Debug("No MIG instance selected, attempting standalone instance")
 				// If MIG not found, try to find standalone instance
-				instance, err = findInstanceWithSpinner(ctx, gcpClient, instanceName, zone)
+				instance, err = findInstanceWithProgress(ctx, gcpClient, instanceName, zone)
 				if err != nil {
 					if isContextCanceled(ctx, err) {
 						logger.Log.Info("Instance lookup canceled")
@@ -203,10 +202,9 @@ Examples:
 }
 
 func resolveInstanceFromMIG(ctx context.Context, cmd *cobra.Command, client *gcp.Client, migName, location string) (*gcp.Instance, error) {
-	spin := output.NewSpinner(fmt.Sprintf("Discovering instances in MIG %s", migName))
-	spin.Start()
-	manager := newProgressSpinnerManager(spin)
-	defer manager.StopAll()
+	progress := newLookupProgressBar(fmt.Sprintf("Discovering instances in MIG %s", migName))
+	progress.Start()
+	defer progress.Stop()
 
 	type result struct {
 		refs       []gcp.ManagedInstanceRef
@@ -216,20 +214,20 @@ func resolveInstanceFromMIG(ctx context.Context, cmd *cobra.Command, client *gcp
 
 	resCh := make(chan result, 1)
 	go func() {
-		refs, isRegional, err := client.ListMIGInstances(ctx, migName, location, manager.Handle)
+		refs, isRegional, err := client.ListMIGInstances(ctx, migName, location, progress.Handle)
 		resCh <- result{refs: refs, isRegional: isRegional, err: err}
 	}()
 
 	var migRes result
 	select {
 	case <-ctx.Done():
-		spin.Fail("Canceled")
+		progress.Fail("Canceled")
 		return nil, ctx.Err()
 	case migRes = <-resCh:
 	}
 
 	if migRes.err != nil {
-		spinnerFail(spin, ctx, migRes.err, fmt.Sprintf("Failed to list instances in MIG %s", migName))
+		progressFail(progress, ctx, migRes.err, fmt.Sprintf("Failed to list instances in MIG %s", migName))
 
 		return nil, migRes.err
 	}
@@ -237,18 +235,18 @@ func resolveInstanceFromMIG(ctx context.Context, cmd *cobra.Command, client *gcp
 	refs := migRes.refs
 
 	if len(refs) == 0 {
-		spinnerFail(spin, ctx, nil, fmt.Sprintf("No instances in MIG %s", migName))
+		progressFail(progress, ctx, nil, fmt.Sprintf("No instances in MIG %s", migName))
 
 		return nil, fmt.Errorf("MIG '%s': %w", migName, gcp.ErrNoInstancesInMIG)
 	}
 
-	spinnerSuccess(spin, fmt.Sprintf("Found %d instance(s) in MIG %s", len(refs), migName))
+	progressSuccess(progress, fmt.Sprintf("Found %d instance(s) in MIG %s", len(refs), migName))
 
 	if len(refs) == 1 {
 		selected := refs[0]
 		logger.Log.Infof("MIG %s has a single instance: %s (zone %s)", migName, selected.Name, selected.Zone)
 
-		return findInstanceWithSpinner(ctx, client, selected.Name, selected.Zone)
+		return findInstanceWithProgress(ctx, client, selected.Name, selected.Zone)
 	}
 
 	selectedRef, err := promptMIGInstanceSelection(ctx, cmd, migName, refs)
@@ -258,7 +256,7 @@ func resolveInstanceFromMIG(ctx context.Context, cmd *cobra.Command, client *gcp
 
 	logger.Log.Infof("Selected MIG instance: %s (zone %s)", selectedRef.Name, selectedRef.Zone)
 
-	return findInstanceWithSpinner(ctx, client, selectedRef.Name, selectedRef.Zone)
+	return findInstanceWithProgress(ctx, client, selectedRef.Name, selectedRef.Zone)
 }
 
 func promptMIGInstanceSelection(ctx context.Context, cmd *cobra.Command, migName string, refs []gcp.ManagedInstanceRef) (gcp.ManagedInstanceRef, error) {
@@ -409,16 +407,15 @@ func defaultMIGSelectionIndex(refs []gcp.ManagedInstanceRef) int {
 	return 0
 }
 
-func findInstanceWithSpinner(ctx context.Context, client *gcp.Client, instanceName, zone string) (*gcp.Instance, error) {
+func findInstanceWithProgress(ctx context.Context, client *gcp.Client, instanceName, zone string) (*gcp.Instance, error) {
 	message := fmt.Sprintf("Searching for instance %s", instanceName)
 	if strings.TrimSpace(zone) != "" {
 		message = fmt.Sprintf("Searching for instance %s in %s", instanceName, zone)
 	}
 
-	spin := output.NewSpinner(message)
-	spin.Start()
-	manager := newProgressSpinnerManager(spin)
-	defer manager.StopAll()
+	progress := newLookupProgressBar(message)
+	progress.Start()
+	defer progress.Stop()
 
 	type result struct {
 		instance *gcp.Instance
@@ -427,23 +424,23 @@ func findInstanceWithSpinner(ctx context.Context, client *gcp.Client, instanceNa
 
 	resCh := make(chan result, 1)
 	go func() {
-		inst, err := client.FindInstance(ctx, instanceName, zone, manager.Handle)
+		inst, err := client.FindInstance(ctx, instanceName, zone, progress.Handle)
 		resCh <- result{instance: inst, err: err}
 	}()
 
 	select {
 	case <-ctx.Done():
-		spin.Fail("Canceled")
+		progress.Fail("Canceled")
 		return nil, ctx.Err()
 	case res := <-resCh:
 		if res.err != nil {
-			spinnerFail(spin, ctx, res.err, fmt.Sprintf("Failed to locate instance %s", instanceName))
+			progressFail(progress, ctx, res.err, fmt.Sprintf("Failed to locate instance %s", instanceName))
 
 			return nil, res.err
 		}
 
 		if res.instance == nil {
-			spinnerFail(spin, ctx, errors.New("instance not found"), fmt.Sprintf("Failed to locate instance %s", instanceName))
+			progressFail(progress, ctx, errors.New("instance not found"), fmt.Sprintf("Failed to locate instance %s", instanceName))
 
 			return nil, fmt.Errorf("instance %s not found", instanceName)
 		}
@@ -453,46 +450,46 @@ func findInstanceWithSpinner(ctx context.Context, client *gcp.Client, instanceNa
 			displayZone = "unknown zone"
 		}
 
-		spinnerSuccess(spin, fmt.Sprintf("Instance %s ready (%s)", res.instance.Name, displayZone))
+		progressSuccess(progress, fmt.Sprintf("Instance %s ready (%s)", res.instance.Name, displayZone))
 
 		return res.instance, nil
 	}
 }
 
-func spinnerFail(spin *output.Spinner, ctx context.Context, err error, message string) {
-	if spin == nil {
+func progressFail(progress *lookupProgressBar, ctx context.Context, err error, message string) {
+	if progress == nil {
 		return
 	}
 
-	if ctx != nil {
-		if ctxErr := ctx.Err(); errors.Is(ctxErr, context.Canceled) || errors.Is(ctxErr, context.DeadlineExceeded) {
-			spin.Fail("Canceled")
-
-			return
-		}
-	}
-
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		spin.Fail("Canceled")
+	if isContextCanceled(ctx, err) {
+		progress.Fail("Canceled")
 
 		return
+	}
+
+	if strings.TrimSpace(message) == "" {
+		message = "Operation failed"
 	}
 
 	if err != nil {
-		spin.Fail(fmt.Sprintf("%s: %v", message, err))
+		progress.Fail(fmt.Sprintf("%s: %v", message, err))
 
 		return
 	}
 
-	spin.Fail(message)
+	progress.Fail(message)
 }
 
-func spinnerSuccess(spin *output.Spinner, message string) {
-	if spin == nil {
+func progressSuccess(progress *lookupProgressBar, message string) {
+	if progress == nil {
 		return
 	}
 
-	spin.Success(message)
+	if strings.TrimSpace(message) == "" {
+		message = "Completed"
+	}
+
+	progress.Success(message)
 }
 
 func isContextCanceled(ctx context.Context, err error) bool {
@@ -505,89 +502,163 @@ func isContextCanceled(ctx context.Context, err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
-type progressSpinnerManager struct {
-	main   *output.Spinner
-	mu     sync.Mutex
-	scopes map[string]*output.Spinner
+type lookupProgressBar struct {
+	mu        sync.Mutex
+	title     string
+	writer    io.Writer
+	enabled   bool
+	started   bool
+	closed    bool
+	bar       *pterm.ProgressbarPrinter
+	seen      map[string]struct{}
+	completed map[string]struct{}
 }
 
-func newProgressSpinnerManager(main *output.Spinner) *progressSpinnerManager {
-	return &progressSpinnerManager{
-		main:   main,
-		scopes: make(map[string]*output.Spinner),
+func newLookupProgressBar(title string) *lookupProgressBar {
+	writer := os.Stderr
+
+	return &lookupProgressBar{
+		title:     title,
+		writer:    writer,
+		enabled:   term.IsTerminal(int(writer.Fd())),
+		seen:      make(map[string]struct{}),
+		completed: make(map[string]struct{}),
 	}
 }
 
-func (m *progressSpinnerManager) Handle(event gcp.ProgressEvent) {
-	if event.Key == "" {
-		if m.main != nil && event.Message != "" {
-			m.main.Update(event.Message)
-		}
+func (p *lookupProgressBar) Start() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
+	if p == nil || p.started {
 		return
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	p.started = true
 
-	spinner := m.scopes[event.Key]
-	if !event.Done {
-		if spinner == nil {
-			message := event.Message
-			if message == "" {
-				message = event.Key
+	if p.enabled {
+		bar, err := pterm.DefaultProgressbar.
+			WithTitle(p.title).
+			WithWriter(p.writer).
+			WithRemoveWhenDone(true).
+			WithTotal(0).
+			Start()
+		if err == nil {
+			p.bar = bar
+
+			return
+		}
+
+		logger.Log.Debugf("Failed to start progress bar: %v", err)
+		p.enabled = false
+	}
+
+	if _, err := fmt.Fprintf(p.writer, "%s...\n", p.title); err != nil {
+		logger.Log.Debugf("Failed to write progress start: %v", err)
+	}
+}
+
+func (p *lookupProgressBar) Handle(event gcp.ProgressEvent) {
+	if p == nil {
+		return
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if !p.started {
+		return
+	}
+
+	key := gcp.FormatProgressKey(event.Key)
+
+	if !p.enabled || p.bar == nil {
+		if event.Message != "" {
+			if _, err := fmt.Fprintln(p.writer, event.Message); err != nil {
+				logger.Log.Debugf("Failed to write progress update: %v", err)
 			}
-			spinner = output.NewSpinner(message)
-			spinner.Start()
-			m.scopes[event.Key] = spinner
-		} else if event.Message != "" {
-			spinner.Update(event.Message)
 		}
 
 		return
 	}
 
-	if spinner == nil {
-		message := event.Message
-		if message == "" {
-			message = event.Key
+	if key != "" {
+		if _, seen := p.seen[key]; !seen {
+			p.bar.Add(1)
+			p.seen[key] = struct{}{}
 		}
-		spinner = output.NewSpinner(message)
-		spinner.Start()
-	}
 
-	message := event.Message
-	if message == "" {
-		if event.Err != nil {
-			message = fmt.Sprintf("%s failed", event.Key)
-		} else if event.Info {
-			message = fmt.Sprintf("%s", event.Key)
-		} else {
-			message = fmt.Sprintf("%s complete", event.Key)
+		if event.Done {
+			if _, done := p.completed[key]; !done {
+				p.bar.Increment()
+				p.completed[key] = struct{}{}
+			}
 		}
 	}
 
-	if event.Err != nil {
-		spinner.Fail(message)
-	} else if event.Info {
-		spinner.Info(message)
-	} else {
-		spinner.Success(message)
+	if event.Message != "" {
+		p.bar.UpdateTitle(event.Message)
 	}
-
-	delete(m.scopes, event.Key)
 }
 
-func (m *progressSpinnerManager) StopAll() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (p *lookupProgressBar) Success(message string) {
+	p.stopWithPrinter(pterm.Success, message)
+}
 
-	for key, spinner := range m.scopes {
-		if spinner != nil {
-			spinner.Stop()
-		}
-		delete(m.scopes, key)
+func (p *lookupProgressBar) Fail(message string) {
+	p.stopWithPrinter(pterm.Error, message)
+}
+
+func (p *lookupProgressBar) Stop() {
+	if p == nil {
+		return
 	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.stopLocked()
+}
+
+func (p *lookupProgressBar) stopWithPrinter(printer pterm.PrefixPrinter, message string) {
+	if p == nil {
+		return
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.stopLocked()
+
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return
+	}
+
+	if p.enabled {
+		printer.WithWriter(p.writer).Printfln("%s", message)
+
+		return
+	}
+
+	if _, err := fmt.Fprintln(p.writer, message); err != nil {
+		logger.Log.Debugf("Failed to write progress completion: %v", err)
+	}
+}
+
+func (p *lookupProgressBar) stopLocked() {
+	if p.closed {
+		return
+	}
+
+	if p.enabled && p.bar != nil {
+		if _, err := p.bar.Stop(); err != nil {
+			logger.Log.Debugf("Failed to stop progress bar: %v", err)
+		}
+		p.bar = nil
+	}
+
+	p.closed = true
 }
 
 func init() {
