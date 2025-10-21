@@ -125,6 +125,13 @@ func (s *Spinner) Fail(message string) {
 	}, "✗", message)
 }
 
+// Info stops the spinner and prints an informational message.
+func (s *Spinner) Info(message string) {
+	s.stop(func(sp *pterm.SpinnerPrinter) {
+		sp.Info(message)
+	}, "•", message)
+}
+
 func (s *Spinner) stop(fn func(*pterm.SpinnerPrinter), fallbackPrefix, fallbackMessage string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
