@@ -332,11 +332,8 @@ loop:
 			}
 
 			if projSpinner != nil {
-				summary := "Lookup complete"
-				if len(res.associations) == 0 {
-					summary = "No results"
-				}
-				projSpinner.Success(fmt.Sprintf("%s (%s)", projectID, summary))
+				// Just stop without showing success message to keep output clean
+				projSpinner.Stop()
 			}
 
 			outcome.hadSuccess = true
