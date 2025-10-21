@@ -127,6 +127,15 @@ func NewClient(ctx context.Context, project string) (*Client, error) {
 	return client, nil
 }
 
+// ProjectID returns the project associated with the client.
+func (c *Client) ProjectID() string {
+	if c == nil {
+		return ""
+	}
+
+	return c.project
+}
+
 func (c *Client) FindInstance(ctx context.Context, instanceName, zone string) (*Instance, error) {
 	logger.Log.Debugf("Looking for instance: %s", instanceName)
 
