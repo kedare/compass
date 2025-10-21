@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/kedare/compass/internal/cache"
 	"github.com/kedare/compass/internal/logger"
@@ -68,6 +69,36 @@ type ManagedInstanceGroup struct {
 	IsRegional bool
 }
 
+var (
+	cacheOnce      sync.Once
+	sharedCache    *cache.Cache
+	cacheInitError error
+)
+
+// getSharedCache returns the process-wide cache instance, creating it once on demand.
+func getSharedCache() (*cache.Cache, error) {
+	if !cache.Enabled() {
+		return nil, nil
+	}
+
+	cacheOnce.Do(func() {
+		if !cache.Enabled() {
+			sharedCache = nil
+			cacheInitError = nil
+
+			return
+		}
+
+		sharedCache, cacheInitError = cache.New()
+	})
+
+	if !cache.Enabled() {
+		return nil, nil
+	}
+
+	return sharedCache, cacheInitError
+}
+
 func NewClient(ctx context.Context, project string) (*Client, error) {
 	logger.Log.Debug("Creating new GCP client")
 
@@ -104,24 +135,21 @@ func NewClient(ctx context.Context, project string) (*Client, error) {
 
 	logger.Log.Debug("GCP client created successfully")
 
-	// Initialize cache
-	c, err := cache.New()
-	if err != nil {
-		logger.Log.Warnf("Failed to initialize cache: %v", err)
-		// Continue without cache
-		c = nil
-	}
-
 	client := &Client{
 		service: service,
 		project: project,
-		cache:   c,
 	}
 
-	if client.cache != nil {
-		if err := client.cache.AddProject(client.project); err != nil {
-			logger.Log.Warnf("Failed to remember project %s: %v", client.project, err)
+	if cache.Enabled() {
+		// Initialize cache
+		c, err := cache.New()
+		if err != nil {
+			logger.Log.Warnf("Failed to initialize cache: %v", err)
+			// Continue without cache
+			c = nil
 		}
+
+		client.cache = c
 	}
 
 	return client, nil
@@ -134,6 +162,21 @@ func (c *Client) ProjectID() string {
 	}
 
 	return c.project
+}
+
+// RememberProject persists the client's project in the local cache when available.
+func (c *Client) RememberProject() {
+	if c == nil {
+		return
+	}
+
+	if c.cache == nil || !cache.Enabled() {
+		return
+	}
+
+	if err := c.cache.AddProject(c.project); err != nil {
+		logger.Log.Warnf("Failed to remember project %s: %v", c.project, err)
+	}
 }
 
 func (c *Client) FindInstance(ctx context.Context, instanceName, zone string) (*Instance, error) {
@@ -1215,5 +1258,9 @@ func collectZones(fetch func(pageToken string) ([]*compute.Zone, string, error))
 
 // LoadCache loads and returns the cache instance.
 func LoadCache() (*cache.Cache, error) {
-	return cache.New()
+	if !cache.Enabled() {
+		return nil, nil
+	}
+
+	return getSharedCache()
 }

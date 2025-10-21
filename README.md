@@ -212,6 +212,8 @@ compass gcp ip lookup 10.0.0.5 --project prod --output json
 
 When no project is provided, `compass gcp ip lookup` walks through every project stored in the local cache (and falls back to your gcloud default project when the cache is empty). Matches include Compute Engine instances, forwarding rules (load balancers), and reserved addresses along with descriptive metadata.
 
+Behind the scenes the lookup command also remembers the subnets it encounters (network, region, CIDRs, gateway). On subsequent runs the CLI first checks those cached subnet ranges so private addresses can be resolved without re-querying every project; if a cache miss occurs the lookup gracefully falls back to the live scan.
+
 ## Local Cache
 
 `compass` keeps a small JSON cache on disk so you do not have to repeat the same discovery calls on every run. The cache lives at `~/.compass.cache.json` with `0600` permissions and is refreshed transparently.
@@ -219,8 +221,11 @@ When no project is provided, `compass gcp ip lookup` walks through every project
 - Resource locations: once `compass gcp ssh` or connectivity commands resolve a VM or MIG, their project, zone or region, and resource type are stored for 30 days. When you omit `--project`, `--zone`, or `--type`, the CLI reuses the cached metadata; providing a flag bypasses it.
 - Project history: each project you touch is remembered so shell completion can suggest it later. Entries expire if unused for 30 days.
 - Zone listings: discovered zones for a project are cached for 30 days, matching other resource metadata retention to speed up future region/zone discovery.
+- Subnet metadata: as `compass gcp ip lookup` crawls projects it records subnets (primary/secondary CIDRs, IPv6 range, and gateway) so future IP lookups can be short-circuited to matching projects without re-querying every environment.
 
 Every cache access updates its timestamp, and stale entries are pruned automatically. To reset the cache, delete the file with `rm ~/.compass.cache.json`; a fresh one is created as soon as you run the CLI again.
+
+Need to disable caching temporarily? Pass `--cache=false` before your command (e.g. `compass --cache=false gcp ip lookup 10.0.0.1`) to bypass both cache reads and writes for that invocation.
 
 ## Connectivity Tests
 

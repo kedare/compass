@@ -4,9 +4,11 @@ package cache
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +24,8 @@ const (
 	CacheFilePermissions = 0o600
 	// ZoneCacheTTL defines how long zone listings stay valid (30 days).
 	ZoneCacheTTL = CacheExpiry
+	// SubnetCacheTTL defines how long subnet entries stay valid.
+	SubnetCacheTTL = CacheExpiry
 )
 
 // ResourceType represents the type of GCP resource.
@@ -42,6 +46,60 @@ type LocationInfo struct {
 	IsRegional bool         `json:"is_regional,omitempty"`
 }
 
+// SubnetSecondaryRange captures details about a secondary IP range attached to a subnet.
+type SubnetSecondaryRange struct {
+	Name string `json:"name,omitempty"`
+	CIDR string `json:"cidr"`
+}
+
+// SubnetEntry stores metadata about a VPC subnet for quick IP matching.
+type SubnetEntry struct {
+	Timestamp       time.Time              `json:"timestamp"`
+	Project         string                 `json:"project"`
+	Network         string                 `json:"network"`
+	Region          string                 `json:"region"`
+	Name            string                 `json:"name"`
+	SelfLink        string                 `json:"self_link,omitempty"`
+	PrimaryCIDR     string                 `json:"primary_cidr,omitempty"`
+	SecondaryRanges []SubnetSecondaryRange `json:"secondary_ranges,omitempty"`
+	IPv6CIDR        string                 `json:"ipv6_cidr,omitempty"`
+	Gateway         string                 `json:"gateway,omitempty"`
+}
+
+// clone returns a deep copy of the subnet entry to avoid sharing mutable slices.
+func (s *SubnetEntry) clone() *SubnetEntry {
+	if s == nil {
+		return nil
+	}
+
+	clone := *s
+	if len(s.SecondaryRanges) > 0 {
+		clone.SecondaryRanges = make([]SubnetSecondaryRange, len(s.SecondaryRanges))
+		copy(clone.SecondaryRanges, s.SecondaryRanges)
+	}
+
+	return &clone
+}
+
+// containsIP reports whether the provided IP falls within any of the subnet's CIDRs.
+func (s *SubnetEntry) containsIP(ip net.IP) bool {
+	if s == nil || ip == nil {
+		return false
+	}
+
+	if cidrContainsIP(s.PrimaryCIDR, ip) {
+		return true
+	}
+
+	for _, sr := range s.SecondaryRanges {
+		if cidrContainsIP(sr.CIDR, ip) {
+			return true
+		}
+	}
+
+	return cidrContainsIP(s.IPv6CIDR, ip)
+}
+
 type cacheFile struct {
 	GCP gcpCacheSection `json:"gcp"`
 }
@@ -50,6 +108,7 @@ type gcpCacheSection struct {
 	Instances map[string]*LocationInfo `json:"instances"`
 	Zones     map[string]*ZoneListing  `json:"zones"`
 	Projects  map[string]*ProjectEntry `json:"projects"`
+	Subnets   map[string]*SubnetEntry  `json:"subnets"`
 }
 
 // Cache manages persistent storage of resource location information.
@@ -57,6 +116,7 @@ type Cache struct {
 	instances map[string]*LocationInfo
 	zones     map[string]*ZoneListing
 	projects  map[string]*ProjectEntry
+	subnets   map[string]*SubnetEntry
 	filePath  string
 	mu        sync.RWMutex
 }
@@ -96,6 +156,7 @@ func New() (*Cache, error) {
 		instances: make(map[string]*LocationInfo),
 		zones:     make(map[string]*ZoneListing),
 		projects:  make(map[string]*ProjectEntry),
+		subnets:   make(map[string]*SubnetEntry),
 	}
 
 	// Load existing cache if it exists
@@ -348,6 +409,7 @@ func (c *Cache) Clear() error {
 	c.instances = make(map[string]*LocationInfo)
 	c.zones = make(map[string]*ZoneListing)
 	c.projects = make(map[string]*ProjectEntry)
+	c.subnets = make(map[string]*SubnetEntry)
 
 	logger.Log.Debug("Cleared all cache entries")
 
@@ -390,12 +452,18 @@ func (c *Cache) load() error {
 		fileData.GCP.Projects = make(map[string]*ProjectEntry)
 	}
 
+	if fileData.GCP.Subnets == nil {
+		fileData.GCP.Subnets = make(map[string]*SubnetEntry)
+	}
+
 	c.instances = fileData.GCP.Instances
 	c.zones = fileData.GCP.Zones
 	c.projects = fileData.GCP.Projects
+	c.subnets = fileData.GCP.Subnets
 	c.cleanExpired()
 	c.cleanExpiredZones()
 	c.cleanExpiredProjects()
+	c.cleanExpiredSubnets()
 
 	logger.Log.Debugf("Loaded cache with %d entries", len(c.instances))
 
@@ -408,6 +476,7 @@ func (c *Cache) save() error {
 	c.cleanExpired()
 	c.cleanExpiredZones()
 	c.cleanExpiredProjects()
+	c.cleanExpiredSubnets()
 
 	if c.instances == nil {
 		c.instances = make(map[string]*LocationInfo)
@@ -421,11 +490,16 @@ func (c *Cache) save() error {
 		c.projects = make(map[string]*ProjectEntry)
 	}
 
+	if c.subnets == nil {
+		c.subnets = make(map[string]*SubnetEntry)
+	}
+
 	fileData := cacheFile{
 		GCP: gcpCacheSection{
 			Instances: c.instances,
 			Zones:     c.zones,
 			Projects:  c.projects,
+			Subnets:   c.subnets,
 		},
 	}
 
@@ -438,7 +512,7 @@ func (c *Cache) save() error {
 		return fmt.Errorf("failed to write cache file: %w", err)
 	}
 
-	logger.Log.Debugf("Saved cache with %d entries to %s", len(c.instances), c.filePath)
+	logger.Log.Debugf("Saved cache with %d instance entries and %d subnet entries to %s", len(c.instances), len(c.subnets), c.filePath)
 
 	return nil
 }
@@ -500,4 +574,195 @@ func (c *Cache) cleanExpiredProjects() {
 	if count > 0 {
 		logger.Log.Debugf("Cleaned %d expired project cache entries", count)
 	}
+}
+
+func (c *Cache) cleanExpiredSubnets() {
+	if c.subnets == nil {
+		return
+	}
+
+	now := time.Now()
+	count := 0
+
+	for key, entry := range c.subnets {
+		if entry == nil || now.Sub(entry.Timestamp) > SubnetCacheTTL {
+			delete(c.subnets, key)
+			count++
+		}
+	}
+
+	if count > 0 {
+		logger.Log.Debugf("Cleaned %d expired subnet cache entries", count)
+	}
+}
+
+// RememberSubnet records subnet metadata in the cache for faster future lookups.
+func (c *Cache) RememberSubnet(info *SubnetEntry) error {
+	if !Enabled() {
+		return nil
+	}
+
+	if info == nil {
+		return nil
+	}
+
+	project := strings.TrimSpace(info.Project)
+	name := strings.TrimSpace(info.Name)
+	if project == "" || name == "" {
+		return nil
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.subnets == nil {
+		c.subnets = make(map[string]*SubnetEntry)
+	}
+
+	key := subnetKey(project, strings.TrimSpace(info.Network), name)
+	entry := info.clone()
+	entry.Project = project
+	entry.Name = name
+	entry.Timestamp = time.Now()
+
+	if entry.Region != "" {
+		entry.Region = strings.TrimSpace(entry.Region)
+	}
+
+	if entry.Network != "" {
+		entry.Network = strings.TrimSpace(entry.Network)
+	}
+
+	entry.PrimaryCIDR = strings.TrimSpace(entry.PrimaryCIDR)
+	entry.IPv6CIDR = strings.TrimSpace(entry.IPv6CIDR)
+	entry.Gateway = strings.TrimSpace(entry.Gateway)
+	entry.SelfLink = strings.TrimSpace(entry.SelfLink)
+
+	existing, ok := c.subnets[key]
+	if ok && existing != nil {
+		updateSubnetEntry(existing, entry)
+	} else {
+		c.subnets[key] = entry
+		existing = entry
+	}
+
+	if entry.Region != "" {
+		c.subnets[subnetKey(project, entry.Region, name)] = existing
+	}
+
+	if entry.SelfLink != "" {
+		c.subnets[strings.ToLower(entry.SelfLink)] = existing
+	}
+
+	if entry.Project != "" {
+		c.addProjectLocked(entry.Project)
+	}
+
+	return c.save()
+}
+
+// FindSubnetsForIP returns cached subnets whose CIDR ranges contain the specified IP.
+func (c *Cache) FindSubnetsForIP(ip net.IP) []*SubnetEntry {
+	if !Enabled() || ip == nil {
+		return nil
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.subnets == nil {
+		return nil
+	}
+
+	results := make([]*SubnetEntry, 0)
+	seen := make(map[*SubnetEntry]struct{})
+	needSave := false
+	for key, entry := range c.subnets {
+		if entry == nil {
+			delete(c.subnets, key)
+			needSave = true
+			continue
+		}
+
+		if time.Since(entry.Timestamp) > SubnetCacheTTL {
+			delete(c.subnets, key)
+			needSave = true
+			continue
+		}
+
+		if _, exists := seen[entry]; exists {
+			continue
+		}
+
+		if entry.containsIP(ip) {
+			entry.Timestamp = time.Now()
+			seen[entry] = struct{}{}
+			results = append(results, entry.clone())
+			needSave = true
+		}
+	}
+
+	if needSave {
+		if err := c.save(); err != nil {
+			logger.Log.Warnf("Failed to persist subnet cache updates: %v", err)
+		}
+	}
+
+	return results
+}
+
+// updateSubnetEntry merges metadata from src into dest while preserving slice allocations.
+func updateSubnetEntry(dest, src *SubnetEntry) {
+	if dest == nil || src == nil {
+		return
+	}
+
+	dest.Timestamp = src.Timestamp
+	dest.Project = src.Project
+	dest.Network = src.Network
+	dest.Region = src.Region
+	dest.Name = src.Name
+	dest.SelfLink = src.SelfLink
+	dest.PrimaryCIDR = src.PrimaryCIDR
+	dest.IPv6CIDR = src.IPv6CIDR
+	dest.Gateway = src.Gateway
+
+	if len(src.SecondaryRanges) > 0 {
+		dest.SecondaryRanges = make([]SubnetSecondaryRange, len(src.SecondaryRanges))
+		copy(dest.SecondaryRanges, src.SecondaryRanges)
+	} else {
+		dest.SecondaryRanges = nil
+	}
+}
+
+// subnetKey builds a normalized cache key for subnet entries.
+func subnetKey(parts ...string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+
+	normalized := make([]string, 0, len(parts))
+	for _, part := range parts {
+		p := strings.ToLower(strings.TrimSpace(part))
+		if p != "" {
+			normalized = append(normalized, p)
+		}
+	}
+
+	return strings.Join(normalized, "|")
+}
+
+// cidrContainsIP reports whether the given IP is inside the provided CIDR.
+func cidrContainsIP(cidr string, ip net.IP) bool {
+	cidr = strings.TrimSpace(cidr)
+	if cidr == "" || ip == nil {
+		return false
+	}
+
+	_, network, err := net.ParseCIDR(cidr)
+	if err != nil || network == nil {
+		return false
+	}
+
+	return network.Contains(ip)
 }
