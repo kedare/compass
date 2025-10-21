@@ -149,6 +149,10 @@ func TestRenderCombinedTraceAlignment(t *testing.T) {
 func firstTableColumn(line string) int {
 	for i, r := range line {
 		switch r {
+		// pterm table borders
+		case '+', '|':
+			return runewidth.StringWidth(stripAnsiCodes(line[:i]))
+		// go-pretty table borders (for backwards compatibility)
 		case '┌', '└', '┴', '┬', '┼', '│', '├', '┤':
 			return runewidth.StringWidth(stripAnsiCodes(line[:i]))
 		}

@@ -6,8 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/jedib0t/go-pretty/v6/table"
-	"github.com/jedib0t/go-pretty/v6/text"
 	"github.com/kedare/compass/internal/gcp"
 	"github.com/mattn/go-runewidth"
 	"github.com/pterm/pterm"
@@ -39,11 +37,10 @@ func displayIPTable(results []gcp.IPAssociation) error {
 
 	subnetCIDRs := buildSubnetCIDRMap(results)
 
-	t := table.NewWriter()
-	t.SetOutputMirror(os.Stdout)
-	t.SetStyle(table.StyleLight)
-	t.Style().Format.Header = text.FormatDefault
-	t.AppendHeader(table.Row{"Project", "Type", "Resource", "Location", "IP", "Details", "Notes"})
+	// Build table data
+	tableData := pterm.TableData{
+		{"Project", "Type", "Resource", "Location", "IP", "Details", "Notes"},
+	}
 
 	for _, assoc := range results {
 		ipValue := formatIPWithMask(assoc, subnetCIDRs)
@@ -57,7 +54,7 @@ func displayIPTable(results []gcp.IPAssociation) error {
 			note = ""
 		}
 
-		t.AppendRow(table.Row{
+		tableData = append(tableData, []string{
 			assoc.Project,
 			describeAssociationKind(assoc.Kind),
 			assoc.Resource,
@@ -68,9 +65,7 @@ func displayIPTable(results []gcp.IPAssociation) error {
 		})
 	}
 
-	t.Render()
-
-	return nil
+	return pterm.DefaultTable.WithHasHeader().WithData(tableData).Render()
 }
 
 func displayIPText(results []gcp.IPAssociation) error {

@@ -3,10 +3,8 @@ module github.com/kedare/compass
 go 1.24.2
 
 require (
-	github.com/jedib0t/go-pretty/v6 v6.6.8
 	github.com/mattn/go-runewidth v0.0.16
 	github.com/pterm/pterm v0.12.82
-	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.10.1
 	golang.org/x/oauth2 v0.31.0
 	golang.org/x/sync v0.17.0
