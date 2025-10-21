@@ -43,6 +43,10 @@ type LocationInfo struct {
 }
 
 type cacheFile struct {
+	GCP gcpCacheSection `json:"gcp"`
+}
+
+type gcpCacheSection struct {
 	Instances map[string]*LocationInfo `json:"instances"`
 	Zones     map[string]*ZoneListing  `json:"zones"`
 	Projects  map[string]*ProjectEntry `json:"projects"`
@@ -374,21 +378,21 @@ func (c *Cache) load() error {
 		return fmt.Errorf("failed to unmarshal cache data: %w", err)
 	}
 
-	if fileData.Instances == nil {
-		fileData.Instances = make(map[string]*LocationInfo)
+	if fileData.GCP.Instances == nil {
+		fileData.GCP.Instances = make(map[string]*LocationInfo)
 	}
 
-	if fileData.Zones == nil {
-		fileData.Zones = make(map[string]*ZoneListing)
+	if fileData.GCP.Zones == nil {
+		fileData.GCP.Zones = make(map[string]*ZoneListing)
 	}
 
-	if fileData.Projects == nil {
-		fileData.Projects = make(map[string]*ProjectEntry)
+	if fileData.GCP.Projects == nil {
+		fileData.GCP.Projects = make(map[string]*ProjectEntry)
 	}
 
-	c.instances = fileData.Instances
-	c.zones = fileData.Zones
-	c.projects = fileData.Projects
+	c.instances = fileData.GCP.Instances
+	c.zones = fileData.GCP.Zones
+	c.projects = fileData.GCP.Projects
 	c.cleanExpired()
 	c.cleanExpiredZones()
 	c.cleanExpiredProjects()
@@ -405,10 +409,24 @@ func (c *Cache) save() error {
 	c.cleanExpiredZones()
 	c.cleanExpiredProjects()
 
+	if c.instances == nil {
+		c.instances = make(map[string]*LocationInfo)
+	}
+
+	if c.zones == nil {
+		c.zones = make(map[string]*ZoneListing)
+	}
+
+	if c.projects == nil {
+		c.projects = make(map[string]*ProjectEntry)
+	}
+
 	fileData := cacheFile{
-		Instances: c.instances,
-		Zones:     c.zones,
-		Projects:  c.projects,
+		GCP: gcpCacheSection{
+			Instances: c.instances,
+			Zones:     c.zones,
+			Projects:  c.projects,
+		},
 	}
 
 	data, err := json.MarshalIndent(fileData, "", "  ")

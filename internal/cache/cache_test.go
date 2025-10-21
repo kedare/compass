@@ -393,7 +393,7 @@ func TestGetRefreshesTimestamp(t *testing.T) {
 		t.Fatalf("Failed to unmarshal cache file: %v", err)
 	}
 
-	entry, ok := stored.Instances["stale-instance"]
+	entry, ok := stored.GCP.Instances["stale-instance"]
 	if !ok {
 		t.Fatal("Expected refreshed entry in persisted cache")
 	}
@@ -403,7 +403,7 @@ func TestGetRefreshesTimestamp(t *testing.T) {
 	}
 }
 
-func TestSaveUsesInstancesKey(t *testing.T) {
+func TestSaveUsesGCPSection(t *testing.T) {
 	tmpDir := t.TempDir()
 	cache := &Cache{
 		filePath:  filepath.Join(tmpDir, "test_cache.json"),
@@ -430,36 +430,34 @@ func TestSaveUsesInstancesKey(t *testing.T) {
 		t.Fatalf("Failed to unmarshal cache file: %v", err)
 	}
 
-	locationPayload, ok := fileContents["instances"]
+	gcpPayload, ok := fileContents["gcp"]
 	if !ok {
-		t.Fatal("Expected 'instances' key in cache file")
+		t.Fatal("Expected 'gcp' key in cache file")
 	}
 
-	if _, ok := fileContents["zones"]; !ok {
-		t.Fatal("Expected 'zones' key in cache file")
+	var gcpSection gcpCacheSection
+	if err := json.Unmarshal(gcpPayload, &gcpSection); err != nil {
+		t.Fatalf("Failed to unmarshal GCP cache section: %v", err)
 	}
 
-	projectsPayload, ok := fileContents["projects"]
-	if !ok {
-		t.Fatal("Expected 'projects' key in cache file")
+	if gcpSection.Instances == nil {
+		t.Fatal("Expected instances map under GCP section")
 	}
 
-	var projectEntries map[string]*ProjectEntry
-	if err := json.Unmarshal(projectsPayload, &projectEntries); err != nil {
-		t.Fatalf("Failed to unmarshal project entries: %v", err)
+	if gcpSection.Zones == nil {
+		t.Fatal("Expected zones map under GCP section")
 	}
 
-	if _, ok := projectEntries["project"]; !ok {
+	if gcpSection.Projects == nil {
+		t.Fatal("Expected projects map under GCP section")
+	}
+
+	if _, ok := gcpSection.Projects["project"]; !ok {
 		t.Fatal("Expected project entry under 'projects' key")
 	}
 
-	var locationEntries map[string]*LocationInfo
-	if err := json.Unmarshal(locationPayload, &locationEntries); err != nil {
-		t.Fatalf("Failed to unmarshal location entries: %v", err)
-	}
-
-	if _, ok := locationEntries["instance"]; !ok {
-		t.Fatal("Expected instance entry under 'location' key")
+	if _, ok := gcpSection.Instances["instance"]; !ok {
+		t.Fatal("Expected instance entry under 'instances' key")
 	}
 }
 
