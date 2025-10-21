@@ -442,6 +442,7 @@ func instanceIPMatches(inst *compute.Instance, target net.IP) []ipMatch {
 	}
 
 	matches := make([]ipMatch, 0)
+	descParts := []string{}
 
 	for _, nic := range inst.NetworkInterfaces {
 		if nic == nil {
@@ -449,9 +450,10 @@ func instanceIPMatches(inst *compute.Instance, target net.IP) []ipMatch {
 		}
 
 		if equalIP(nic.NetworkIP, target) || equalIP(nic.Ipv6Address, target) {
-			descParts := []string{"Internal interface"}
 			if nic.Name != "" {
-				descParts[0] = fmt.Sprintf("Internal interface %s", nic.Name)
+				descParts = append(descParts, fmt.Sprintf("Internal interface %s", nic.Name))
+			} else {
+				descParts = append(descParts, "Internal interface")
 			}
 
 			networkName := lastComponent(nic.Network)
@@ -698,7 +700,13 @@ func subnetMatchDetails(subnet *compute.Subnetwork, target net.IP) (bool, string
 		detailParts = append(detailParts, fmt.Sprintf("range=%s", source))
 	}
 
-	if subnet.GatewayAddress != "" && equalIP(subnet.GatewayAddress, target) {
+	gateway := strings.TrimSpace(subnet.GatewayAddress)
+	if gateway != "" {
+		detailParts = append(detailParts, fmt.Sprintf("gateway_ip=%s", gateway))
+		if equalIP(gateway, target) {
+			detailParts = append(detailParts, "gateway=true")
+		}
+	} else if subnet.GatewayAddress != "" && equalIP(subnet.GatewayAddress, target) {
 		detailParts = append(detailParts, "gateway=true")
 	}
 

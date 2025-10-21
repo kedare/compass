@@ -9,10 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jedib0t/go-pretty/v6/table"
-	"github.com/jedib0t/go-pretty/v6/text"
 	"github.com/kedare/compass/internal/gcp"
 	"github.com/mattn/go-runewidth"
+	"github.com/pterm/pterm"
 	"golang.org/x/term"
 )
 
@@ -130,7 +129,7 @@ func formatSingleStatus(status string, reachable bool, colorize bool) string {
 	switch strings.ToUpper(display) {
 	case "UNKNOWN", "N/A":
 		if colorize {
-			return text.Bold.Sprint(display)
+			return pterm.NewStyle(pterm.Bold).Sprint(display)
 		}
 
 		return display
@@ -141,10 +140,10 @@ func formatSingleStatus(status string, reachable bool, colorize bool) string {
 	}
 
 	if reachable {
-		return text.Colors{text.Bold, text.FgGreen}.Sprint(display)
+		return pterm.NewStyle(pterm.Bold, pterm.FgGreen).Sprint(display)
 	}
 
-	return text.Colors{text.Bold, text.FgRed}.Sprint(display)
+	return pterm.NewStyle(pterm.Bold, pterm.FgRed).Sprint(display)
 }
 
 func formatForwardStatus(status connectivityStatus, colorize bool) string {
@@ -476,30 +475,29 @@ func renderCombinedTrace(forward, backward *gcp.Trace, index, total int) string 
 		return ""
 	}
 
-	t := table.NewWriter()
-	t.SetStyle(table.StyleLight)
-	t.Style().Options.SeparateRows = true
-	t.SuppressEmptyColumns()
-
-	t.AppendRow(table.Row{
-		text.Bold.Sprint("Forward Path"), "", "", "", "",
-		text.Bold.Sprint("Return Path"), "", "", "", "",
-	}, table.RowConfig{AutoMerge: true})
-
-	t.AppendRow(table.Row{"#", "Step", "Type", "Resource", "Status", "#", "Step", "Type", "Resource", "Status"})
-
 	maxSteps := len(forward.Steps)
 	if len(backward.Steps) > maxSteps {
 		maxSteps = len(backward.Steps)
 	}
 
+	// Build table data
+	tableData := pterm.TableData{
+		{pterm.NewStyle(pterm.Bold).Sprint("Forward Path"), "", "", "", "", pterm.NewStyle(pterm.Bold).Sprint("Return Path"), "", "", "", ""},
+		{"#", "Step", "Type", "Resource", "Status", "#", "Step", "Type", "Resource", "Status"},
+	}
+
 	for i := range maxSteps {
 		f := traceStepCells(forward, i)
 		r := traceStepCells(backward, i)
-		t.AppendRow(table.Row{f[0], f[1], f[2], f[3], f[4], r[0], r[1], r[2], r[3], r[4]})
+		tableData = append(tableData, []string{f[0], f[1], f[2], f[3], f[4], r[0], r[1], r[2], r[3], r[4]})
 	}
 
-	lines := strings.Split(t.Render(), "\n")
+	rendered, err := pterm.DefaultTable.WithHasHeader().WithData(tableData).Srender()
+	if err != nil {
+		return ""
+	}
+
+	lines := strings.Split(rendered, "\n")
 	var builder strings.Builder
 
 	if total > 1 {
@@ -529,12 +527,12 @@ func traceStepCells(trace *gcp.Trace, index int) [5]string {
 	stepType, resource, status := formatTraceStepForTable(step)
 
 	if step.CausesDrop {
-		stepNum = text.Bold.Sprint(text.FgRed.Sprint(stepNum))
-		stepType = text.Bold.Sprint(text.FgRed.Sprint(stepType))
-		resource = text.Bold.Sprint(text.FgRed.Sprint(resource))
-		status = text.Bold.Sprint(text.FgRed.Sprint(status))
+		stepNum = pterm.NewStyle(pterm.Bold, pterm.FgRed).Sprint(stepNum)
+		stepType = pterm.NewStyle(pterm.Bold, pterm.FgRed).Sprint(stepType)
+		resource = pterm.NewStyle(pterm.Bold, pterm.FgRed).Sprint(resource)
+		status = pterm.NewStyle(pterm.Bold, pterm.FgRed).Sprint(status)
 	} else {
-		status = text.FgGreen.Sprint(status)
+		status = pterm.NewStyle(pterm.FgGreen).Sprint(status)
 	}
 
 	return [5]string{stepNum, getStepIcon(index, len(trace.Steps), step.CausesDrop), stepType, resource, status}
@@ -563,31 +561,40 @@ func fitsTerminalWidth(block string) bool {
 
 // displaySingleTrace displays a single trace with a title.
 func displaySingleTrace(trace *gcp.Trace, title string) {
-	fmt.Println("    " + text.Bold.Sprint(title))
+	fmt.Println("    " + pterm.NewStyle(pterm.Bold).Sprint(title))
 
-	t := table.NewWriter()
-	t.SetOutputMirror(os.Stdout)
-	t.SetStyle(table.StyleLight)
-	t.Style().Options.SeparateRows = true
-	t.AppendHeader(table.Row{"#", "Step", "Type", "Resource", "Status"})
+	tableData := pterm.TableData{
+		{"#", "Step", "Type", "Resource", "Status"},
+	}
 
 	for i, step := range trace.Steps {
 		stepNum := strconv.Itoa(i + 1)
 		stepType, resource, status := formatTraceStepForTable(step)
 
 		if step.CausesDrop {
-			stepNum = text.Bold.Sprint(text.FgRed.Sprint(stepNum))
-			stepType = text.Bold.Sprint(text.FgRed.Sprint(stepType))
-			resource = text.Bold.Sprint(text.FgRed.Sprint(resource))
-			status = text.Bold.Sprint(text.FgRed.Sprint(status))
+			stepNum = pterm.NewStyle(pterm.Bold, pterm.FgRed).Sprint(stepNum)
+			stepType = pterm.NewStyle(pterm.Bold, pterm.FgRed).Sprint(stepType)
+			resource = pterm.NewStyle(pterm.Bold, pterm.FgRed).Sprint(resource)
+			status = pterm.NewStyle(pterm.Bold, pterm.FgRed).Sprint(status)
 		} else {
-			status = text.FgGreen.Sprint(status)
+			status = pterm.NewStyle(pterm.FgGreen).Sprint(status)
 		}
 
-		t.AppendRow(table.Row{stepNum, getStepIcon(i, len(trace.Steps), step.CausesDrop), stepType, resource, status})
+		tableData = append(tableData, []string{stepNum, getStepIcon(i, len(trace.Steps), step.CausesDrop), stepType, resource, status})
 	}
 
-	t.Render()
+	// Indent the table output
+	rendered, err := pterm.DefaultTable.WithHasHeader().WithData(tableData).Srender()
+	if err != nil {
+		return
+	}
+
+	lines := strings.Split(rendered, "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			fmt.Println("    " + line)
+		}
+	}
 }
 
 // padRight pads a string to the right with spaces, accounting for ANSI color codes.
