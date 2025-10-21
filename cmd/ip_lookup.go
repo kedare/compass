@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -13,6 +14,12 @@ import (
 )
 
 var ipLookupOutputFormat string
+
+// ipLookupResult captures the outcome of querying a single project for IP associations.
+type ipLookupResult struct {
+	associations []gcp.IPAssociation
+	err          error
+}
 
 var ipLookupCmd = &cobra.Command{
 	Use:   "lookup <ip-address>",
@@ -27,6 +34,7 @@ projects are scanned automatically.`,
 }
 
 func init() {
+	// init registers the IP lookup command on the parent IP command and configures flags.
 	ipCmd.AddCommand(ipLookupCmd)
 
 	ipLookupCmd.Flags().StringVarP(&ipLookupOutputFormat, "output", "o",
@@ -34,6 +42,7 @@ func init() {
 		"Output format: table, text, json")
 }
 
+// runIPLookup orchestrates the lookup by iterating over all candidate projects and gathering matches.
 func runIPLookup(ctx context.Context, rawIP string) {
 	ip := strings.TrimSpace(rawIP)
 	if net.ParseIP(ip) == nil {
@@ -54,21 +63,52 @@ func runIPLookup(ctx context.Context, rawIP string) {
 
 	var results []gcp.IPAssociation
 	hadSuccess := false
+	canceled := false
 
 	for _, client := range clients {
+		if err := ctx.Err(); err != nil {
+			canceled = true
+			break
+		}
+
 		projectID := client.ProjectID()
 		spin.Update(fmt.Sprintf("Scanning project %s…", projectID))
 		logger.Log.Debugf("Looking up IP %s in project %s", ip, projectID)
 
-		associations, err := client.LookupIPAddress(ctx, ip)
-		if err != nil {
-			logger.Log.Warnf("Skipping project %s: %v", projectID, err)
+		resultCh := make(chan ipLookupResult, 1)
+		go func(c *gcp.Client) {
+			associations, err := c.LookupIPAddress(ctx, ip)
+			resultCh <- ipLookupResult{associations: associations, err: err}
+		}(client)
 
-			continue
+		select {
+		case <-ctx.Done():
+			canceled = true
+		case res := <-resultCh:
+			if isContextError(res.err) || isContextError(ctx.Err()) {
+				canceled = true
+				break
+			}
+
+			if res.err != nil {
+				logger.Log.Warnf("Skipping project %s: %v", projectID, res.err)
+
+				continue
+			}
+
+			hadSuccess = true
+			results = append(results, res.associations...)
 		}
 
-		hadSuccess = true
-		results = append(results, associations...)
+		if canceled {
+			break
+		}
+	}
+
+	if canceled {
+		spin.Fail("Lookup canceled")
+
+		return
 	}
 
 	if !hadSuccess {
@@ -89,11 +129,18 @@ func runIPLookup(ctx context.Context, rawIP string) {
 	}
 }
 
+// lookupClients builds unique GCP clients that will participate in the lookup.
 func lookupClients(ctx context.Context) []*gcp.Client {
 	seen := make(map[string]struct{})
 	clients := make([]*gcp.Client, 0)
 
 	addClient := func(projectID string) {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return
+			}
+		}
+
 		if projectID != "" {
 			if _, exists := seen[projectID]; exists {
 				return
@@ -127,17 +174,23 @@ func lookupClients(ctx context.Context) []*gcp.Client {
 		logger.Log.Debugf("Failed to load cache for project discovery: %v", err)
 	} else if cache != nil {
 		for _, cachedProject := range enumerateProjects(cache.GetProjects()) {
+			if ctx != nil && ctx.Err() != nil {
+				break
+			}
 			addClient(cachedProject)
 		}
 	}
 
 	if len(clients) == 0 {
-		addClient("")
+		if ctx == nil || ctx.Err() == nil {
+			addClient("")
+		}
 	}
 
 	return clients
 }
 
+// enumerateProjects trims and deduplicates cached project identifiers.
 func enumerateProjects(projects []string) []string {
 	if len(projects) == 0 {
 		return nil
@@ -161,4 +214,9 @@ func enumerateProjects(projects []string) []string {
 	}
 
 	return unique
+}
+
+// isContextError reports whether the provided error is caused by context cancellation.
+func isContextError(err error) bool {
+	return err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
 }
