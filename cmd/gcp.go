@@ -284,7 +284,10 @@ Examples:
 			logger.Log.Fatalf("Failed to connect via SSH: %v", err)
 		}
 
-		gcpClient.RememberProject()
+		// Remember project if we have a client (won't be set for multi-project searches)
+		if gcpClient != nil {
+			gcpClient.RememberProject()
+		}
 	},
 }
 
