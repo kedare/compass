@@ -60,7 +60,7 @@ func (s *Spinner) Start() {
 		} else {
 			sp, startErr := pterm.DefaultSpinner.
 				WithShowTimer(false).
-				WithRemoveWhenDone(true).
+				WithRemoveWhenDone(false).
 				WithWriter(writer).
 				Start(s.message)
 			if startErr != nil {
