@@ -60,7 +60,7 @@ func (s *Spinner) Start() {
 		} else {
 			sp, startErr := pterm.DefaultSpinner.
 				WithShowTimer(false).
-				WithRemoveWhenDone(false).
+				WithRemoveWhenDone(true).
 				WithWriter(writer).
 				Start(s.message)
 			if startErr != nil {
@@ -143,6 +143,7 @@ func (s *Spinner) stop(fn func(*pterm.SpinnerPrinter), fallbackPrefix, fallbackM
 
 	if s.spinner != nil {
 		fn(s.spinner)
+		// Don't clear here - cleanup happens in multiSpinnerManager.release() when all spinners are done
 	} else if fallbackMessage != "" {
 		if _, err := fmt.Fprintf(s.writer, "%s %s\n", fallbackPrefix, fallbackMessage); err != nil {
 			logger.Log.Debugf("Failed to write spinner message: %v", err)
@@ -158,10 +159,12 @@ func (s *Spinner) stop(fn func(*pterm.SpinnerPrinter), fallbackPrefix, fallbackM
 // multiSpinnerManager coordinates a shared multi-printer so multiple spinners can
 // render concurrently without clobbering each other.
 type multiSpinnerManager struct {
-	mu      sync.Mutex
-	printer *pterm.MultiPrinter
-	started bool
-	refs    int
+	mu         sync.Mutex
+	printer    *pterm.MultiPrinter
+	started    bool
+	refs       int
+	totalSpins int     // Total spinners created
+	writer     *os.File // Writer for cleanup
 }
 
 var (
@@ -175,6 +178,7 @@ func defaultMultiManager() *multiSpinnerManager {
 		printer.SetWriter(os.Stderr)
 		globalMulti = &multiSpinnerManager{
 			printer: &printer,
+			writer:  os.Stderr,
 		}
 	})
 
@@ -193,6 +197,7 @@ func (m *multiSpinnerManager) acquireWriter() (io.Writer, error) {
 	}
 
 	m.refs++
+	m.totalSpins++ // Track total spinners created
 
 	return m.printer.NewWriter(), nil
 }
@@ -209,9 +214,19 @@ func (m *multiSpinnerManager) release() {
 		if _, err := m.printer.Stop(); err != nil {
 			logger.Log.Debugf("Failed to stop multi spinner: %v", err)
 		}
+
+		// Clear all spinner lines - they leave empty lines with WithRemoveWhenDone(true)
+		// Similar to progress bars, clear totalSpins lines
+		if m.totalSpins > 0 {
+			for i := 0; i < m.totalSpins; i++ {
+				fmt.Fprintf(m.writer, "\033[1A\033[2K")
+			}
+		}
+
 		printer := pterm.DefaultMultiPrinter
 		printer.SetWriter(os.Stderr)
 		m.printer = &printer
 		m.started = false
+		m.totalSpins = 0 // Reset counter for next batch
 	}
 }
