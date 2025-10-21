@@ -9,6 +9,9 @@ import (
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
 	"github.com/kedare/compass/internal/gcp"
+	"github.com/mattn/go-runewidth"
+	"github.com/pterm/pterm"
+	"golang.org/x/term"
 )
 
 // DisplayIPLookupResults renders IP lookup associations using the requested format.
@@ -82,32 +85,35 @@ func displayIPText(results []gcp.IPAssociation) error {
 	fmt.Printf("Found %d association(s):\n\n", len(results))
 	for _, assoc := range results {
 		fmt.Printf("- %s • %s\n", assoc.Project, describeAssociationKind(assoc.Kind))
-		fmt.Printf("  Resource: %s\n", assoc.Resource)
 
-		if assoc.Kind == gcp.IPAssociationSubnet {
-			cidr := extractDetailComponent(assoc.Details, "cidr")
-			if assoc.Resource != "" && cidr != "" {
-				fmt.Printf("  CIDR:     %s\n", cidr)
-			} else if assoc.Resource != "" {
-				fmt.Printf("  Subnet:   %s\n", assoc.Resource)
-			} else if cidr != "" {
-				fmt.Printf("  Subnet:   %s\n", cidr)
-			}
-		} else if ipValue := formatIPWithMask(assoc, subnetCIDRs); ipValue != "" {
-			fmt.Printf("  IP:       %s\n", ipValue)
+		pairs := make([]labelValue, 0, 6)
+
+		if resource := strings.TrimSpace(assoc.Resource); resource != "" {
+			pairs = append(pairs, labelValue{Label: "Resource", Value: resource})
 		}
 
-		path := formatAssociationPath(assoc)
-		if path != "" {
-			fmt.Printf("  Path:     %s\n", path)
+		if assoc.Kind == gcp.IPAssociationSubnet {
+			if subnet := summarizeSubnet(assoc); subnet != "" {
+				pairs = append(pairs, labelValue{Label: "Subnet", Value: subnet})
+			}
+		} else if ipValue := formatIPWithMask(assoc, subnetCIDRs); ipValue != "" {
+			pairs = append(pairs, labelValue{Label: "IP", Value: ipValue})
+		}
+
+		if path := formatAssociationPath(assoc); path != "" {
+			pairs = append(pairs, labelValue{Label: "Path", Value: path})
 		}
 
 		if detail := detailForDisplay(assoc); detail != "" {
-			fmt.Printf("  Details:  %s\n", detail)
+			pairs = append(pairs, labelValue{Label: "Details", Value: detail})
 		}
 
 		if note, hasNote := formatDetailNote(assoc, subnetCIDRs); hasNote {
-			fmt.Printf("  Notes:    %s\n", note)
+			pairs = append(pairs, labelValue{Label: "Notes", Value: note})
+		}
+
+		if block := renderAssociationPanels(pairs); block != "" {
+			fmt.Print(block)
 		}
 
 		fmt.Println()
@@ -546,6 +552,125 @@ func compareIPs(a, b net.IP) int {
 	}
 
 	return 0
+}
+
+type labelValue struct {
+	Label string
+	Value string
+}
+
+func summarizeSubnet(assoc gcp.IPAssociation) string {
+	if assoc.Kind != gcp.IPAssociationSubnet {
+		return ""
+	}
+
+	cidr := extractDetailComponent(assoc.Details, "cidr")
+	subnet := strings.TrimSpace(assoc.Resource)
+
+	switch {
+	case subnet != "" && cidr != "":
+		return fmt.Sprintf("%s (%s)", subnet, cidr)
+	case subnet != "":
+		return subnet
+	case cidr != "":
+		return cidr
+	default:
+		return ""
+	}
+}
+
+func renderAssociationPanels(pairs []labelValue) string {
+	if !term.IsTerminal(int(os.Stdout.Fd())) {
+		plain := renderPlainKeyValues(pairs)
+		if plain == "" {
+			return ""
+		}
+
+		return indentBlock(plain, "  ") + "\n"
+	}
+
+	panels := make(pterm.Panels, 0, len(pairs))
+
+	for _, pair := range pairs {
+		label := strings.TrimSpace(pair.Label)
+		value := strings.TrimSpace(pair.Value)
+		if label == "" || value == "" {
+			continue
+		}
+
+		styledLabel := pterm.NewStyle(pterm.FgLightBlue).Sprint(label + ":")
+		panels = append(panels, []pterm.Panel{
+			{Data: styledLabel},
+			{Data: value},
+		})
+	}
+
+	if len(panels) == 0 {
+		return ""
+	}
+
+	rendered, err := pterm.DefaultPanel.
+		WithPanels(panels).
+		WithPadding(1).
+		WithBottomPadding(0).
+		WithSameColumnWidth(true).
+		Srender()
+	if err != nil {
+		rendered = renderPlainKeyValues(pairs)
+	}
+
+	rendered = strings.TrimRight(rendered, "\n")
+	if rendered == "" {
+		return ""
+	}
+
+	indented := indentBlock(rendered, "  ")
+
+	return indented + "\n"
+}
+
+func indentBlock(block, prefix string) string {
+	block = strings.TrimRight(block, "\n")
+	if block == "" {
+		return ""
+	}
+
+	lines := strings.Split(block, "\n")
+	for i, line := range lines {
+		lines[i] = prefix + line
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func renderPlainKeyValues(pairs []labelValue) string {
+	filtered := make([]labelValue, 0, len(pairs))
+	maxWidth := 0
+
+	for _, pair := range pairs {
+		label := strings.TrimSpace(pair.Label)
+		value := strings.TrimSpace(pair.Value)
+		if label == "" || value == "" {
+			continue
+		}
+
+		if w := runewidth.StringWidth(label); w > maxWidth {
+			maxWidth = w
+		}
+
+		filtered = append(filtered, labelValue{Label: label, Value: value})
+	}
+
+	if len(filtered) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	for _, pair := range filtered {
+		fmt.Fprintf(&b, "%-*s %s\n", maxWidth+1, pair.Label+":", pair.Value)
+	}
+
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func firstDetailSegment(detail string) string {
