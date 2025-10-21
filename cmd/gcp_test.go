@@ -149,6 +149,7 @@ func TestGcpCommandStructure(t *testing.T) {
 	}
 
 	foundSsh := false
+	foundIP := false
 
 	for _, cmd := range gcpCmd.Commands() {
 		if cmd.Name() == "ssh" {
@@ -160,6 +161,18 @@ func TestGcpCommandStructure(t *testing.T) {
 
 	if !foundSsh {
 		t.Fatal("ssh command not found under gcp command")
+	}
+
+	for _, cmd := range gcpCmd.Commands() {
+		if cmd.Name() == "ip" {
+			foundIP = true
+
+			break
+		}
+	}
+
+	if !foundIP {
+		t.Fatal("ip command not found under gcp command")
 	}
 }
 
@@ -188,6 +201,49 @@ func TestResourceTypeConstants(t *testing.T) {
 
 	if resourceTypeMIG != "mig" {
 		t.Errorf("Expected resourceTypeMIG to be 'mig', got %q", resourceTypeMIG)
+	}
+}
+
+func TestIPLookupCommand(t *testing.T) {
+	if ipLookupCmd.Use != "lookup <ip-address>" {
+		t.Errorf("Expected ip lookup use to be 'lookup <ip-address>', got %q", ipLookupCmd.Use)
+	}
+
+	if ipLookupCmd.Short == "" {
+		t.Fatal("ip lookup short description is empty")
+	}
+
+	if err := ipLookupCmd.Args(ipLookupCmd, []string{}); err == nil {
+		t.Fatal("Expected error when no IP is provided")
+	}
+
+	if err := ipLookupCmd.Args(ipLookupCmd, []string{"1.2.3.4", "extra"}); err == nil {
+		t.Fatal("Expected error when too many arguments are provided")
+	}
+
+	if err := ipLookupCmd.Args(ipLookupCmd, []string{"1.2.3.4"}); err != nil {
+		t.Fatalf("Unexpected error validating single IP argument: %v", err)
+	}
+}
+
+func TestEnumerateProjects(t *testing.T) {
+	projects := []string{"alpha", "beta", "alpha", " ", "", "gamma"}
+	result := enumerateProjects(projects)
+
+	if len(result) != 3 {
+		t.Fatalf("expected 3 unique projects, got %d (%v)", len(result), result)
+	}
+
+	expected := map[string]struct{}{
+		"alpha": {},
+		"beta":  {},
+		"gamma": {},
+	}
+
+	for _, project := range result {
+		if _, ok := expected[project]; !ok {
+			t.Fatalf("unexpected project %q in result", project)
+		}
 	}
 }
 

@@ -198,6 +198,20 @@ compass gcp ssh multi-service \
   --ssh-flag "-L 5000:database:5432"
 ```
 
+### IP Lookup
+
+Identify which resources are assigned to a specific IP address:
+
+```bash
+# Scan all cached projects for the owner of 34.120.0.10
+compass gcp ip lookup 34.120.0.10
+
+# Restrict the lookup to a single project and emit JSON
+compass gcp ip lookup 10.0.0.5 --project prod --output json
+```
+
+When no project is provided, `compass gcp ip lookup` walks through every project stored in the local cache (and falls back to your gcloud default project when the cache is empty). Matches include Compute Engine instances, forwarding rules (load balancers), and reserved addresses along with descriptive metadata.
+
 ## Local Cache
 
 `compass` keeps a small JSON cache on disk so you do not have to repeat the same discovery calls on every run. The cache lives at `~/.compass.cache.json` with `0600` permissions and is refreshed transparently.
