@@ -132,7 +132,7 @@ Keep your local binary up to date with the newest GitHub release:
 compass update
 ```
 
-The command detects your platform, downloads the matching artifact, and replaces the running executable in place. On Windows the binary cannot be swapped while the process is running, so `compass update` writes a fresh executable alongside your current one (e.g. `compass.new.exe`) and prints follow-up instructions to complete the swap after you exit the CLI.
+The command detects your platform, downloads the matching artifact, verifies the SHA-256 checksum reported by the GitHub release API, and replaces the running executable in place. On Windows the binary cannot be swapped while the process is running, so `compass update` writes a fresh executable alongside your current one (e.g. `compass.new.exe`) and prints follow-up instructions to complete the swap after you exit the CLI.
 
 - Dry run without download: `compass update --check`
 - Reinstall the latest version even when already up to date: `compass update --force`

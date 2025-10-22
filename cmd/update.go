@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -107,6 +108,16 @@ or --force to reinstall the latest release even when already up to date.`,
 
 		logger.Log.Debugf("Selected asset %s (%d bytes)", asset.Name, asset.Size)
 
+		digest, err := update.ParseDigest(asset.Digest)
+		if err != nil {
+			return fmt.Errorf("determine checksum for %s: %w", asset.Name, err)
+		}
+
+		hasher, err := update.HashForDigest(digest)
+		if err != nil {
+			return fmt.Errorf("prepare checksum verifier for %s: %w", asset.Name, err)
+		}
+
 		execPath, err := os.Executable()
 		if err != nil {
 			return fmt.Errorf("determine executable path: %w", err)
@@ -162,7 +173,8 @@ or --force to reinstall the latest release even when already up to date.`,
 		progressBar, _ := progressBarBuilder.Start()
 
 		writer := &progressReporter{bar: progressBar}
-		if _, err = io.Copy(tmpFile, io.TeeReader(resp.Body, writer)); err != nil {
+		multiWriter := io.MultiWriter(tmpFile, hasher)
+		if _, err = io.Copy(multiWriter, io.TeeReader(resp.Body, writer)); err != nil {
 			if progressBar != nil {
 				if _, stopErr := progressBar.Stop(); stopErr != nil {
 					logger.Log.Warnf("Failed to stop progress bar: %v", stopErr)
@@ -180,6 +192,13 @@ or --force to reinstall the latest release even when already up to date.`,
 		if err := tmpFile.Sync(); err != nil {
 			return fmt.Errorf("flush temporary file: %w", err)
 		}
+
+		calculatedSum := hex.EncodeToString(hasher.Sum(nil))
+		expectedSum := strings.ToLower(strings.TrimSpace(digest.Value))
+		if calculatedSum != expectedSum {
+			return fmt.Errorf("checksum mismatch for %s: expected %s, got %s", asset.Name, expectedSum, calculatedSum)
+		}
+		pterm.Success.Printf("Verified %s checksum (%s).\n", strings.ToUpper(digest.Algorithm), calculatedSum)
 
 		if runtime.GOOS != "windows" {
 			if err := tmpFile.Chmod(0o755); err != nil {

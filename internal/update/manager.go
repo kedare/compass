@@ -38,6 +38,7 @@ type Asset struct {
 	Name        string
 	DownloadURL string
 	Size        int64
+	Digest      string
 }
 
 // Option customizes the behaviour of a Manager during construction.
@@ -118,6 +119,7 @@ func (m *Manager) LatestRelease(ctx context.Context) (*Release, error) {
 			Name               string `json:"name"`
 			BrowserDownloadURL string `json:"browser_download_url"`
 			Size               int64  `json:"size"`
+			Digest             string `json:"digest"`
 		} `json:"assets"`
 	}
 
@@ -135,6 +137,7 @@ func (m *Manager) LatestRelease(ctx context.Context) (*Release, error) {
 			Name:        asset.Name,
 			DownloadURL: asset.BrowserDownloadURL,
 			Size:        asset.Size,
+			Digest:      asset.Digest,
 		})
 	}
 
