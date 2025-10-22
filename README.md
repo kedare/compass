@@ -113,8 +113,8 @@ If you prefer to build from source or want to contribute:
 ```bash
 git clone https://github.com/kedare/compass.git
 cd compass
-go build -o compass .
-./compass --help
+task build
+dist/compass --help
 ```
 
 **With go-task (for development):**
@@ -124,7 +124,7 @@ task build  # Builds with version metadata
 
 ### Shell Completion
 
-Enable autocompletion for your shell:
+Enable autocompletion for your shell (make sure your shell is properly configured to load autocompletion from this directory):
 
 ```bash
 # Bash
@@ -150,7 +150,7 @@ compass gcp ssh my-instance
 compass gcp ssh my-instance --project my-gcp-project
 
 # Look up which resources use a specific IP address
-compass gcp ip lookup 10.201.0.208
+compass gcp ip lookup 192.168.0.208
 
 # Import projects for multi-project operations
 compass gcp projects import
@@ -172,11 +172,11 @@ compass gcp connectivity-test create web-to-db \
 
 **Basic connection (cached project and zone):**
 ```console
-$ compass gcp ssh db-healer-1
-INFO  Starting connection process for: db-healer-1
-INFO  Connecting to instance: db-healer-1 of project my-project in zone: us-central1-b
+$ compass gcp ssh db-instance-1
+INFO  Starting connection process for: db-instance-1
+INFO  Connecting to instance: db-instance-1 of project my-project in zone: us-central1-b
 INFO  Establishing SSH connection via IAP tunnel...
-user@db-healer-1:~$
+user@db-instance-1:~$
 ```
 
 **First-time connection with project:**
@@ -186,7 +186,7 @@ compass gcp ssh web-server --project prod-project
 
 **Connect to a specific zone:**
 ```bash
-compass gcp ssh api-server --project prod --zone europe-west1-b
+compass gcp ssh api-server --project prod --zone europe-south1-b
 ```
 
 **Connect to a Managed Instance Group (MIG):**
@@ -228,28 +228,32 @@ user@unknown-instance:~$
 
 **Basic IP lookup (scans cached projects):**
 ```bash
-compass gcp ip lookup 10.201.0.208
+compass gcp ip lookup 192.168.0.208
 ```
 
 **Output example:**
 ```console
-$ compass gcp ip lookup 10.201.0.208
-INFO  Starting IP lookup for: 10.201.0.208
-Searching IP associations
-INFO  Completed project my-project (1/3 done)
-INFO  Completed project staging-project (2/3 done)
-INFO  Completed project prod-project (3/3 done)
-✓ Lookup complete
+$ cps gcp ip lookup 192.168.0.208
+Found 3 association(s):
 
-IP Address: 10.201.0.208
+- gcp-dev-apps • Reserved address
+  Resource: app-lb-internal-devops-platform
+  IP:       192.168.0.208/20
+  Path:     gcp-dev-apps > europe-south1 > default-subnet
+  Details:  status=in_use, purpose=shared_loadbalancer_vip, tier=premium, type=internal
 
-Instances:
-  • db-server-1 (my-project, us-central1-a)
-    Internal interface, network=default, subnet=default
+- gcp-dev-apps • Forwarding rule
+  Resource: fwr-internal-devops-platform-1234
+  IP:       192.168.0.208/20
+  Path:     gcp-dev-apps > app-net > global > default-subnet
+  Details:  scheme=internal_managed, ports=8080-8080, target=tp-internal-devops-platform-1234
 
-Subnets:
-  • default (my-project, us-central1)
-    network=default, cidr=10.201.0.0/24, range=primary
+- gcp-dev-apps • Subnet range
+  Resource: default-subnet
+  Subnet:   default-subnet (192.168.0.0/20)
+  Path:     gcp-dev-apps > app-net > europe-south1 > default-subnet
+  Details:  range=primary, usable=192.168.0.1-192.168.15.254, gateway=192.168.0.1
+  Notes:    Subnet range 192.168.0.0/20 (primary)
 ```
 
 **Lookup in specific project:**
@@ -264,7 +268,7 @@ compass gcp ip lookup 34.120.0.10 --output json | jq '.[] | select(.kind == "ins
 
 **Table format:**
 ```bash
-compass gcp ip lookup 10.201.0.208 --output table
+compass gcp ip lookup 192.168.0.208 --output table
 ```
 
 ### VPN Inspection Examples
@@ -272,21 +276,54 @@ compass gcp ip lookup 10.201.0.208 --output table
 **List all VPN gateways:**
 ```console
 $ compass gcp vpn list --project prod
-🔐 Gateway: prod-ha-vpn (us-central1)
-  Network:     prod-vpc
+
+🔐 Gateway: vpn-esp-office (europe-south1)
+  Description: VPN example
+  Network:     hub-net
   Interfaces:
-    - #0 IP: 35.242.106.234
-    - #1 IP: 35.220.88.140
+    - #0 IP: 34.56.78.1
+    - #1 IP: 34.56.79.1
   Tunnels:
-    • prod-to-eu (us-central1)
-      Peer IP:      203.0.113.10
-      Router:       prod-router
+    • ha-tun-vpn-esp-office-a (europe-south1)
+      IPSec Peer:  <local 34.56.78.1>  ↔  <remote 185.70.0.2>
+      Peer Gateway: peer-vpn-esp-office
+      Router:       router-esp-office
       Status:       ESTABLISHED
+      Detail:       Tunnel is up and running.
       IKE Version:  2
       BGP Peers:
-        - prod-peer-eu (169.254.0.2, ASN 65001, enabled)
-          Advertised Routes: 5
-          Learned Routes: 3
+        - bgp-0-ha-tun-vpn-esp-office-a endpoints <local 169.254.0.5 AS64531> ↔ <remote 169.254.0.6 AS65502> status UP/ESTABLISHED, received 1, advertised 1
+            Advertised: 192.168.89.128/29
+            Received:   192.168.90.0/24
+    • ha-tun-vpn-esp-office-b (europe-south1)
+      IPSec Peer:  <local 34.56.79.1>  ↔  <remote 185.70.0.2>
+      Peer Gateway: peer-vpn-esp-office
+      Router:       router-esp-office
+      Status:       ESTABLISHED
+      Detail:       Tunnel is up and running.
+      IKE Version:  2
+      BGP Peers:
+        - bgp-0-ha-tun-vpn-esp-office-b endpoints <local 169.254.44.5 AS64531> ↔ <remote 169.254.44.6 AS65510> status UP/ESTABLISHED, received 1, advertised 1
+            Advertised: 192.168.89.128/29
+            Received:   192.168.90.0/24
+
+⚠️  Orphan Tunnels (not attached to HA VPN gateways):
+  • tun-vpn-fr-a (europe-south1) peers <local ?>  ↔  <remote 15.68.34.23>
+    Status: ESTABLISHED
+  • tun-vpn-uk-b (europe-south1) peers <local ?>  ↔  <remote 37.48.54.102>
+    Status: ESTABLISHED
+  • tun-vpn-nyc-a (europe-south1) peers <local ?>  ↔  <remote 92.167.34.152>
+    Status: ESTABLISHED
+
+⚠️  Orphan BGP Sessions (no tunnel association):
+  • vpn-bgp-session-1234 on router router-vpn-main (europe-south1) endpoints <local ? AS65501> ↔ <remote ? AS0> status UNKNOWN, received 0, advertised 0
+
+⚠️  Gateways With No Tunnels:
+  • ha-vpn-gw-dev-app-net (europe-south1) - 2 interface(s) configured but no tunnels
+
+⚠️  Tunnels Not Receiving BGP Routes:
+  • ha-tun-apps-health-eusouth1-a (europe-south1) on router rt-apps-europe-south1 - peer bgp-0-ha-tun-apps-health-eusouth1-a status UP/ESTABLISHED
+  • ha-tun-apps-health-eusouth1-b (europe-south1) on router rt-apps-europe-south1 - peer bgp-0-ha-tun-apps-health-eusouth1-b status UP/ESTABLISHED
 ```
 
 **Table view:**
@@ -323,6 +360,39 @@ compass gcp connectivity-test create web-to-db \
 **Watch test progress:**
 ```bash
 compass gcp connectivity-test get web-to-db --project prod --watch
+```
+
+**Get an axisting test**
+```bash
+compass gcp ct get my-test
+✓ Connectivity Test: my-test
+  Console URL:   https://console.cloud.google.com/net-intelligence/connectivity/tests/details/finance-to-eventstream2?project=testing-project
+  Forward Status: REACHABLE
+  Return Status:  REACHABLE
+  Source:        10.0.0.1
+  Destination:   192.168.0.1:8080
+  Protocol:      TCP
+
+  Path Analysis:
+    Forward Path
+    # | Step | Type        | Resource                                            | Status
+    1 | →    | VM Instance | gke-health-dev-default-pool-1234-1234               | OK
+    2 | →    | Firewall    | default-allow-egress                                | ALLOWED
+    3 | →    | Route       | peering-route-1234                                  | OK
+    4 | →    | VM Instance | gke-test-dev-europe-wes-default2-pool-1234-1234     | OK
+    5 | →    | Firewall    | gce-1234                                            | ALLOWED
+    6 | ✓    | Step        | Final state: packet delivered to instance.          | DELIVER
+
+    Return Path
+    # | Step | Type        | Resource                                             | Status
+    1 | →    | VM Instance | gke-test-dev-europe-wes-default2-pool-1234-1234      | OK
+    2 | →    | Step        | Config checking state: verify EGRESS firewall rule.  | APPLY_EGRESS_FIREWALL_RULE
+    3 | →    | Route       | peering-route-1234                                   | OK
+    4 | →    | VM Instance | gke-health-dev-default-pool-1234-1234                | OK
+    5 | →    | Step        | Config checking state: verify INGRESS firewall rule. | APPLY_INGRESS_FIREWALL_RULE
+    6 | ✓    | Step        | Final state: packet delivered to instance.           | DELIVER
+
+  Result: Connection successful ✓
 ```
 
 **List all tests:**

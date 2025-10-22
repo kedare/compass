@@ -12,7 +12,7 @@ import (
 )
 
 // Spinner provides a terminal spinner using pterm when a TTY is available and gracefully
-// degrades to log-style messages otherwise.
+// degrades to log-style messages otherwise. Spinners are completely suppressed in JSON mode.
 type Spinner struct {
 	mu         sync.Mutex
 	message    string
@@ -23,12 +23,21 @@ type Spinner struct {
 	spinner    *pterm.SpinnerPrinter
 	multi      *multiSpinnerManager
 	multiInUse bool
+	jsonMode   bool // If true, suppress all output including fallback messages
 }
 
 // NewSpinner creates a spinner that renders to stderr. Call Start before recording progress.
+// Spinners are automatically disabled when JSON output mode is active to avoid corrupting
+// the JSON stream.
 func NewSpinner(message string) *Spinner {
 	writer := os.Stderr
 	enabled := term.IsTerminal(int(writer.Fd()))
+	jsonMode := IsJSONMode()
+
+	// Disable spinners when in JSON mode to keep stdout clean
+	if jsonMode {
+		enabled = false
+	}
 
 	var multi *multiSpinnerManager
 	if enabled {
@@ -36,10 +45,11 @@ func NewSpinner(message string) *Spinner {
 	}
 
 	return &Spinner{
-		message: message,
-		writer:  writer,
-		enabled: enabled,
-		multi:   multi,
+		message:  message,
+		writer:   writer,
+		enabled:  enabled,
+		multi:    multi,
+		jsonMode: jsonMode,
 	}
 }
 
@@ -75,8 +85,11 @@ func (s *Spinner) Start() {
 	}
 
 	if !s.enabled || s.spinner == nil {
-		if _, err := fmt.Fprintf(s.writer, "%s...\n", s.message); err != nil {
-			logger.Log.Debugf("Failed to write spinner message: %v", err)
+		// In JSON mode, suppress all spinner output to avoid corrupting the JSON stream
+		if !s.jsonMode {
+			if _, err := fmt.Fprintf(s.writer, "%s...\n", s.message); err != nil {
+				logger.Log.Debugf("Failed to write spinner message: %v", err)
+			}
 		}
 	}
 
@@ -99,8 +112,11 @@ func (s *Spinner) Update(message string) {
 		return
 	}
 
-	if _, err := fmt.Fprintf(s.writer, "%s...\n", message); err != nil {
-		logger.Log.Debugf("Failed to write spinner update: %v", err)
+	// In JSON mode, suppress all spinner output
+	if !s.jsonMode {
+		if _, err := fmt.Fprintf(s.writer, "%s...\n", message); err != nil {
+			logger.Log.Debugf("Failed to write spinner update: %v", err)
+		}
 	}
 }
 
@@ -145,7 +161,8 @@ func (s *Spinner) stop(fn func(*pterm.SpinnerPrinter), fallbackPrefix, fallbackM
 	if s.spinner != nil {
 		fn(s.spinner)
 		// Don't clear here - cleanup happens in multiSpinnerManager.release() when all spinners are done
-	} else if fallbackMessage != "" {
+	} else if fallbackMessage != "" && !s.jsonMode {
+		// In JSON mode, suppress all spinner output including completion messages
 		if _, err := fmt.Fprintf(s.writer, "%s %s\n", fallbackPrefix, fallbackMessage); err != nil {
 			logger.Log.Debugf("Failed to write spinner message: %v", err)
 		}

@@ -47,6 +47,9 @@ Examples:
 }
 
 func runGetTest(ctx context.Context, testName string) {
+	// Set the output format to ensure JSON mode detection works correctly for spinners
+	output.SetFormat(getOutputFormat)
+
 	logger.Log.Debugf("Getting connectivity test: %s", testName)
 
 	// Create connectivity test client

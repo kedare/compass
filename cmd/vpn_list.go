@@ -25,6 +25,9 @@ associated tunnels, and Cloud Router BGP peers. Supports text, table, and JSON f
 }
 
 func runVPNList(ctx context.Context) {
+	// Set the output format to ensure JSON mode detection works correctly for spinners
+	output.SetFormat(vpnOutputFormat)
+
 	logger.Log.Debug("Fetching VPN inventory")
 
 	client, err := gcp.NewClient(ctx, project)
