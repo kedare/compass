@@ -91,7 +91,9 @@ func (t loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			case <-req.Context().Done():
 				// Context was canceled, close response if exists and return immediately
 				if resp != nil && resp.Body != nil {
-					resp.Body.Close()
+					if closeErr := resp.Body.Close(); closeErr != nil {
+						logger.Log.Debugf("Failed to close response body after cancellation: %v", closeErr)
+					}
 				}
 				return nil, req.Context().Err()
 			default:
