@@ -30,6 +30,9 @@ interfaces, linked tunnels, and BGP session state. Use --type to select either
 }
 
 func runVPNGet(ctx context.Context, name string) {
+	// Set the output format to ensure JSON mode detection works correctly for spinners
+	output.SetFormat(vpnGetOutput)
+
 	if name == "" {
 		logger.Log.Fatalf("resource name must not be empty")
 	}

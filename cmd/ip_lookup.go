@@ -57,6 +57,9 @@ func init() {
 
 // runIPLookup orchestrates the lookup by querying all candidate projects in parallel and gathering matches.
 func runIPLookup(ctx context.Context, rawIP string) {
+	// Set the output format to ensure JSON mode detection works correctly for spinners
+	output.SetFormat(ipLookupOutputFormat)
+
 	ip := strings.TrimSpace(rawIP)
 	parsedIP := net.ParseIP(ip)
 	if parsedIP == nil {

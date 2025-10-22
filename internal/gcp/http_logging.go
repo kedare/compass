@@ -40,6 +40,15 @@ func (t loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		base = http.DefaultTransport
 	}
 
+	// Check if context is already canceled before starting
+	if req.Context() != nil {
+		select {
+		case <-req.Context().Done():
+			return nil, req.Context().Err()
+		default:
+		}
+	}
+
 	var resp *http.Response
 	var err error
 
@@ -52,7 +61,7 @@ func (t loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	for attempt := 0; attempt < attempts; attempt++ {
-		// If this is a retry, apply exponential backoff
+		// If this is a retry, apply exponential backoff with context-aware sleep
 		if attempt > 0 {
 			backoff := time.Duration(math.Pow(2, float64(attempt-1))) * initialBackoff
 			if backoff > maxBackoff {
@@ -61,12 +70,33 @@ func (t loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 			logger.Log.Debugf("GCP HTTP retrying %s %s after %s (attempt %d/%d)",
 				req.Method, req.URL.String(), backoff, attempt+1, attempts)
-			time.Sleep(backoff)
+
+			// Use context-aware sleep that can be interrupted
+			select {
+			case <-time.After(backoff):
+				// Backoff complete, continue with retry
+			case <-req.Context().Done():
+				// Context canceled during backoff
+				return nil, req.Context().Err()
+			}
 		}
 
 		start := time.Now()
 		resp, err = base.RoundTrip(req)
 		elapsed := time.Since(start)
+
+		// Check if context was canceled during the request
+		if req.Context() != nil {
+			select {
+			case <-req.Context().Done():
+				// Context was canceled, close response if exists and return immediately
+				if resp != nil && resp.Body != nil {
+					resp.Body.Close()
+				}
+				return nil, req.Context().Err()
+			default:
+			}
+		}
 
 		// If request failed with network error and it's retryable, continue to next attempt
 		if err != nil {
