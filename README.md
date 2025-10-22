@@ -13,6 +13,7 @@
 - [Installation](#installation)
   - [Download Pre-built Binary (Recommended)](#download-pre-built-binary-recommended)
   - [Build From Source](#build-from-source)
+  - [Update Existing Installation](#update-existing-installation)
   - [Shell Completion](#shell-completion)
 - [Quick Start](#quick-start)
 - [Command Examples](#command-examples)
@@ -52,6 +53,7 @@
 - 💾 Intelligent local cache for instant connections to known resources
 - 📊 Structured logging with configurable verbosity and clean spinner-based progress
 - ⚡ Zero configuration—relies on existing `gcloud` authentication
+- 🔁 In-place upgrades via `compass update` to pull the latest GitHub release
 - 🎨 Helpful CLI UX with actionable errors
 
 ## Installation
@@ -122,6 +124,19 @@ dist/compass --help
 task build  # Builds with version metadata
 ```
 
+### Update Existing Installation
+
+Keep your local binary up to date with the newest GitHub release:
+
+```bash
+compass update
+```
+
+The command detects your platform, downloads the matching artifact, and replaces the running executable in place. On Windows the binary cannot be swapped while the process is running, so `compass update` writes a fresh executable alongside your current one (e.g. `compass.new.exe`) and prints follow-up instructions to complete the swap after you exit the CLI.
+
+- Dry run without download: `compass update --check`
+- Reinstall the latest version even when already up to date: `compass update --force`
+
 ### Shell Completion
 
 Enable autocompletion for your shell (make sure your shell is properly configured to load autocompletion from this directory):
@@ -157,6 +172,9 @@ compass gcp projects import
 
 # Inspect VPN gateways
 compass gcp vpn list --project prod
+
+# Update to the latest published release
+compass update
 
 # Test connectivity between instances
 compass gcp connectivity-test create web-to-db \
