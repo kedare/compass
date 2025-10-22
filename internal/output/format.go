@@ -7,7 +7,6 @@ import (
 )
 
 var (
-	currentFormat   string
 	formatMutex     sync.RWMutex
 	jsonModeEnabled bool
 )
@@ -37,7 +36,6 @@ func DefaultFormat(preferred string, allowed []string) string {
 func setCurrentFormat(format string) {
 	formatMutex.Lock()
 	defer formatMutex.Unlock()
-	currentFormat = format
 	jsonModeEnabled = (format == "json")
 }
 
