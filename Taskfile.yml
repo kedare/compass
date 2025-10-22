@@ -35,7 +35,9 @@ tasks:
     desc: Build for multiple platforms
     cmds:
       - task: build-linux
+      - task: build-linux-arm64
       - task: build-darwin
+      - task: build-darwin-arm64
       - task: build-windows
 
   build-linux:
@@ -46,6 +48,15 @@ tasks:
     cmds:
       - mkdir {{.BUILD_DIR}} || true
       - go build -ldflags="-X {{.MODULE}}/internal/version.Version={{.VERSION}} -X {{.MODULE}}/internal/version.Commit={{.COMMIT}} -X {{.MODULE}}/internal/version.BuildDate={{.BUILD_DATE}} -X {{.MODULE}}/internal/version.BuildUser={{.BUILD_USER}} -X {{.MODULE}}/internal/version.BuildHost={{.BUILD_HOST}} -X {{.MODULE}}/internal/version.BuildArch={{.BUILD_ARCH}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-linux-amd64 {{.MAIN_PATH}}
+
+  build-linux-arm64:
+    desc: Build for Linux ARM64
+    env:
+      GOOS: linux
+      GOARCH: arm64
+    cmds:
+      - mkdir {{.BUILD_DIR}} || true
+      - go build -ldflags="-X {{.MODULE}}/internal/version.Version={{.VERSION}} -X {{.MODULE}}/internal/version.Commit={{.COMMIT}} -X {{.MODULE}}/internal/version.BuildDate={{.BUILD_DATE}} -X {{.MODULE}}/internal/version.BuildUser={{.BUILD_USER}} -X {{.MODULE}}/internal/version.BuildHost={{.BUILD_HOST}} -X {{.MODULE}}/internal/version.BuildArch={{.BUILD_ARCH}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-linux-arm64 {{.MAIN_PATH}}
 
   build-darwin:
     desc: Build for macOS
