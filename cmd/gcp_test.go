@@ -8,49 +8,27 @@ import (
 
 	"github.com/kedare/compass/internal/gcp"
 	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGcpRootCommand(t *testing.T) {
-	if gcpCmd == nil {
-		t.Fatal("gcpCmd is nil")
-	}
-
-	if gcpCmd.Use != "gcp" {
-		t.Errorf("Expected Use to be 'gcp', got %q", gcpCmd.Use)
-	}
-
-	if gcpCmd.Short == "" {
-		t.Error("Short description is empty")
-	}
-
-	if gcpCmd.Long == "" {
-		t.Error("Long description is empty")
-	}
-
-	if gcpCmd.Run != nil || gcpCmd.RunE != nil {
-		t.Error("gcpCmd should not execute without a subcommand")
-	}
+	require.NotNil(t, gcpCmd)
+	require.Equal(t, "gcp", gcpCmd.Use)
+	require.NotEmpty(t, gcpCmd.Short)
+	require.NotEmpty(t, gcpCmd.Long)
+	require.Nil(t, gcpCmd.Run)
+	require.Nil(t, gcpCmd.RunE)
 }
 
 func TestGcpRootProjectFlag(t *testing.T) {
 	projectFlag := gcpCmd.PersistentFlags().Lookup("project")
-	if projectFlag == nil {
-		t.Fatal("project flag not found on gcp command")
-	}
-
-	if projectFlag.Shorthand != "p" {
-		t.Errorf("Expected project flag shorthand 'p', got %q", projectFlag.Shorthand)
-	}
-
-	if projectFlag.Usage == "" {
-		t.Error("Project flag usage is empty")
-	}
+	require.NotNil(t, projectFlag)
+	require.Equal(t, "p", projectFlag.Shorthand)
+	require.NotEmpty(t, projectFlag.Usage)
 
 	t.Run("project flag completion runs", func(t *testing.T) {
 		completions, directive := gcpProjectCompletion(gcpCmd, nil, "")
-		if directive != cobra.ShellCompDirectiveNoFileComp {
-			t.Errorf("unexpected directive %v", directive)
-		}
+		require.Equal(t, cobra.ShellCompDirectiveNoFileComp, directive)
 
 		if len(completions) == 0 {
 			t.Log("project completion returned no suggestions (may be empty cache)")
@@ -59,78 +37,33 @@ func TestGcpRootProjectFlag(t *testing.T) {
 }
 
 func TestGcpSshCommand(t *testing.T) {
-	if gcpSshCmd == nil {
-		t.Fatal("gcpSshCmd is nil")
-	}
-
-	if gcpSshCmd.Use != "ssh [instance-name]" {
-		t.Errorf("Expected Use to be 'ssh [instance-name]', got %q", gcpSshCmd.Use)
-	}
-
-	if gcpSshCmd.Short == "" {
-		t.Error("Short description is empty")
-	}
-
-	if gcpSshCmd.Long == "" {
-		t.Error("Long description is empty")
-	}
-
-	if err := gcpSshCmd.Args(gcpSshCmd, []string{}); err == nil {
-		t.Error("Expected error for no arguments")
-	}
-
-	if err := gcpSshCmd.Args(gcpSshCmd, []string{"instance1", "instance2"}); err == nil {
-		t.Error("Expected error for too many arguments")
-	}
-
-	if err := gcpSshCmd.Args(gcpSshCmd, []string{"instance1"}); err != nil {
-		t.Errorf("Unexpected error for single argument: %v", err)
-	}
-
-	if gcpSshCmd.ValidArgsFunction == nil {
-		t.Error("Expected ssh command to provide argument completion")
-	}
+	require.NotNil(t, gcpSshCmd)
+	require.Equal(t, "ssh [instance-name]", gcpSshCmd.Use)
+	require.NotEmpty(t, gcpSshCmd.Short)
+	require.NotEmpty(t, gcpSshCmd.Long)
+	require.Error(t, gcpSshCmd.Args(gcpSshCmd, []string{}))
+	require.Error(t, gcpSshCmd.Args(gcpSshCmd, []string{"instance1", "instance2"}))
+	require.NoError(t, gcpSshCmd.Args(gcpSshCmd, []string{"instance1"}))
+	require.NotNil(t, gcpSshCmd.ValidArgsFunction)
 }
 
 func TestGcpSshCommandFlags(t *testing.T) {
 	zoneFlag := gcpSshCmd.Flags().Lookup("zone")
-	if zoneFlag == nil {
-		t.Fatal("zone flag not found on ssh command")
-	}
+	require.NotNil(t, zoneFlag)
+	require.Equal(t, "z", zoneFlag.Shorthand)
+	require.NotEmpty(t, zoneFlag.Usage)
 
-	if zoneFlag.Shorthand != "z" {
-		t.Errorf("Expected zone flag shorthand 'z', got %q", zoneFlag.Shorthand)
-	}
-
-	if zoneFlag.Usage == "" {
-		t.Error("Zone flag usage is empty")
-	}
-
-	if _, directive := gcpSSHZoneCompletion(gcpSshCmd, nil, ""); directive != cobra.ShellCompDirectiveNoFileComp {
-		t.Error("Zone completion directive mismatch")
-	}
+	_, directive := gcpSSHZoneCompletion(gcpSshCmd, nil, "")
+	require.Equal(t, cobra.ShellCompDirectiveNoFileComp, directive)
 
 	typeFlag := gcpSshCmd.Flags().Lookup("type")
-	if typeFlag == nil {
-		t.Fatal("type flag not found on ssh command")
-	}
-
-	if typeFlag.Shorthand != "t" {
-		t.Errorf("Expected type flag shorthand 't', got %q", typeFlag.Shorthand)
-	}
-
-	if typeFlag.Usage == "" {
-		t.Error("Type flag usage is empty")
-	}
+	require.NotNil(t, typeFlag)
+	require.Equal(t, "t", typeFlag.Shorthand)
+	require.NotEmpty(t, typeFlag.Usage)
 
 	sshFlag := gcpSshCmd.Flags().Lookup("ssh-flag")
-	if sshFlag == nil {
-		t.Fatal("ssh-flag not found on ssh command")
-	}
-
-	if sshFlag.Usage == "" {
-		t.Error("ssh-flag usage is empty")
-	}
+	require.NotNil(t, sshFlag)
+	require.NotEmpty(t, sshFlag.Usage)
 }
 
 func TestGcpCommandStructure(t *testing.T) {
@@ -144,9 +77,7 @@ func TestGcpCommandStructure(t *testing.T) {
 		}
 	}
 
-	if !foundGcp {
-		t.Fatal("gcp command not found in root command")
-	}
+	require.True(t, foundGcp, "gcp command not found in root command")
 
 	foundSsh := false
 	foundIP := false
@@ -159,9 +90,7 @@ func TestGcpCommandStructure(t *testing.T) {
 		}
 	}
 
-	if !foundSsh {
-		t.Fatal("ssh command not found under gcp command")
-	}
+	require.True(t, foundSsh, "ssh command not found under gcp command")
 
 	for _, cmd := range gcpCmd.Commands() {
 		if cmd.Name() == "ip" {
@@ -171,68 +100,43 @@ func TestGcpCommandStructure(t *testing.T) {
 		}
 	}
 
-	if !foundIP {
-		t.Fatal("ip command not found under gcp command")
-	}
+	require.True(t, foundIP, "ip command not found under gcp command")
 }
 
 func TestGcpCommandHelp(t *testing.T) {
 	rootCmd.SetArgs([]string{"gcp", "--help"})
 	defer rootCmd.SetArgs([]string{})
 
-	if err := rootCmd.Execute(); err != nil {
-		t.Errorf("Help command returned error: %v", err)
-	}
+	err := rootCmd.Execute()
+	require.NoError(t, err)
 }
 
 func TestGcpSshHelp(t *testing.T) {
 	rootCmd.SetArgs([]string{"gcp", "ssh", "--help"})
 	defer rootCmd.SetArgs([]string{})
 
-	if err := rootCmd.Execute(); err != nil {
-		t.Errorf("Help command returned error: %v", err)
-	}
+	err := rootCmd.Execute()
+	require.NoError(t, err)
 }
 
 func TestResourceTypeConstants(t *testing.T) {
-	if resourceTypeInstance != "instance" {
-		t.Errorf("Expected resourceTypeInstance to be 'instance', got %q", resourceTypeInstance)
-	}
-
-	if resourceTypeMIG != "mig" {
-		t.Errorf("Expected resourceTypeMIG to be 'mig', got %q", resourceTypeMIG)
-	}
+	require.Equal(t, "instance", resourceTypeInstance)
+	require.Equal(t, "mig", resourceTypeMIG)
 }
 
 func TestIPLookupCommand(t *testing.T) {
-	if ipLookupCmd.Use != "lookup <ip-address>" {
-		t.Errorf("Expected ip lookup use to be 'lookup <ip-address>', got %q", ipLookupCmd.Use)
-	}
-
-	if ipLookupCmd.Short == "" {
-		t.Fatal("ip lookup short description is empty")
-	}
-
-	if err := ipLookupCmd.Args(ipLookupCmd, []string{}); err == nil {
-		t.Fatal("Expected error when no IP is provided")
-	}
-
-	if err := ipLookupCmd.Args(ipLookupCmd, []string{"1.2.3.4", "extra"}); err == nil {
-		t.Fatal("Expected error when too many arguments are provided")
-	}
-
-	if err := ipLookupCmd.Args(ipLookupCmd, []string{"1.2.3.4"}); err != nil {
-		t.Fatalf("Unexpected error validating single IP argument: %v", err)
-	}
+	require.Equal(t, "lookup <ip-address>", ipLookupCmd.Use)
+	require.NotEmpty(t, ipLookupCmd.Short)
+	require.Error(t, ipLookupCmd.Args(ipLookupCmd, []string{}))
+	require.Error(t, ipLookupCmd.Args(ipLookupCmd, []string{"1.2.3.4", "extra"}))
+	require.NoError(t, ipLookupCmd.Args(ipLookupCmd, []string{"1.2.3.4"}))
 }
 
 func TestEnumerateProjects(t *testing.T) {
 	projects := []string{"alpha", "beta", "alpha", " ", "", "gamma"}
 	result := enumerateProjects(projects)
 
-	if len(result) != 3 {
-		t.Fatalf("expected 3 unique projects, got %d (%v)", len(result), result)
-	}
+	require.Len(t, result, 3)
 
 	expected := map[string]struct{}{
 		"alpha": {},
@@ -241,9 +145,8 @@ func TestEnumerateProjects(t *testing.T) {
 	}
 
 	for _, project := range result {
-		if _, ok := expected[project]; !ok {
-			t.Fatalf("unexpected project %q in result", project)
-		}
+		_, ok := expected[project]
+		require.True(t, ok, "unexpected project %q in result", project)
 	}
 }
 
@@ -254,9 +157,8 @@ func TestDefaultMIGSelectionIndex(t *testing.T) {
 		{Name: "inst-3", Zone: "us-central1-c", Status: "PROVISIONING"},
 	}
 
-	if idx := defaultMIGSelectionIndex(refs); idx != 1 {
-		t.Fatalf("Expected default index 1, got %d", idx)
-	}
+	idx := defaultMIGSelectionIndex(refs)
+	require.Equal(t, 1, idx)
 }
 
 func TestPromptMIGInstanceSelectionFromReader_ExplicitChoice(t *testing.T) {
@@ -270,18 +172,11 @@ func TestPromptMIGInstanceSelectionFromReader_ExplicitChoice(t *testing.T) {
 	var out bytes.Buffer
 
 	selected, err := promptMIGInstanceSelectionFromReader(reader, &out, "my-mig", refs)
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-
-	if selected.Name != "inst-3" {
-		t.Fatalf("Expected inst-3, got %s", selected.Name)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "inst-3", selected.Name)
 
 	output := out.String()
-	if !strings.Contains(output, "[2]* inst-2") {
-		t.Fatalf("Expected default marker for inst-2 in output, got %q", output)
-	}
+	require.Contains(t, output, "[2]* inst-2")
 }
 
 func TestPromptMIGInstanceSelectionFromReader_DefaultChoice(t *testing.T) {
@@ -294,13 +189,8 @@ func TestPromptMIGInstanceSelectionFromReader_DefaultChoice(t *testing.T) {
 	var out bytes.Buffer
 
 	selected, err := promptMIGInstanceSelectionFromReader(reader, &out, "my-mig", refs)
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-
-	if selected.Name != "inst-1" {
-		t.Fatalf("Expected default inst-1, got %s", selected.Name)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "inst-1", selected.Name)
 }
 
 func TestPromptMIGInstanceSelectionFromReader_InvalidRetry(t *testing.T) {
@@ -313,15 +203,7 @@ func TestPromptMIGInstanceSelectionFromReader_InvalidRetry(t *testing.T) {
 	var out bytes.Buffer
 
 	selected, err := promptMIGInstanceSelectionFromReader(reader, &out, "my-mig", refs)
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-
-	if selected.Name != "inst-2" {
-		t.Fatalf("Expected inst-2 after retry, got %s", selected.Name)
-	}
-
-	if !strings.Contains(out.String(), "Invalid selection") {
-		t.Fatalf("Expected invalid selection prompt in output, got %q", out.String())
-	}
+	require.NoError(t, err)
+	require.Equal(t, "inst-2", selected.Name)
+	require.Contains(t, out.String(), "Invalid selection")
 }

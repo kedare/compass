@@ -6,21 +6,15 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestNew(t *testing.T) {
 	cache, err := New()
-	if err != nil {
-		t.Fatalf("Failed to create cache: %v", err)
-	}
-
-	if cache == nil {
-		t.Fatal("Cache should not be nil")
-	}
-
-	if cache.instances == nil {
-		t.Fatal("Cache instances map should not be nil")
-	}
+	require.NoError(t, err)
+	require.NotNil(t, cache)
+	require.NotNil(t, cache.instances)
 }
 
 func TestSetAndGet(t *testing.T) {
@@ -41,27 +35,14 @@ func TestSetAndGet(t *testing.T) {
 	}
 
 	err := cache.Set("test-instance", instanceInfo)
-	if err != nil {
-		t.Fatalf("Failed to set cache entry: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Get the entry
 	retrieved, found := cache.Get("test-instance")
-	if !found {
-		t.Fatal("Expected to find cached entry")
-	}
-
-	if retrieved.Project != "test-project" {
-		t.Errorf("Expected project 'test-project', got '%s'", retrieved.Project)
-	}
-
-	if retrieved.Zone != "us-central1-a" {
-		t.Errorf("Expected zone 'us-central1-a', got '%s'", retrieved.Zone)
-	}
-
-	if retrieved.Type != ResourceTypeInstance {
-		t.Errorf("Expected type 'instance', got '%s'", retrieved.Type)
-	}
+	require.True(t, found)
+	require.Equal(t, "test-project", retrieved.Project)
+	require.Equal(t, "us-central1-a", retrieved.Zone)
+	require.Equal(t, ResourceTypeInstance, retrieved.Type)
 }
 
 func TestMIGCache(t *testing.T) {
@@ -82,18 +63,11 @@ func TestMIGCache(t *testing.T) {
 	}
 
 	err := cache.Set("test-mig", zonalMIG)
-	if err != nil {
-		t.Fatalf("Failed to set zonal MIG cache entry: %v", err)
-	}
+	require.NoError(t, err)
 
 	retrieved, found := cache.Get("test-mig")
-	if !found {
-		t.Fatal("Expected to find cached zonal MIG entry")
-	}
-
-	if retrieved.IsRegional {
-		t.Error("Expected zonal MIG, got regional")
-	}
+	require.True(t, found)
+	require.False(t, retrieved.IsRegional)
 
 	// Test regional MIG
 	regionalMIG := &LocationInfo{
@@ -104,22 +78,12 @@ func TestMIGCache(t *testing.T) {
 	}
 
 	err = cache.Set("test-regional-mig", regionalMIG)
-	if err != nil {
-		t.Fatalf("Failed to set regional MIG cache entry: %v", err)
-	}
+	require.NoError(t, err)
 
 	retrieved, found = cache.Get("test-regional-mig")
-	if !found {
-		t.Fatal("Expected to find cached regional MIG entry")
-	}
-
-	if !retrieved.IsRegional {
-		t.Error("Expected regional MIG, got zonal")
-	}
-
-	if retrieved.Region != "us-central1" {
-		t.Errorf("Expected region 'us-central1', got '%s'", retrieved.Region)
-	}
+	require.True(t, found)
+	require.True(t, retrieved.IsRegional)
+	require.Equal(t, "us-central1", retrieved.Region)
 }
 
 func TestCacheMiss(t *testing.T) {
@@ -132,9 +96,7 @@ func TestCacheMiss(t *testing.T) {
 	}
 
 	_, found := cache.Get("non-existent")
-	if found {
-		t.Error("Expected cache miss for non-existent entry")
-	}
+	require.False(t, found)
 }
 
 func TestCacheExpiry(t *testing.T) {
@@ -155,9 +117,7 @@ func TestCacheExpiry(t *testing.T) {
 	}
 
 	_, found := cache.Get("expired-instance")
-	if found {
-		t.Error("Expected cache miss for expired entry")
-	}
+	require.False(t, found)
 }
 
 func TestDelete(t *testing.T) {
@@ -176,19 +136,13 @@ func TestDelete(t *testing.T) {
 	}
 
 	err := cache.Set("test-instance", info)
-	if err != nil {
-		t.Fatalf("Failed to set cache entry: %v", err)
-	}
+	require.NoError(t, err)
 
 	err = cache.Delete("test-instance")
-	if err != nil {
-		t.Fatalf("Failed to delete cache entry: %v", err)
-	}
+	require.NoError(t, err)
 
 	_, found := cache.Get("test-instance")
-	if found {
-		t.Error("Expected entry to be deleted")
-	}
+	require.False(t, found)
 }
 
 func TestClear(t *testing.T) {
@@ -201,26 +155,13 @@ func TestClear(t *testing.T) {
 	}
 
 	// Add multiple entries
-	if err := cache.Set("instance1", &LocationInfo{Project: "p1", Zone: "z1", Type: ResourceTypeInstance}); err != nil {
-		t.Fatalf("Failed to set cache entry: %v", err)
-	}
-
-	if err := cache.Set("instance2", &LocationInfo{Project: "p2", Zone: "z2", Type: ResourceTypeInstance}); err != nil {
-		t.Fatalf("Failed to set cache entry: %v", err)
-	}
-
-	if err := cache.Set("mig1", &LocationInfo{Project: "p1", Region: "r1", Type: ResourceTypeMIG, IsRegional: true}); err != nil {
-		t.Fatalf("Failed to set cache entry: %v", err)
-	}
+	require.NoError(t, cache.Set("instance1", &LocationInfo{Project: "p1", Zone: "z1", Type: ResourceTypeInstance}))
+	require.NoError(t, cache.Set("instance2", &LocationInfo{Project: "p2", Zone: "z2", Type: ResourceTypeInstance}))
+	require.NoError(t, cache.Set("mig1", &LocationInfo{Project: "p1", Region: "r1", Type: ResourceTypeMIG, IsRegional: true}))
 
 	err := cache.Clear()
-	if err != nil {
-		t.Fatalf("Failed to clear cache: %v", err)
-	}
-
-	if len(cache.instances) != 0 {
-		t.Errorf("Expected cache to be empty, got %d entries", len(cache.instances))
-	}
+	require.NoError(t, err)
+	require.Empty(t, cache.instances)
 }
 
 func TestPersistence(t *testing.T) {
@@ -242,9 +183,7 @@ func TestPersistence(t *testing.T) {
 	}
 
 	err := cache1.Set("test-instance", info)
-	if err != nil {
-		t.Fatalf("Failed to set cache entry: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Create second cache instance and load from file
 	cache2 := &Cache{
@@ -255,18 +194,11 @@ func TestPersistence(t *testing.T) {
 	}
 
 	err = cache2.load()
-	if err != nil {
-		t.Fatalf("Failed to load cache: %v", err)
-	}
+	require.NoError(t, err)
 
 	retrieved, found := cache2.Get("test-instance")
-	if !found {
-		t.Fatal("Expected to find cached entry after reload")
-	}
-
-	if retrieved.Project != "test-project" {
-		t.Errorf("Expected project 'test-project', got '%s'", retrieved.Project)
-	}
+	require.True(t, found)
+	require.Equal(t, "test-project", retrieved.Project)
 }
 
 func TestLoadNonExistentFile(t *testing.T) {
@@ -279,13 +211,8 @@ func TestLoadNonExistentFile(t *testing.T) {
 	}
 
 	err := cache.load()
-	if err != nil {
-		t.Fatalf("Expected no error when loading non-existent file, got: %v", err)
-	}
-
-	if len(cache.instances) != 0 {
-		t.Error("Expected empty cache when loading non-existent file")
-	}
+	require.NoError(t, err)
+	require.Empty(t, cache.instances)
 }
 
 func TestLoadEmptyFile(t *testing.T) {
@@ -294,9 +221,7 @@ func TestLoadEmptyFile(t *testing.T) {
 
 	// Create empty file
 	err := os.WriteFile(cacheFile, []byte(""), 0o600)
-	if err != nil {
-		t.Fatalf("Failed to create empty file: %v", err)
-	}
+	require.NoError(t, err)
 
 	cache := &Cache{
 		filePath:  cacheFile,
@@ -306,13 +231,8 @@ func TestLoadEmptyFile(t *testing.T) {
 	}
 
 	err = cache.load()
-	if err != nil {
-		t.Fatalf("Expected no error when loading empty file, got: %v", err)
-	}
-
-	if len(cache.instances) != 0 {
-		t.Error("Expected empty cache when loading empty file")
-	}
+	require.NoError(t, err)
+	require.Empty(t, cache.instances)
 }
 
 func TestCleanExpired(t *testing.T) {
@@ -341,13 +261,11 @@ func TestCleanExpired(t *testing.T) {
 
 	cache.cleanExpired()
 
-	if _, found := cache.instances["valid"]; !found {
-		t.Error("Valid entry should not be removed")
-	}
+	_, found := cache.instances["valid"]
+	require.True(t, found)
 
-	if _, found := cache.instances["expired"]; found {
-		t.Error("Expired entry should be removed")
-	}
+	_, found = cache.instances["expired"]
+	require.False(t, found)
 }
 
 func TestGetRefreshesTimestamp(t *testing.T) {
@@ -357,50 +275,34 @@ func TestGetRefreshesTimestamp(t *testing.T) {
 		instances: make(map[string]*LocationInfo),
 	}
 
-	if err := cache.Set("stale-instance", &LocationInfo{
+	err := cache.Set("stale-instance", &LocationInfo{
 		Project: "test-project",
 		Zone:    "us-central1-a",
 		Type:    ResourceTypeInstance,
-	}); err != nil {
-		t.Fatalf("Failed to seed cache entry: %v", err)
-	}
+	})
+	require.NoError(t, err)
 
 	cache.mu.Lock()
 	staleTimestamp := time.Now().Add(-CacheExpiry + time.Hour)
 	cache.instances["stale-instance"].Timestamp = staleTimestamp
-	if err := cache.save(); err != nil {
-		cache.mu.Unlock()
-		t.Fatalf("Failed to persist stale timestamp: %v", err)
-	}
+	err = cache.save()
 	cache.mu.Unlock()
+	require.NoError(t, err)
 
 	retrieved, found := cache.Get("stale-instance")
-	if !found {
-		t.Fatal("Expected to find stale cache entry")
-	}
-
-	if !retrieved.Timestamp.After(staleTimestamp) {
-		t.Errorf("Expected timestamp to be refreshed, still %v", retrieved.Timestamp)
-	}
+	require.True(t, found)
+	require.True(t, retrieved.Timestamp.After(staleTimestamp))
 
 	data, err := os.ReadFile(cache.filePath)
-	if err != nil {
-		t.Fatalf("Failed to read cache file: %v", err)
-	}
+	require.NoError(t, err)
 
 	var stored cacheFile
-	if err := json.Unmarshal(data, &stored); err != nil {
-		t.Fatalf("Failed to unmarshal cache file: %v", err)
-	}
+	err = json.Unmarshal(data, &stored)
+	require.NoError(t, err)
 
 	entry, ok := stored.GCP.Instances["stale-instance"]
-	if !ok {
-		t.Fatal("Expected refreshed entry in persisted cache")
-	}
-
-	if !entry.Timestamp.After(staleTimestamp) {
-		t.Error("Expected persisted timestamp to be refreshed")
-	}
+	require.True(t, ok)
+	require.True(t, entry.Timestamp.After(staleTimestamp))
 }
 
 func TestSaveUsesGCPSection(t *testing.T) {
@@ -412,53 +314,36 @@ func TestSaveUsesGCPSection(t *testing.T) {
 		projects:  make(map[string]*ProjectEntry),
 	}
 
-	if err := cache.Set("instance", &LocationInfo{
+	err := cache.Set("instance", &LocationInfo{
 		Project: "project",
 		Zone:    "zone",
 		Type:    ResourceTypeInstance,
-	}); err != nil {
-		t.Fatalf("Failed to set cache entry: %v", err)
-	}
+	})
+	require.NoError(t, err)
 
 	raw, err := os.ReadFile(cache.filePath)
-	if err != nil {
-		t.Fatalf("Failed to read cache file: %v", err)
-	}
+	require.NoError(t, err)
 
 	var fileContents map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fileContents); err != nil {
-		t.Fatalf("Failed to unmarshal cache file: %v", err)
-	}
+	err = json.Unmarshal(raw, &fileContents)
+	require.NoError(t, err)
 
 	gcpPayload, ok := fileContents["gcp"]
-	if !ok {
-		t.Fatal("Expected 'gcp' key in cache file")
-	}
+	require.True(t, ok)
 
 	var gcpSection gcpCacheSection
-	if err := json.Unmarshal(gcpPayload, &gcpSection); err != nil {
-		t.Fatalf("Failed to unmarshal GCP cache section: %v", err)
-	}
+	err = json.Unmarshal(gcpPayload, &gcpSection)
+	require.NoError(t, err)
 
-	if gcpSection.Instances == nil {
-		t.Fatal("Expected instances map under GCP section")
-	}
+	require.NotNil(t, gcpSection.Instances)
+	require.NotNil(t, gcpSection.Zones)
+	require.NotNil(t, gcpSection.Projects)
 
-	if gcpSection.Zones == nil {
-		t.Fatal("Expected zones map under GCP section")
-	}
+	_, ok = gcpSection.Projects["project"]
+	require.True(t, ok)
 
-	if gcpSection.Projects == nil {
-		t.Fatal("Expected projects map under GCP section")
-	}
-
-	if _, ok := gcpSection.Projects["project"]; !ok {
-		t.Fatal("Expected project entry under 'projects' key")
-	}
-
-	if _, ok := gcpSection.Instances["instance"]; !ok {
-		t.Fatal("Expected instance entry under 'instances' key")
-	}
+	_, ok = gcpSection.Instances["instance"]
+	require.True(t, ok)
 }
 
 func TestZonesCacheSetAndGet(t *testing.T) {
@@ -471,35 +356,22 @@ func TestZonesCacheSetAndGet(t *testing.T) {
 	}
 
 	zones := []string{"us-central1-a", "us-central1-b"}
-	if err := cache.SetZones("project", zones); err != nil {
-		t.Fatalf("Failed to cache zones: %v", err)
-	}
+	err := cache.SetZones("project", zones)
+	require.NoError(t, err)
 
 	retrieved, ok := cache.GetZones("project")
-	if !ok {
-		t.Fatal("Expected cached zones for project")
-	}
-
-	if len(retrieved) != len(zones) {
-		t.Fatalf("Expected %d zones, got %d", len(zones), len(retrieved))
-	}
+	require.True(t, ok)
+	require.Len(t, retrieved, len(zones))
 
 	for i, zone := range zones {
-		if retrieved[i] != zone {
-			t.Fatalf("Expected zone %q at index %d, got %q", zone, i, retrieved[i])
-		}
+		require.Equal(t, zone, retrieved[i])
 	}
 
 	retrieved[0] = "modified"
 
 	again, ok := cache.GetZones("project")
-	if !ok {
-		t.Fatal("Expected cached zones after mutation")
-	}
-
-	if again[0] != zones[0] {
-		t.Fatalf("Cache should not be affected by caller mutation, got %q", again[0])
-	}
+	require.True(t, ok)
+	require.Equal(t, zones[0], again[0])
 }
 
 func TestZonesCacheExpiry(t *testing.T) {
@@ -516,9 +388,8 @@ func TestZonesCacheExpiry(t *testing.T) {
 		projects: make(map[string]*ProjectEntry),
 	}
 
-	if _, ok := cache.GetZones("project"); ok {
-		t.Fatal("Expected expired zone cache to miss")
-	}
+	_, ok := cache.GetZones("project")
+	require.False(t, ok)
 }
 
 func TestZonesCacheRefreshTimestamp(t *testing.T) {
@@ -530,9 +401,8 @@ func TestZonesCacheRefreshTimestamp(t *testing.T) {
 		projects:  make(map[string]*ProjectEntry),
 	}
 
-	if err := cache.SetZones("project", []string{"us-central1-a"}); err != nil {
-		t.Fatalf("Failed to cache zones: %v", err)
-	}
+	err := cache.SetZones("project", []string{"us-central1-a"})
+	require.NoError(t, err)
 
 	cache.mu.Lock()
 	if listing, ok := cache.zones["project"]; ok {
@@ -541,22 +411,16 @@ func TestZonesCacheRefreshTimestamp(t *testing.T) {
 	cache.mu.Unlock()
 
 	retrieved, ok := cache.GetZones("project")
-	if !ok {
-		t.Fatal("Expected zone cache hit")
-	}
-
-	if len(retrieved) != 1 || retrieved[0] != "us-central1-a" {
-		t.Fatalf("Unexpected zones retrieved: %#v", retrieved)
-	}
+	require.True(t, ok)
+	require.Len(t, retrieved, 1)
+	require.Equal(t, "us-central1-a", retrieved[0])
 
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 
 	updated := cache.zones["project"].Timestamp
 
-	if updated.Before(time.Now().Add(-time.Minute)) {
-		t.Fatalf("Expected refreshed timestamp, got %v", updated)
-	}
+	require.False(t, updated.Before(time.Now().Add(-time.Minute)), "Expected refreshed timestamp, got %v", updated)
 }
 
 func TestZonesPersistAcrossLoad(t *testing.T) {
@@ -570,9 +434,8 @@ func TestZonesPersistAcrossLoad(t *testing.T) {
 		projects:  make(map[string]*ProjectEntry),
 	}
 
-	if err := cache1.SetZones("project", []string{"us-central1-a"}); err != nil {
-		t.Fatalf("Failed to seed zone cache: %v", err)
-	}
+	err := cache1.SetZones("project", []string{"us-central1-a"})
+	require.NoError(t, err)
 
 	cache2 := &Cache{
 		filePath:  cacheFile,
@@ -581,18 +444,13 @@ func TestZonesPersistAcrossLoad(t *testing.T) {
 		projects:  make(map[string]*ProjectEntry),
 	}
 
-	if err := cache2.load(); err != nil {
-		t.Fatalf("Failed to load cache: %v", err)
-	}
+	err = cache2.load()
+	require.NoError(t, err)
 
 	retrieved, ok := cache2.GetZones("project")
-	if !ok {
-		t.Fatal("Expected cached zones after load")
-	}
-
-	if len(retrieved) != 1 || retrieved[0] != "us-central1-a" {
-		t.Fatalf("Unexpected zones retrieved after load: %#v", retrieved)
-	}
+	require.True(t, ok)
+	require.Len(t, retrieved, 1)
+	require.Equal(t, "us-central1-a", retrieved[0])
 }
 
 func TestProjectsCacheAddAndRetrieve(t *testing.T) {
@@ -604,33 +462,24 @@ func TestProjectsCacheAddAndRetrieve(t *testing.T) {
 		projects:  make(map[string]*ProjectEntry),
 	}
 
-	if err := cache.AddProject("alpha"); err != nil {
-		t.Fatalf("Failed to add project: %v", err)
-	}
+	err := cache.AddProject("alpha")
+	require.NoError(t, err)
 
 	time.Sleep(10 * time.Millisecond)
 
-	if err := cache.AddProject("beta"); err != nil {
-		t.Fatalf("Failed to add second project: %v", err)
-	}
+	err = cache.AddProject("beta")
+	require.NoError(t, err)
 
 	projects := cache.GetProjects()
-	if len(projects) != 2 {
-		t.Fatalf("Expected 2 projects, got %d", len(projects))
-	}
-
-	if projects[0] != "beta" {
-		t.Fatalf("Expected most recent project first, got %q", projects[0])
-	}
+	require.Len(t, projects, 2)
+	require.Equal(t, "beta", projects[0])
 
 	cache.mu.Lock()
 	cache.projects["alpha"].Timestamp = time.Now()
 	cache.mu.Unlock()
 
 	projects = cache.GetProjects()
-	if projects[0] != "alpha" {
-		t.Fatalf("Expected project order to update after timestamp refresh, got %q", projects[0])
-	}
+	require.Equal(t, "alpha", projects[0])
 }
 
 func TestProjectsCacheExpiry(t *testing.T) {
@@ -647,9 +496,7 @@ func TestProjectsCacheExpiry(t *testing.T) {
 	}
 
 	projects := cache.GetProjects()
-	if len(projects) != 0 {
-		t.Fatalf("Expected expired project to be purged, got %v", projects)
-	}
+	require.Empty(t, projects)
 }
 
 func TestGetLocationsByProject(t *testing.T) {
@@ -661,30 +508,14 @@ func TestGetLocationsByProject(t *testing.T) {
 		projects:  make(map[string]*ProjectEntry),
 	}
 
-	if err := cache.Set("inst-1", &LocationInfo{Project: "proj", Zone: "us-central1-a", Type: ResourceTypeInstance}); err != nil {
-		t.Fatalf("Failed to cache instance: %v", err)
-	}
-
-	if err := cache.Set("mig-1", &LocationInfo{Project: "proj", Region: "us-central1", Type: ResourceTypeMIG, IsRegional: true}); err != nil {
-		t.Fatalf("Failed to cache MIG: %v", err)
-	}
-
-	if err := cache.Set("other", &LocationInfo{Project: "other", Zone: "us-east1-b", Type: ResourceTypeInstance}); err != nil {
-		t.Fatalf("Failed to cache other instance: %v", err)
-	}
+	require.NoError(t, cache.Set("inst-1", &LocationInfo{Project: "proj", Zone: "us-central1-a", Type: ResourceTypeInstance}))
+	require.NoError(t, cache.Set("mig-1", &LocationInfo{Project: "proj", Region: "us-central1", Type: ResourceTypeMIG, IsRegional: true}))
+	require.NoError(t, cache.Set("other", &LocationInfo{Project: "other", Zone: "us-east1-b", Type: ResourceTypeInstance}))
 
 	locations, ok := cache.GetLocationsByProject("proj")
-	if !ok {
-		t.Fatal("Expected cached locations for project")
-	}
-
-	if len(locations) != 2 {
-		t.Fatalf("Expected 2 locations, got %d", len(locations))
-	}
-
-	if locations[0].Name == locations[1].Name {
-		t.Fatal("Expected distinct location entries")
-	}
+	require.True(t, ok)
+	require.Len(t, locations, 2)
+	require.NotEqual(t, locations[0].Name, locations[1].Name)
 
 	// Expire entries and ensure they are purged.
 	cache.mu.Lock()
@@ -693,7 +524,6 @@ func TestGetLocationsByProject(t *testing.T) {
 	}
 	cache.mu.Unlock()
 
-	if _, ok := cache.GetLocationsByProject("proj"); ok {
-		t.Fatal("Expected expired locations to be removed")
-	}
+	_, ok = cache.GetLocationsByProject("proj")
+	require.False(t, ok)
 }

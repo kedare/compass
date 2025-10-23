@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"testing"
 
 	"github.com/kedare/compass/internal/gcp"
+	"github.com/stretchr/testify/require"
 )
 
 type fakeRunner struct {
@@ -41,17 +41,9 @@ type ctxKey string
 
 func TestNewClient(t *testing.T) {
 	client := NewClient()
-	if client == nil {
-		t.Fatal("NewClient() returned nil")
-	}
-
-	if client.runner == nil {
-		t.Fatal("expected default runner to be set")
-	}
-
-	if client.lookPath == nil {
-		t.Fatal("expected default lookPath to be set")
-	}
+	require.NotNil(t, client)
+	require.NotNil(t, client.runner)
+	require.NotNil(t, client.lookPath)
 }
 
 func TestConnectWithIAP_NoExternalIP(t *testing.T) {
@@ -65,13 +57,8 @@ func TestConnectWithIAP_NoExternalIP(t *testing.T) {
 	}
 
 	err := client.ConnectWithIAP(t.Context(), instance, "test-project", nil)
-	if err == nil {
-		t.Fatal("expected error for instance without external IP and IAP disabled")
-	}
-
-	if !errors.Is(err, ErrNoExternalIPAndNoIAP) {
-		t.Fatalf("expected ErrNoExternalIPAndNoIAP, got %v", err)
-	}
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrNoExternalIPAndNoIAP)
 }
 
 func TestConnectWithIAP_UsesDirectCommand(t *testing.T) {
@@ -92,22 +79,13 @@ func TestConnectWithIAP_UsesDirectCommand(t *testing.T) {
 	sshFlags := []string{"-i", "~/.ssh/id_rsa"}
 	ctx := context.WithValue(t.Context(), ctxKey("runner"), "direct")
 
-	if err := client.ConnectWithIAP(ctx, instance, "test-project", sshFlags); err != nil {
-		t.Fatalf("ConnectWithIAP returned error: %v", err)
-	}
-
-	if runner.name != "/usr/bin/ssh" {
-		t.Fatalf("expected ssh to be invoked, got %q", runner.name)
-	}
+	err := client.ConnectWithIAP(ctx, instance, "test-project", sshFlags)
+	require.NoError(t, err)
+	require.Equal(t, "/usr/bin/ssh", runner.name)
 
 	expectedArgs := append([]string{instance.ExternalIP}, sshFlags...)
-	if !reflect.DeepEqual(runner.args, expectedArgs) {
-		t.Fatalf("unexpected args: got %v want %v", runner.args, expectedArgs)
-	}
-
-	if runner.ctx != ctx {
-		t.Fatal("expected provided context to be forwarded to runner")
-	}
+	require.Equal(t, expectedArgs, runner.args)
+	require.Same(t, ctx, runner.ctx)
 }
 
 func TestConnectWithIAP_UsesIAPCommand(t *testing.T) {
@@ -127,13 +105,9 @@ func TestConnectWithIAP_UsesIAPCommand(t *testing.T) {
 	flags := []string{"-L 8080:localhost:8080"}
 	ctx := context.WithValue(t.Context(), ctxKey("runner"), "iap")
 
-	if err := client.ConnectWithIAP(ctx, instance, "demo-project", flags); err != nil {
-		t.Fatalf("ConnectWithIAP returned error: %v", err)
-	}
-
-	if runner.name != "/opt/bin/gcloud" {
-		t.Fatalf("expected gcloud to be invoked, got %q", runner.name)
-	}
+	err := client.ConnectWithIAP(ctx, instance, "demo-project", flags)
+	require.NoError(t, err)
+	require.Equal(t, "/opt/bin/gcloud", runner.name)
 
 	expectedArgs := []string{
 		"compute", "ssh",
@@ -144,13 +118,8 @@ func TestConnectWithIAP_UsesIAPCommand(t *testing.T) {
 		"--ssh-flag=-L 8080:localhost:8080",
 	}
 
-	if !reflect.DeepEqual(runner.args, expectedArgs) {
-		t.Fatalf("unexpected args: got %v want %v", runner.args, expectedArgs)
-	}
-
-	if runner.ctx != ctx {
-		t.Fatal("expected provided context to be forwarded to runner")
-	}
+	require.Equal(t, expectedArgs, runner.args)
+	require.Same(t, ctx, runner.ctx)
 }
 
 func TestConnectWithIAP_PropagatesRunnerError(t *testing.T) {
@@ -168,11 +137,6 @@ func TestConnectWithIAP_PropagatesRunnerError(t *testing.T) {
 	}
 
 	err := client.ConnectWithIAP(t.Context(), instance, "demo-project", nil)
-	if err == nil {
-		t.Fatal("expected error when runner fails")
-	}
-
-	if !errors.Is(err, runner.err) {
-		t.Fatalf("expected runner error to propagate, got %v", err)
-	}
+	require.Error(t, err)
+	require.ErrorIs(t, err, runner.err)
 }

@@ -1,6 +1,10 @@
 package cmd
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestMigCompletionLocations(t *testing.T) {
 	tests := []struct {
@@ -34,51 +38,32 @@ func TestMigCompletionLocations(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := migCompletionLocations(tt.input)
 
-			if len(result) != len(tt.expected) {
-				t.Fatalf("expected %d locations, got %d", len(tt.expected), len(result))
-			}
-
+			require.Len(t, result, len(tt.expected))
 			for i, value := range tt.expected {
-				if result[i] != value {
-					t.Fatalf("expected %q at index %d, got %q", value, i, result[i])
-				}
+				require.Equal(t, value, result[i])
 			}
 		})
 	}
 }
 
 func TestZoneLooksLikeZone(t *testing.T) {
-	if !zoneLooksLikeZone("us-central1-a") {
-		t.Fatal("expected zone value to be detected")
-	}
-
-	if zoneLooksLikeZone("us-central1") {
-		t.Fatal("expected region value to be rejected")
-	}
+	require.True(t, zoneLooksLikeZone("us-central1-a"))
+	require.False(t, zoneLooksLikeZone("us-central1"))
 }
 
 func TestRegionFromZone(t *testing.T) {
-	if region := regionFromZone("us-central1-a"); region != "us-central1" {
-		t.Fatalf("expected region 'us-central1', got %q", region)
-	}
-
-	if region := regionFromZone("us-central1"); region != "" {
-		t.Fatalf("expected empty region, got %q", region)
-	}
+	require.Equal(t, "us-central1", regionFromZone("us-central1-a"))
+	require.Empty(t, regionFromZone("us-central1"))
 }
 
 func TestDeduplicateStrings(t *testing.T) {
 	values := []string{"a", "b", "a", "c", "b"}
 	result := deduplicateStrings(values)
 
-	if len(result) != 3 {
-		t.Fatalf("expected 3 unique values, got %d", len(result))
-	}
+	require.Len(t, result, 3)
 
 	expected := []string{"a", "b", "c"}
 	for i, value := range expected {
-		if result[i] != value {
-			t.Fatalf("expected %q at index %d, got %q", value, i, result[i])
-		}
+		require.Equal(t, value, result[i])
 	}
 }

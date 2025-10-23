@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/kedare/compass/internal/gcp"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDedupeAssociations(t *testing.T) {
@@ -49,9 +50,7 @@ func TestDedupeAssociations(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := dedupeAssociations(tt.input)
-			if len(result) != tt.expected {
-				t.Errorf("expected %d associations, got %d", tt.expected, len(result))
-			}
+			require.Len(t, result, tt.expected)
 		})
 	}
 }
@@ -92,9 +91,7 @@ func TestIsContextError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := isContextError(tt.err)
-			if result != tt.expected {
-				t.Errorf("expected %v, got %v", tt.expected, result)
-			}
+			require.Equal(t, tt.expected, result)
 		})
 	}
 }

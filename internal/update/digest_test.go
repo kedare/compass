@@ -3,6 +3,8 @@ package update
 import (
 	"crypto/sha256"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseDigest(t *testing.T) {
@@ -50,23 +52,13 @@ func TestParseDigest(t *testing.T) {
 
 			d, err := ParseDigest(tt.input)
 			if tt.expectError {
-				if err == nil {
-					t.Fatalf("expected error, got nil")
-				}
+				require.Error(t, err)
 				return
 			}
 
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if d.Algorithm != tt.wantAlg {
-				t.Fatalf("unexpected algorithm: want %s, got %s", tt.wantAlg, d.Algorithm)
-			}
-
-			if d.Value != tt.wantValue {
-				t.Fatalf("unexpected value: want %s, got %s", tt.wantValue, d.Value)
-			}
+			require.NoError(t, err)
+			require.Equal(t, tt.wantAlg, d.Algorithm)
+			require.Equal(t, tt.wantValue, d.Value)
 		})
 	}
 }
@@ -75,26 +67,19 @@ func TestHashForDigest(t *testing.T) {
 	t.Parallel()
 
 	hash, err := HashForDigest(Digest{Algorithm: "sha256"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	require.NoError(t, err)
+	require.NotNil(t, hash)
 
-	if hash == nil {
-		t.Fatalf("expected non-nil hash")
-	}
-
-	hash.Write([]byte("abc"))
+	_, err = hash.Write([]byte("abc"))
+	require.NoError(t, err)
 	got := hash.Sum(nil)
 	want := sha256.Sum256([]byte("abc"))
-	if string(got) != string(want[:]) {
-		t.Fatalf("hash mismatch: got %x want %x", got, want)
-	}
+	require.Equal(t, want[:], got)
 }
 
 func TestHashForDigestUnsupported(t *testing.T) {
 	t.Parallel()
 
-	if _, err := HashForDigest(Digest{Algorithm: "md5"}); err == nil {
-		t.Fatalf("expected error for unsupported digest")
-	}
+	_, err := HashForDigest(Digest{Algorithm: "md5"})
+	require.Error(t, err)
 }

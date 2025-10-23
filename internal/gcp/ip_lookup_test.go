@@ -2,9 +2,9 @@ package gcp
 
 import (
 	"net"
-	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"google.golang.org/api/compute/v1"
 )
 
@@ -29,22 +29,12 @@ func TestInstanceIPMatches(t *testing.T) {
 	}
 
 	internalMatches := instanceIPMatches(instance, net.ParseIP("10.0.0.1"))
-	if len(internalMatches) != 1 {
-		t.Fatalf("expected 1 internal match, got %d", len(internalMatches))
-	}
-
-	if internalMatches[0].kind != IPAssociationInstanceInternal {
-		t.Fatalf("expected internal match kind, got %s", internalMatches[0].kind)
-	}
+	require.Len(t, internalMatches, 1)
+	require.Equal(t, IPAssociationInstanceInternal, internalMatches[0].kind)
 
 	externalMatches := instanceIPMatches(instance, net.ParseIP("203.0.113.10"))
-	if len(externalMatches) != 1 {
-		t.Fatalf("expected 1 external match, got %d", len(externalMatches))
-	}
-
-	if externalMatches[0].kind != IPAssociationInstanceExternal {
-		t.Fatalf("expected external match kind, got %s", externalMatches[0].kind)
-	}
+	require.Len(t, externalMatches, 1)
+	require.Equal(t, IPAssociationInstanceExternal, externalMatches[0].kind)
 }
 
 func TestInstanceIPMatchesIPv6(t *testing.T) {
@@ -61,22 +51,12 @@ func TestInstanceIPMatchesIPv6(t *testing.T) {
 	}
 
 	internal := instanceIPMatches(instance, net.ParseIP("2600:abcd::5"))
-	if len(internal) != 1 {
-		t.Fatalf("expected 1 IPv6 internal match, got %d", len(internal))
-	}
-
-	if internal[0].kind != IPAssociationInstanceInternal {
-		t.Fatalf("expected internal kind for IPv6, got %s", internal[0].kind)
-	}
+	require.Len(t, internal, 1)
+	require.Equal(t, IPAssociationInstanceInternal, internal[0].kind)
 
 	external := instanceIPMatches(instance, net.ParseIP("2600:abcd::100"))
-	if len(external) != 1 {
-		t.Fatalf("expected 1 IPv6 external match, got %d", len(external))
-	}
-
-	if external[0].kind != IPAssociationInstanceExternal {
-		t.Fatalf("expected external kind for IPv6, got %s", external[0].kind)
-	}
+	require.Len(t, external, 1)
+	require.Equal(t, IPAssociationInstanceExternal, external[0].kind)
 }
 
 func TestDescribeForwardingRule(t *testing.T) {
@@ -87,21 +67,10 @@ func TestDescribeForwardingRule(t *testing.T) {
 	}
 
 	desc := describeForwardingRule(rule)
-	if desc == "" {
-		t.Fatal("expected non-empty description")
-	}
-
-	if want := "scheme=external"; !contains(desc, want) {
-		t.Fatalf("expected description to contain %q, got %q", want, desc)
-	}
-
-	if want := "ports=80-81"; !contains(desc, want) {
-		t.Fatalf("expected description to contain %q, got %q", want, desc)
-	}
-
-	if want := "target=proxy-1"; !contains(desc, want) {
-		t.Fatalf("expected description to contain %q, got %q", want, desc)
-	}
+	require.NotEmpty(t, desc)
+	require.Contains(t, desc, "scheme=external")
+	require.Contains(t, desc, "ports=80-81")
+	require.Contains(t, desc, "target=proxy-1")
 }
 
 func TestDescribeAddress(t *testing.T) {
@@ -113,14 +82,10 @@ func TestDescribeAddress(t *testing.T) {
 	}
 
 	desc := describeAddress(addr)
-	if desc == "" {
-		t.Fatal("expected non-empty description")
-	}
+	require.NotEmpty(t, desc)
 
 	for _, want := range []string{"status=in_use", "purpose=gce_endpoint", "tier=premium", "type=external"} {
-		if !contains(desc, want) {
-			t.Fatalf("expected description to contain %q, got %q", want, desc)
-		}
+		require.Contains(t, desc, want)
 	}
 }
 
@@ -135,9 +100,7 @@ func TestLocationFromScope(t *testing.T) {
 	}
 
 	for scope, want := range tests {
-		if got := locationFromScope(scope); got != want {
-			t.Fatalf("locationFromScope(%q) = %q, want %q", scope, got, want)
-		}
+		require.Equal(t, want, locationFromScope(scope))
 	}
 }
 
@@ -149,32 +112,16 @@ func TestLastComponent(t *testing.T) {
 	}
 
 	for input, want := range tests {
-		if got := lastComponent(input); got != want {
-			t.Fatalf("lastComponent(%q) = %q, want %q", input, got, want)
-		}
+		require.Equal(t, want, lastComponent(input))
 	}
 }
 
 func TestEqualIP(t *testing.T) {
 	ipv4 := net.ParseIP("192.0.2.10")
-	if !equalIP("192.0.2.10", ipv4) {
-		t.Fatal("expected IPv4 values to match")
-	}
-
-	if equalIP("192.0.2.11", ipv4) {
-		t.Fatal("unexpected IPv4 match")
-	}
+	require.True(t, equalIP("192.0.2.10", ipv4))
+	require.False(t, equalIP("192.0.2.11", ipv4))
 
 	ipv6 := net.ParseIP("2001:db8::1")
-	if !equalIP("2001:0db8:0:0::1", ipv6) {
-		t.Fatal("expected IPv6 values to match despite formatting")
-	}
-
-	if equalIP("not-an-ip", ipv6) {
-		t.Fatal("unexpected match for invalid IP string")
-	}
-}
-
-func contains(s, substr string) bool {
-	return strings.Contains(s, substr)
+	require.True(t, equalIP("2001:0db8:0:0::1", ipv6))
+	require.False(t, equalIP("not-an-ip", ipv6))
 }

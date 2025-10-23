@@ -3,10 +3,10 @@ package gcp
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"google.golang.org/api/networkmanagement/v1"
 )
 
@@ -35,13 +35,8 @@ func TestWaitForOperationWithBackoffSuccess(t *testing.T) {
 
 		return &networkmanagement.Operation{Done: false}, nil
 	})
-	if err != nil {
-		t.Fatalf("expected success, got %v", err)
-	}
-
-	if attempts != 2 {
-		t.Fatalf("expected two polls, got %d", attempts)
-	}
+	require.NoError(t, err)
+	require.Equal(t, 2, attempts)
 }
 
 func TestWaitForOperationWithBackoffContextCancel(t *testing.T) {
@@ -57,13 +52,8 @@ func TestWaitForOperationWithBackoffContextCancel(t *testing.T) {
 		return &networkmanagement.Operation{Done: false}, nil
 	})
 
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context.Canceled, got %v", err)
-	}
-
-	if attempts == 0 {
-		t.Fatal("expected at least one poll attempt")
-	}
+	require.ErrorIs(t, err, context.Canceled)
+	require.NotZero(t, attempts)
 }
 
 func TestWaitForOperationWithBackoffError(t *testing.T) {
@@ -74,9 +64,7 @@ func TestWaitForOperationWithBackoffError(t *testing.T) {
 		return nil, sentinel
 	})
 
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("expected sentinel error, got %v", err)
-	}
+	require.ErrorIs(t, err, sentinel)
 }
 
 func TestWaitForOperationWithBackoffTimeout(t *testing.T) {
@@ -87,11 +75,8 @@ func TestWaitForOperationWithBackoffTimeout(t *testing.T) {
 		return &networkmanagement.Operation{Done: false}, nil
 	})
 
-	if err == nil || !strings.Contains(err.Error(), "timed out") {
-		t.Fatalf("expected timeout error, got %v", err)
-	}
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "timed out")
 
-	if time.Since(start) < 20*time.Millisecond {
-		t.Fatalf("timeout returned too quickly, duration %s", time.Since(start))
-	}
+	require.GreaterOrEqual(t, time.Since(start), 20*time.Millisecond)
 }
