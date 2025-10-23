@@ -11,13 +11,12 @@ import (
 
 	"github.com/kedare/compass/internal/gcp"
 	"github.com/mattn/go-runewidth"
+	"github.com/stretchr/testify/require"
 )
 
 func captureStdout(t *testing.T, fn func()) string {
 	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("failed to create pipe: %v", err)
-	}
+	require.NoError(t, err)
 
 	origStdout := os.Stdout
 	os.Stdout = writer
@@ -31,9 +30,8 @@ func captureStdout(t *testing.T, fn func()) string {
 
 	fn()
 
-	if err := writer.Close(); err != nil {
-		t.Fatalf("failed to close pipe writer: %v", err)
-	}
+	err = writer.Close()
+	require.NoError(t, err)
 	os.Stdout = origStdout
 	output := <-outCh
 
@@ -78,24 +76,20 @@ func TestDisplayForwardAndReturnPaths_RespectsTerminalWidth(t *testing.T) {
 		displayForwardAndReturnPaths([]*gcp.Trace{forward}, []*gcp.Trace{backward}, true)
 	})
 
-	if lineWithForwardAndReturn(sequential) {
-		t.Fatalf("expected sequential layout on narrow terminal, got:\n%s", sequential)
-	}
+	require.False(t, lineWithForwardAndReturn(sequential), "expected sequential layout on narrow terminal, got:\n%s", sequential)
 
 	wide := required + 10
 	t.Setenv("COLUMNS", strconv.Itoa(wide))
 
-	if width, ok := detectTerminalWidth(); !ok || width != wide {
-		t.Fatalf("expected terminal width %d, got %d (ok=%v)", wide, width, ok)
-	}
+	width, ok := detectTerminalWidth()
+	require.True(t, ok)
+	require.Equal(t, wide, width)
 
 	sideBySide := captureStdout(t, func() {
 		displayForwardAndReturnPaths([]*gcp.Trace{forward}, []*gcp.Trace{backward}, true)
 	})
 
-	if !lineWithForwardAndReturn(sideBySide) {
-		t.Fatalf("expected combined layout on wide terminal, got:\n%s", sideBySide)
-	}
+	require.True(t, lineWithForwardAndReturn(sideBySide), "expected combined layout on wide terminal, got:\n%s", sideBySide)
 }
 
 func TestRenderCombinedTraceAlignment(t *testing.T) {
@@ -136,14 +130,10 @@ func TestRenderCombinedTraceAlignment(t *testing.T) {
 			continue
 		}
 
-		if column != idx {
-			t.Fatalf("expected consistent column start %d, got %d on line %q", column, idx, line)
-		}
+		require.Equal(t, column, idx, "expected consistent column start %d, got %d on line %q", column, idx, line)
 	}
 
-	if column == -1 {
-		t.Fatal("failed to detect right table column")
-	}
+	require.NotEqual(t, -1, column, "failed to detect right table column")
 }
 
 func firstTableColumn(line string) int {

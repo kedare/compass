@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"google.golang.org/api/compute/v1"
 )
 
@@ -35,9 +36,7 @@ func TestExtractInstanceName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := extractInstanceName(tt.instanceURL)
-			if result != tt.expected {
-				t.Errorf("extractInstanceName() = %v, want %v", result, tt.expected)
-			}
+			require.Equal(t, tt.expected, result)
 		})
 	}
 }
@@ -68,9 +67,7 @@ func TestExtractZoneName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := extractZoneName(tt.zoneURL)
-			if result != tt.expected {
-				t.Errorf("extractZoneName() = %v, want %v", result, tt.expected)
-			}
+			require.Equal(t, tt.expected, result)
 		})
 	}
 }
@@ -101,9 +98,7 @@ func TestExtractZoneFromInstanceURL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := extractZoneFromInstanceURL(tt.instanceURL)
-			if result != tt.expected {
-				t.Errorf("extractZoneFromInstanceURL() = %v, want %v", result, tt.expected)
-			}
+			require.Equal(t, tt.expected, result)
 		})
 	}
 }
@@ -134,9 +129,7 @@ func TestExtractMachineType(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := extractMachineType(tt.machineTypeURL)
-			if result != tt.expected {
-				t.Errorf("extractMachineType() = %v, want %v", result, tt.expected)
-			}
+			require.Equal(t, tt.expected, result)
 		})
 	}
 }
@@ -189,9 +182,7 @@ func TestIsRegion(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := client.isRegion(tt.location)
-			if result != tt.expected {
-				t.Errorf("isRegion(%q) = %v, want %v", tt.location, result, tt.expected)
-			}
+			require.Equal(t, tt.expected, result)
 		})
 	}
 }
@@ -220,33 +211,13 @@ func TestConvertInstance(t *testing.T) {
 	result := client.convertInstance(computeInstance)
 
 	// Verify all fields are correctly converted
-	if result.Name != "test-instance" {
-		t.Errorf("convertInstance().Name = %v, want %v", result.Name, "test-instance")
-	}
-
-	if result.Zone != "us-central1-a" {
-		t.Errorf("convertInstance().Zone = %v, want %v", result.Zone, "us-central1-a")
-	}
-
-	if result.Status != "RUNNING" {
-		t.Errorf("convertInstance().Status = %v, want %v", result.Status, "RUNNING")
-	}
-
-	if result.MachineType != "n1-standard-1" {
-		t.Errorf("convertInstance().MachineType = %v, want %v", result.MachineType, "n1-standard-1")
-	}
-
-	if result.InternalIP != "10.0.0.1" {
-		t.Errorf("convertInstance().InternalIP = %v, want %v", result.InternalIP, "10.0.0.1")
-	}
-
-	if result.ExternalIP != "203.0.113.1" {
-		t.Errorf("convertInstance().ExternalIP = %v, want %v", result.ExternalIP, "203.0.113.1")
-	}
-
-	if result.CanUseIAP {
-		t.Errorf("convertInstance().CanUseIAP = %v, want %v", result.CanUseIAP, false)
-	}
+	require.Equal(t, "test-instance", result.Name)
+	require.Equal(t, "us-central1-a", result.Zone)
+	require.Equal(t, "RUNNING", result.Status)
+	require.Equal(t, "n1-standard-1", result.MachineType)
+	require.Equal(t, "10.0.0.1", result.InternalIP)
+	require.Equal(t, "203.0.113.1", result.ExternalIP)
+	require.False(t, result.CanUseIAP)
 }
 
 func TestConvertInstanceNoExternalIP(t *testing.T) {
@@ -267,17 +238,9 @@ func TestConvertInstanceNoExternalIP(t *testing.T) {
 
 	result := client.convertInstance(computeInstance)
 
-	if result.InternalIP != "10.0.0.2" {
-		t.Errorf("convertInstance().InternalIP = %v, want %v", result.InternalIP, "10.0.0.2")
-	}
-
-	if result.ExternalIP != "" {
-		t.Errorf("convertInstance().ExternalIP = %v, want %v", result.ExternalIP, "")
-	}
-
-	if !result.CanUseIAP {
-		t.Errorf("convertInstance().CanUseIAP = %v, want %v", result.CanUseIAP, true)
-	}
+	require.Equal(t, "10.0.0.2", result.InternalIP)
+	require.Empty(t, result.ExternalIP)
+	require.True(t, result.CanUseIAP)
 }
 
 func TestFindInstanceInAggregatedPages(t *testing.T) {
@@ -301,19 +264,13 @@ func TestFindInstanceInAggregatedPages(t *testing.T) {
 
 	inst, err := findInstanceInAggregatedPages("target-instance", func(pageToken string) (*compute.InstanceAggregatedList, error) {
 		page, ok := pages[pageToken]
-		if !ok {
-			t.Fatalf("unexpected page token: %s", pageToken)
-		}
+		require.True(t, ok, "unexpected page token: %s", pageToken)
 
 		return page, nil
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if inst == nil || inst.Name != "target-instance" {
-		t.Fatalf("expected to find target-instance, got %#v", inst)
-	}
+	require.NoError(t, err)
+	require.NotNil(t, inst)
+	require.Equal(t, "target-instance", inst.Name)
 }
 
 func TestFindInstanceInAggregatedPagesNotFound(t *testing.T) {
@@ -321,9 +278,7 @@ func TestFindInstanceInAggregatedPagesNotFound(t *testing.T) {
 		return &compute.InstanceAggregatedList{}, nil
 	})
 
-	if !errors.Is(err, ErrInstanceNotFound) {
-		t.Fatalf("expected ErrInstanceNotFound, got %v", err)
-	}
+	require.ErrorIs(t, err, ErrInstanceNotFound)
 }
 
 func TestFindMIGScopeAcrossPages(t *testing.T) {
@@ -347,19 +302,12 @@ func TestFindMIGScopeAcrossPages(t *testing.T) {
 
 	scope, err := findMIGScopeAcrossPages("target-mig", func(token string) (*compute.InstanceGroupManagerAggregatedList, error) {
 		page, ok := pages[token]
-		if !ok {
-			t.Fatalf("unexpected page token: %s", token)
-		}
+		require.True(t, ok, "unexpected page token: %s", token)
 
 		return page, nil
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if scope != "regions/us-central1" {
-		t.Fatalf("expected scope regions/us-central1, got %s", scope)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "regions/us-central1", scope)
 }
 
 func TestFindMIGScopeAcrossPagesNotFound(t *testing.T) {
@@ -367,9 +315,7 @@ func TestFindMIGScopeAcrossPagesNotFound(t *testing.T) {
 		return &compute.InstanceGroupManagerAggregatedList{}, nil
 	})
 
-	if !errors.Is(err, ErrMIGNotInAggregatedList) {
-		t.Fatalf("expected ErrMIGNotInAggregatedList, got %v", err)
-	}
+	require.ErrorIs(t, err, ErrMIGNotInAggregatedList)
 }
 
 func TestCollectInstances(t *testing.T) {
@@ -388,23 +334,13 @@ func TestCollectInstances(t *testing.T) {
 
 	instances, err := collectInstances(func(token string) ([]*compute.Instance, string, error) {
 		page, ok := pages[token]
-		if !ok {
-			t.Fatalf("unexpected token %s", token)
-		}
+		require.True(t, ok, "unexpected token %s", token)
 
 		return page.items, page.next, nil
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(instances) != 2 {
-		t.Fatalf("expected 2 instances, got %d", len(instances))
-	}
-
-	if instances[1].Name != "inst-2" {
-		t.Fatalf("unexpected order: %#v", instances)
-	}
+	require.NoError(t, err)
+	require.Len(t, instances, 2)
+	require.Equal(t, "inst-2", instances[1].Name)
 }
 
 func TestCollectInstancesError(t *testing.T) {
@@ -413,9 +349,7 @@ func TestCollectInstancesError(t *testing.T) {
 	_, err := collectInstances(func(string) ([]*compute.Instance, string, error) {
 		return nil, "", sentinel
 	})
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("expected sentinel error, got %v", err)
-	}
+	require.ErrorIs(t, err, sentinel)
 }
 
 func TestCollectInstanceGroupManagers(t *testing.T) {
@@ -434,23 +368,14 @@ func TestCollectInstanceGroupManagers(t *testing.T) {
 
 	groups, err := collectInstanceGroupManagers(func(token string) ([]*compute.InstanceGroupManager, string, error) {
 		page, ok := pages[token]
-		if !ok {
-			t.Fatalf("unexpected token %s", token)
-		}
+		require.True(t, ok, "unexpected token %s", token)
 
 		return page.items, page.next, nil
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(groups) != 2 {
-		t.Fatalf("expected 2 groups, got %d", len(groups))
-	}
-
-	if groups[0].Name != "group-1" || groups[1].Name != "group-2" {
-		t.Fatalf("unexpected names: %#v", groups)
-	}
+	require.NoError(t, err)
+	require.Len(t, groups, 2)
+	require.Equal(t, "group-1", groups[0].Name)
+	require.Equal(t, "group-2", groups[1].Name)
 }
 
 func TestCollectInstanceGroupManagersError(t *testing.T) {
@@ -459,9 +384,7 @@ func TestCollectInstanceGroupManagersError(t *testing.T) {
 	_, err := collectInstanceGroupManagers(func(string) ([]*compute.InstanceGroupManager, string, error) {
 		return nil, "", sentinel
 	})
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("expected sentinel error, got %v", err)
-	}
+	require.ErrorIs(t, err, sentinel)
 }
 
 func TestCollectManagedInstances(t *testing.T) {
@@ -480,23 +403,13 @@ func TestCollectManagedInstances(t *testing.T) {
 
 	instances, err := collectManagedInstances(func(token string) ([]*compute.ManagedInstance, string, error) {
 		page, ok := pages[token]
-		if !ok {
-			t.Fatalf("unexpected token %s", token)
-		}
+		require.True(t, ok, "unexpected token %s", token)
 
 		return page.items, page.next, nil
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(instances) != 2 {
-		t.Fatalf("expected 2 instances, got %d", len(instances))
-	}
-
-	if instances[1].Instance != "instances/two" {
-		t.Fatalf("unexpected instance order: %#v", instances)
-	}
+	require.NoError(t, err)
+	require.Len(t, instances, 2)
+	require.Equal(t, "instances/two", instances[1].Instance)
 }
 
 func TestCollectManagedInstancesError(t *testing.T) {
@@ -505,9 +418,7 @@ func TestCollectManagedInstancesError(t *testing.T) {
 		return nil, "", sentinel
 	})
 
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("expected sentinel error, got %v", err)
-	}
+	require.ErrorIs(t, err, sentinel)
 }
 
 func TestCollectZones(t *testing.T) {
@@ -526,23 +437,13 @@ func TestCollectZones(t *testing.T) {
 
 	zones, err := collectZones(func(token string) ([]*compute.Zone, string, error) {
 		page, ok := pages[token]
-		if !ok {
-			t.Fatalf("unexpected token %s", token)
-		}
+		require.True(t, ok, "unexpected token %s", token)
 
 		return page.items, page.next, nil
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(zones) != 2 {
-		t.Fatalf("expected 2 zones, got %d", len(zones))
-	}
-
-	if zones[1].Name != "us-central1-b" {
-		t.Fatalf("unexpected zone order: %#v", zones)
-	}
+	require.NoError(t, err)
+	require.Len(t, zones, 2)
+	require.Equal(t, "us-central1-b", zones[1].Name)
 }
 
 func TestCollectZonesError(t *testing.T) {
@@ -551,17 +452,14 @@ func TestCollectZonesError(t *testing.T) {
 	_, err := collectZones(func(string) ([]*compute.Zone, string, error) {
 		return nil, "", sentinel
 	})
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("expected sentinel error, got %v", err)
-	}
+	require.ErrorIs(t, err, sentinel)
 }
 
 func TestGetDefaultProjectFromEnv(t *testing.T) {
 	t.Setenv("GOOGLE_CLOUD_PROJECT", "env-project")
 
-	if project := getDefaultProject(); project != "env-project" {
-		t.Fatalf("expected env-project, got %s", project)
-	}
+	project := getDefaultProject()
+	require.Equal(t, "env-project", project)
 }
 
 func TestGetDefaultProjectFromConfig(t *testing.T) {
@@ -571,20 +469,17 @@ func TestGetDefaultProjectFromConfig(t *testing.T) {
 	configDir := t.TempDir()
 
 	configPath := filepath.Join(configDir, "configurations")
-	if err := os.MkdirAll(configPath, 0o755); err != nil {
-		t.Fatalf("failed to create config path: %v", err)
-	}
+	err := os.MkdirAll(configPath, 0o755)
+	require.NoError(t, err)
 
 	content := "[core]\nproject = config-project\n"
-	if err := os.WriteFile(filepath.Join(configPath, "config_default"), []byte(content), 0o644); err != nil {
-		t.Fatalf("failed to write config: %v", err)
-	}
+	err = os.WriteFile(filepath.Join(configPath, "config_default"), []byte(content), 0o644)
+	require.NoError(t, err)
 
 	t.Setenv("CLOUDSDK_CONFIG", configDir)
 
-	if project := getDefaultProject(); project != "config-project" {
-		t.Fatalf("expected config-project, got %s", project)
-	}
+	project := getDefaultProject()
+	require.Equal(t, "config-project", project)
 }
 
 func TestGetDefaultProjectNoSource(t *testing.T) {
@@ -592,7 +487,6 @@ func TestGetDefaultProjectNoSource(t *testing.T) {
 	t.Setenv("CLOUDSDK_CORE_PROJECT", "")
 	t.Setenv("CLOUDSDK_CONFIG", t.TempDir())
 
-	if project := getDefaultProject(); project != "" {
-		t.Fatalf("expected empty project, got %s", project)
-	}
+	project := getDefaultProject()
+	require.Empty(t, project)
 }

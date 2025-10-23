@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 type stubRoundTripper struct {
@@ -31,17 +33,9 @@ func TestLoggingTransportSuccess(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodGet, "https://example.com/test", nil)
 
 	result, err := transport.RoundTrip(req)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if result != resp {
-		t.Fatalf("expected response to pass through")
-	}
-
-	if stub.req != req {
-		t.Fatalf("expected request to pass through")
-	}
+	require.NoError(t, err)
+	require.Same(t, resp, result)
+	require.Same(t, req, stub.req)
 }
 
 func TestLoggingTransportError(t *testing.T) {
@@ -52,16 +46,13 @@ func TestLoggingTransportError(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, "https://example.com/fail", nil)
 
 	_, err := transport.RoundTrip(req)
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("expected sentinel error, got %v", err)
-	}
+	require.ErrorIs(t, err, sentinel)
 }
 
 func TestAttachLoggingTransport(t *testing.T) {
 	client := &http.Client{}
 	attachLoggingTransport(client)
 
-	if _, ok := client.Transport.(loggingTransport); !ok {
-		t.Fatalf("expected loggingTransport to be attached")
-	}
+	_, ok := client.Transport.(loggingTransport)
+	require.True(t, ok)
 }

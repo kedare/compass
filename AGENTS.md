@@ -30,6 +30,7 @@
 - Use `task test-short` for quick feedback; rely on `task test` before merging connectivity or network features.
 - Track coverage trends with `task test-coverage-func`; flag drops below existing package baselines during review.
 - For network-dependent tests, guard with `testing.Short()` or dedicated build tags to keep CI deterministic.
+- Use github.com/stretchr/testify in the test to improve the developer experience.
 
 ## Commit & Pull Request Guidelines
 - Follow the concise, imperative style seen in history (`git commit -m "Improve connectivity tests"`); group logical changes per commit.

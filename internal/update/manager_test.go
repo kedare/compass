@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"runtime"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestAssetForCurrentPlatform verifies that the selector chooses the asset matching the runtime platform.
@@ -24,13 +26,8 @@ func TestAssetForCurrentPlatform(t *testing.T) {
 	}
 
 	asset, err := AssetForCurrentPlatform(release)
-	if err != nil {
-		t.Fatalf("AssetForCurrentPlatform returned error: %v", err)
-	}
-
-	if asset.Name != expectedName {
-		t.Fatalf("expected asset %q, got %q", expectedName, asset.Name)
-	}
+	require.NoError(t, err)
+	require.Equal(t, expectedName, asset.Name)
 }
 
 // TestAssetForCurrentPlatformErr ensures an error is returned when no matching asset is available.
@@ -42,9 +39,8 @@ func TestAssetForCurrentPlatformErr(t *testing.T) {
 		},
 	}
 
-	if _, err := AssetForCurrentPlatform(release); err == nil {
-		t.Fatalf("expected error when no matching asset is present")
-	}
+	_, err := AssetForCurrentPlatform(release)
+	require.Error(t, err)
 }
 
 // TestShouldUpdate covers the rules that decide whether an update should be applied.
@@ -67,9 +63,7 @@ func TestShouldUpdate(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := ShouldUpdate(tc.current, tc.latest)
-			if got != tc.expected {
-				t.Fatalf("ShouldUpdate(%q, %q) = %v, want %v", tc.current, tc.latest, got, tc.expected)
-			}
+			require.Equal(t, tc.expected, got)
 		})
 	}
 }

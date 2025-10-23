@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/kedare/compass/internal/cache"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPreferredProjectsForIP_UsesCachedSubnets(t *testing.T) {
@@ -15,9 +16,7 @@ func TestPreferredProjectsForIP_UsesCachedSubnets(t *testing.T) {
 	cache.SetEnabled(true)
 
 	c, err := cache.New()
-	if err != nil {
-		t.Fatalf("cache.New(): %v", err)
-	}
+	require.NoError(t, err)
 
 	origLoad := loadCacheFunc
 	defer func() { loadCacheFunc = origLoad }()
@@ -33,24 +32,18 @@ func TestPreferredProjectsForIP_UsesCachedSubnets(t *testing.T) {
 		PrimaryCIDR: "10.203.32.0/24",
 	}
 
-	if err := c.RememberSubnet(entry); err != nil {
-		t.Fatalf("RememberSubnet(): %v", err)
-	}
+	err = c.RememberSubnet(entry)
+	require.NoError(t, err)
 
 	ip := net.ParseIP("10.203.32.12")
-	if ip == nil {
-		t.Fatal("failed to parse IP")
-	}
+	require.NotNil(t, ip)
 
 	projects := preferredProjectsForIP(ip)
-	if len(projects) != 1 || projects[0] != "test-project" {
-		t.Fatalf("expected cached project, got %v", projects)
-	}
+	require.Len(t, projects, 1)
+	require.Equal(t, "test-project", projects[0])
 
 	cacheFile := filepath.Join(home, cache.CacheFileName)
-	if info, err := os.Stat(cacheFile); err != nil {
-		t.Fatalf("expected cache file saved: %v", err)
-	} else if info.IsDir() {
-		t.Fatalf("expected cache file, found directory: %s", cacheFile)
-	}
+	info, err := os.Stat(cacheFile)
+	require.NoError(t, err)
+	require.False(t, info.IsDir(), "expected cache file, found directory: %s", cacheFile)
 }
