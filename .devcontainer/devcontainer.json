@@ -1,119 +1,91 @@
 {
-  "name": "Compass Go Development",
-  "dockerComposeFile": "docker-compose.yml",
-  "service": "app",
-  "workspaceFolder": "/workspace",
-
-  // Configure tool-specific properties
-  "customizations": {
-    "vscode": {
-      // Extensions to install
-      "extensions": [
-        "golang.go",
-        "ms-vscode.makefile-tools",
-        "redhat.vscode-yaml",
-        "eamodio.gitlens",
-        "davidanson.vscode-markdownlint",
-        "github.vscode-pull-request-github",
-        "ms-azuretools.vscode-docker",
-        "visualstudioexptteam.vscodeintellicode",
-        "EditorConfig.EditorConfig"
-      ],
-
-      // Settings
-      "settings": {
-        "go.toolsManagement.checkForUpdates": "local",
-        "go.useLanguageServer": true,
-        "go.gopath": "/go",
-        "go.goroot": "/usr/local/go",
-        "go.lintTool": "golangci-lint",
-        "go.lintOnSave": "workspace",
-        "go.formatTool": "goimports",
-        "go.testFlags": ["-v", "-race"],
-        "go.coverOnSave": false,
-        "go.coverOnSingleTest": true,
-        "go.coverOnSingleTestFile": true,
-        "go.coverOnTestPackage": true,
-        "go.coverageDecorator": {
-          "type": "gutter",
-          "coveredHighlightColor": "rgba(64,128,64,0.5)",
-          "uncoveredHighlightColor": "rgba(128,64,64,0.5)",
-          "coveredGutterStyle": "blockgreen",
-          "uncoveredGutterStyle": "blockred"
+    // See https://containers.dev/implementors/json_reference/
+    // User defined settings
+    "containerEnv": {
+        "TZ": ""
+    },
+    // Fixed settings
+    "name": "project-dev",
+    "postCreateCommand": "~/.windows.sh && go mod download && go mod tidy",
+    "dockerComposeFile": "docker-compose.yml",
+    "overrideCommand": true,
+    "service": "vscode",
+    "workspaceFolder": "/workspace",
+    "mounts": [
+        // Source code
+        {
+            "source": "../",
+            "target": "/workspace",
+            "type": "bind"
         },
-        "terminal.integrated.defaultProfile.linux": "zsh",
-        "terminal.integrated.profiles.linux": {
-          "zsh": {
-            "path": "/bin/zsh"
-          }
+        // Zsh commands history persistence
+        {
+            "source": "${localEnv:HOME}/.zsh_history",
+            "target": "/root/.zsh_history",
+            "type": "bind"
+        },
+        // Git configuration file
+        {
+            "source": "${localEnv:HOME}/.gitconfig",
+            "target": "/root/.gitconfig",
+            "type": "bind"
+        },
+        // SSH directory for Linux, OSX and WSL
+        // On Linux and OSX, a symlink /mnt/ssh <-> ~/.ssh is
+        // created in the container. On Windows, files are copied
+        // from /mnt/ssh to ~/.ssh to fix permissions.
+        {
+            "source": "${localEnv:HOME}/.ssh",
+            "target": "/mnt/ssh",
+            "type": "bind"
+        },
+        // Docker socket to access the host Docker server
+        {
+            "source": "/var/run/docker.sock",
+            "target": "/var/run/docker.sock",
+            "type": "bind"
         }
-      }
+    ],
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "files.eol": "\n",
+                "editor.formatOnSave": true,
+                "go.buildTags": "",
+                "go.toolsEnvVars": {
+                    "CGO_ENABLED": "0"
+                },
+                "go.useLanguageServer": true,
+                "go.testEnvVars": {
+                    "CGO_ENABLED": "1"
+                },
+                "go.testFlags": [
+                    "-v",
+                    "-race"
+                ],
+                "go.testTimeout": "10s",
+                "go.coverOnSingleTest": true,
+                "go.coverOnSingleTestFile": true,
+                "go.coverOnTestPackage": true,
+                "go.lintTool": "golangci-lint",
+                "go.lintOnSave": "package",
+                "[go]": {
+                    "editor.codeActionsOnSave": {
+                        "source.organizeImports": "always"
+                    }
+                },
+                "gopls": {
+                    "usePlaceholders": false,
+                    "staticcheck": true,
+                    "ui.diagnostic.analyses": {
+                        "ST1000": false
+                    },
+                    "formatting.gofumpt": true
+                },
+                "remote.extensionKind": {
+                    "ms-azuretools.vscode-docker": "workspace"
+                }
+            }
+        }
     }
-  },
-
-  // Features to add to the dev container
-  "features": {
-    "ghcr.io/devcontainers/features/common-utils:2": {
-      "installZsh": true,
-      "installOhMyZsh": true,
-      "upgradePackages": true,
-      "username": "vscode",
-      "userUid": "1000",
-      "userGid": "1000"
-    },
-    "ghcr.io/devcontainers/features/git:1": {
-      "version": "latest",
-      "ppa": false
-    },
-    "ghcr.io/devcontainers/features/github-cli:1": {
-      "version": "latest"
-    },
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {
-      "version": "latest",
-      "moby": true,
-      "dockerDashComposeVersion": "v2"
-    }
-  },
-
-  // Use 'forwardPorts' to make a list of ports inside the container available locally
-  "forwardPorts": [],
-
-  // Use 'postCreateCommand' to run commands after the container is created
-  "postCreateCommand": "bash .devcontainer/post-create.sh",
-
-  // Configure tool-specific properties
-  "remoteEnv": {
-    "GO111MODULE": "on",
-    "GOPROXY": "https://proxy.golang.org,direct",
-    "GOSUMDB": "sum.golang.org",
-    "CGO_ENABLED": "1"
-  },
-
-  // Comment out to connect as root instead. More info: https://aka.ms/vscode-remote/containers/non-root
-  "remoteUser": "vscode",
-
-  // Mount points for better performance and persistence
-  "mounts": [
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/vscode/.ssh,readonly,type=bind,consistency=cached",
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gitconfig,target=/home/vscode/.gitconfig,readonly,type=bind,consistency=cached",
-    "source=compass-go-pkg,target=/go/pkg,type=volume",
-    "source=compass-go-cache,target=/home/vscode/.cache/go-build,type=volume"
-  ],
-
-  // Enable ptrace-based features like debuggers
-  "capAdd": [
-    "SYS_PTRACE"
-  ],
-  "securityOpt": [
-    "seccomp=unconfined"
-  ],
-
-  // Uncomment to use the Docker socket from your local machine
-  // "mounts": ["source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"],
-
-  // Lifecycle scripts
-  "initializeCommand": "echo 'Initializing devcontainer...'",
-  "onCreateCommand": "echo 'Container created'",
-  "updateContentCommand": "go mod download",
-  "postAttachCommand": "git config --global --add safe.directory /workspace"
 }
