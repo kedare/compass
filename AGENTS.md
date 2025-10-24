@@ -21,7 +21,7 @@
 - Lint locally with `golangci-lint run ./...`; prefer fixing warnings rather than suppressing them.
 - Package names stay lower_snake (`internal/output`); exported symbols use PascalCase and include doc comments when non-obvious.
 - CLI command files follow `connectivity_<verb>.go`; keep Cobra command names kebab-case (e.g., `connectivity-test`).
-- Make sure ALL declared functions and type have a proper up to date godoc declared, keep them updated
+- Make sure ALL declared functions and types have a proper up to date godoc declared, keep them updated (including private ones)
 - Maintain the README.md updated with all new changes of interface and details about the inner working.
 - All terminal related rendering and UI should be done (when possible) using features from `github.com/pterm/pterm`, incluiding logging.
 

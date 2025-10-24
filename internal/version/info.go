@@ -44,10 +44,12 @@ func Get() Info {
 	}
 }
 
+// fallback returns the trimmed value or the provided default when the value is empty.
 func fallback(value, defaultValue string) string {
-	if strings.TrimSpace(value) == "" {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
 		return defaultValue
 	}
 
-	return value
+	return trimmed
 }

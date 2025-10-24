@@ -18,6 +18,7 @@ vars:
     sh: hostname 2>/dev/null || echo "unknown"
   BUILD_ARCH:
     sh: echo "$(go env GOOS)/$(go env GOARCH)"
+  COVERAGE_MIN: "75"
 
 tasks:
   default:
@@ -107,6 +108,17 @@ tasks:
       - go test -v -coverprofile=coverage.out ./...
       - go tool cover -func=coverage.out
 
+  test-coverage-threshold:
+    desc: Run tests with coverage and fail if total coverage < 75%
+    cmds:
+      - go test -v -coverprofile=coverage.out ./...
+      - |
+        total=$(go tool cover -func=coverage.out | awk '/^total:/ {print substr($3, 1, length($3)-1)}')
+        echo "Total coverage: ${total}%"
+        if awk "BEGIN {exit !(${total} < {{.COVERAGE_MIN}})}"; then
+          echo "Coverage below required threshold ({{.COVERAGE_MIN}}%)." >&2
+          exit 1
+        fi
   test-race:
     desc: Run tests with race detector
     cmds:

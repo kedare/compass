@@ -64,3 +64,5 @@ coverage.out
 .gomodcache/
 .cache/
 vendor/
+coverage.html
+coverage.out
