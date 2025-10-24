@@ -490,3 +490,104 @@ func TestGetDefaultProjectNoSource(t *testing.T) {
 	project := getDefaultProject()
 	require.Empty(t, project)
 }
+
+func TestFormatProgressKey(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "trims whitespace",
+			input:    "  region:us-central1  ",
+			expected: "region:us-central1",
+		},
+		{
+			name:     "extracts first token",
+			input:    "aggregate results pending",
+			expected: "aggregate",
+		},
+		{
+			name:     "empty string",
+			input:    "   ",
+			expected: "",
+		},
+		{
+			name:     "single word",
+			input:    "scope:zone",
+			expected: "scope:zone",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			require.Equal(t, tt.expected, FormatProgressKey(tt.input))
+		})
+	}
+}
+
+func TestProgressHelpers(t *testing.T) {
+	t.Parallel()
+
+	t.Run("captures update success and failure", func(t *testing.T) {
+		var events []ProgressEvent
+		cb := func(evt ProgressEvent) {
+			events = append(events, evt)
+		}
+
+		progressUpdate(cb, "task", "working")
+		progressSuccess(cb, "task", "done")
+
+		sentinel := errors.New("boom")
+		progressFailure(cb, "task", "failed", sentinel)
+
+		require.Len(t, events, 3)
+
+		checkEvent := func(evt ProgressEvent) {
+			if evt.Info {
+				require.NoError(t, evt.Err, "informational events must not include errors")
+			}
+		}
+
+		require.Equal(t, ProgressEvent{Key: "task", Message: "working"}, events[0])
+		require.False(t, events[0].Info)
+		checkEvent(events[0])
+
+		require.Equal(t, ProgressEvent{
+			Key:     "task",
+			Message: "done",
+			Done:    true,
+		}, events[1])
+		require.False(t, events[1].Info)
+		checkEvent(events[1])
+
+		require.Equal(t, ProgressEvent{
+			Key:     "task",
+			Message: "failed",
+			Err:     sentinel,
+			Done:    true,
+		}, events[2])
+		require.False(t, events[2].Info)
+		require.ErrorIs(t, events[2].Err, sentinel)
+		checkEvent(events[2])
+	})
+
+	t.Run("nil callback does nothing", func(t *testing.T) {
+		require.NotPanics(t, func() {
+			progressUpdate(nil, "key", "message")
+			progressSuccess(nil, "key", "message")
+			progressFailure(nil, "key", "message", errors.New("ignored"))
+		})
+	})
+
+	t.Run("informational events must not carry errors", func(t *testing.T) {
+		event := ProgressEvent{Key: "info", Message: "done", Done: true, Info: true}
+		require.True(t, event.Info)
+		require.NoError(t, event.Err)
+	})
+}

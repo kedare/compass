@@ -7,12 +7,120 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kedare/compass/internal/cache"
 	"github.com/kedare/compass/internal/gcp"
 	"github.com/spf13/cobra"
 )
 
+// connectivityClient exposes the subset of the connectivity API required for shell completions.
+type connectivityClient interface {
+	ListTests(ctx context.Context, filter string) ([]*gcp.ConnectivityTestResult, error)
+}
+
+// computeClient exposes the subset of compute discovery calls used by completions.
+type computeClient interface {
+	ListInstances(ctx context.Context, zone string) ([]*gcp.Instance, error)
+	ListManagedInstanceGroups(ctx context.Context, location string) ([]gcp.ManagedInstanceGroup, error)
+	ListZones(ctx context.Context) ([]string, error)
+	ListRegions(ctx context.Context) ([]string, error)
+}
+
+// completionCache provides the minimal cache operations needed for completions.
+type completionCache interface {
+	GetProjects() []string
+	GetLocationsByProject(project string) ([]cache.CachedLocation, bool)
+}
+
+// completionCacheWrapper adapts the real cache to the completionCache interface.
+type completionCacheWrapper struct {
+	cache *cache.Cache
+}
+
+// GetProjects returns cached project identifiers.
+func (w *completionCacheWrapper) GetProjects() []string {
+	if w == nil || w.cache == nil {
+		return nil
+	}
+
+	return w.cache.GetProjects()
+}
+
+// GetLocationsByProject returns cached locations for the given project.
+func (w *completionCacheWrapper) GetLocationsByProject(project string) ([]cache.CachedLocation, bool) {
+	if w == nil || w.cache == nil {
+		return nil, false
+	}
+
+	return w.cache.GetLocationsByProject(project)
+}
+
+var (
+	newConnectivityClientFunc = func(ctx context.Context, projectID string) (connectivityClient, error) {
+		return gcp.NewConnectivityClient(ctx, projectID)
+	}
+	newComputeClientFunc = func(ctx context.Context, projectID string) (computeClient, error) {
+		return gcp.NewClient(ctx, projectID)
+	}
+	loadCompletionCache = func() (completionCache, error) {
+		c, err := gcp.LoadCache()
+		if err != nil {
+			return nil, err
+		}
+
+		return &completionCacheWrapper{cache: c}, nil
+	}
+)
+
+// gcpConnectivityTestNameCompletion returns connectivity test names matching the provided prefix.
+func gcpConnectivityTestNameCompletion(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if len(args) > 0 {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+
+	// Respect any project flag value provided in the current completion request.
+	projectID, err := cmd.Flags().GetString("project")
+	if err != nil {
+		projectID = ""
+	}
+
+	if projectID == "" {
+		projectID = project
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := newConnectivityClientFunc(ctx, projectID)
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+
+	tests, err := client.ListTests(ctx, "")
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+
+	completions := make([]string, 0, len(tests))
+
+	for _, test := range tests {
+		if toComplete != "" && !strings.HasPrefix(test.Name, toComplete) {
+			continue
+		}
+
+		entry := test.Name
+		if test.DisplayName != "" && test.DisplayName != test.Name {
+			entry = fmt.Sprintf("%s\t%s", test.Name, test.DisplayName)
+		}
+
+		completions = append(completions, entry)
+	}
+
+	return completions, cobra.ShellCompDirectiveNoFileComp
+}
+
+// gcpProjectCompletion completes GCP project IDs using cached history and the active flag.
 func gcpProjectCompletion(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-	cache, err := gcp.LoadCache()
+	cache, err := loadCompletionCache()
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
@@ -48,6 +156,7 @@ func gcpProjectCompletion(cmd *cobra.Command, args []string, toComplete string) 
 	return completions, cobra.ShellCompDirectiveNoFileComp
 }
 
+// gcpSSHCompletion returns instance or managed instance group names for SSH command completion.
 func gcpSSHCompletion(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 	if len(args) > 0 {
 		return nil, cobra.ShellCompDirectiveNoFileComp
@@ -76,11 +185,11 @@ func gcpSSHCompletion(cmd *cobra.Command, args []string, toComplete string) ([]s
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	var client *gcp.Client
+	var client computeClient
 	var err error
 
 	if !noProjectOrZone {
-		client, err = gcp.NewClient(ctx, projectID)
+		client, err = newComputeClientFunc(ctx, projectID)
 		if err != nil {
 			return nil, cobra.ShellCompDirectiveNoFileComp
 		}
@@ -91,7 +200,7 @@ func gcpSSHCompletion(cmd *cobra.Command, args []string, toComplete string) ([]s
 	seen := make(map[string]struct{})
 
 	if noProjectOrZone {
-		cache, err := gcp.LoadCache()
+		cache, err := loadCompletionCache()
 		if err != nil {
 			return nil, cobra.ShellCompDirectiveNoFileComp
 		}
@@ -121,7 +230,7 @@ func gcpSSHCompletion(cmd *cobra.Command, args []string, toComplete string) ([]s
 		return completions, cobra.ShellCompDirectiveNoFileComp
 	}
 
-	if includeInstances {
+	if includeInstances && client != nil {
 		if instances, err := client.ListInstances(ctx, zoneFilter); err == nil {
 			for _, inst := range instances {
 				if inst == nil {
@@ -147,7 +256,7 @@ func gcpSSHCompletion(cmd *cobra.Command, args []string, toComplete string) ([]s
 		}
 	}
 
-	if includeMIGs {
+	if includeMIGs && client != nil {
 		var groups []gcp.ManagedInstanceGroup
 
 		for _, location := range migCompletionLocations(zoneFilter) {
@@ -181,6 +290,7 @@ func gcpSSHCompletion(cmd *cobra.Command, args []string, toComplete string) ([]s
 	return completions, cobra.ShellCompDirectiveNoFileComp
 }
 
+// gcpSSHZoneCompletion returns zone and region suggestions for the SSH command.
 func gcpSSHZoneCompletion(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 	projectID := readStringFlag(cmd, "project")
 	if projectID == "" {
@@ -190,7 +300,7 @@ func gcpSSHZoneCompletion(cmd *cobra.Command, args []string, toComplete string) 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	client, err := gcp.NewClient(ctx, projectID)
+	client, err := newComputeClientFunc(ctx, projectID)
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
@@ -258,6 +368,7 @@ func gcpSSHZoneCompletion(cmd *cobra.Command, args []string, toComplete string) 
 	return completions, cobra.ShellCompDirectiveNoFileComp
 }
 
+// readStringFlag returns the string value for the given flag, scanning inherited flags as needed.
 func readStringFlag(cmd *cobra.Command, name string) string {
 	if cmd == nil {
 		return ""
@@ -274,6 +385,7 @@ func readStringFlag(cmd *cobra.Command, name string) string {
 	return ""
 }
 
+// migCompletionLocations returns candidate locations for managed instance group searches.
 func migCompletionLocations(zone string) []string {
 	if zone == "" {
 		return []string{""}
@@ -290,12 +402,14 @@ func migCompletionLocations(zone string) []string {
 	return deduplicateStrings(locations)
 }
 
+// zoneLooksLikeZone reports whether the provided value resembles a zone identifier.
 func zoneLooksLikeZone(value string) bool {
 	parts := strings.Split(value, "-")
 
 	return len(parts) >= 3 && len(parts[len(parts)-1]) == 1
 }
 
+// regionFromZone converts a zone identifier into its parent region where applicable.
 func regionFromZone(zone string) string {
 	parts := strings.Split(zone, "-")
 	if len(parts) < 3 {
@@ -305,6 +419,7 @@ func regionFromZone(zone string) string {
 	return strings.Join(parts[:len(parts)-1], "-")
 }
 
+// deduplicateStrings removes duplicate strings while preserving their first occurrence order.
 func deduplicateStrings(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
 	result := make([]string, 0, len(values))

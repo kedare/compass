@@ -15,6 +15,7 @@ import (
 	"golang.org/x/term"
 )
 
+// detectTerminalWidth returns the width of the current terminal when available.
 func detectTerminalWidth() (int, bool) {
 	if raw, ok := os.LookupEnv("COLUMNS"); ok {
 		if width, err := strconv.Atoi(raw); err == nil && width > 0 {
@@ -30,6 +31,7 @@ func detectTerminalWidth() (int, bool) {
 }
 
 // DisplayConnectivityTestResult formats and displays a connectivity test result.
+// DisplayConnectivityTestResult renders a single connectivity test in the requested format.
 func DisplayConnectivityTestResult(result *gcp.ConnectivityTestResult, format string) error {
 	switch format {
 	case "json":
@@ -42,6 +44,7 @@ func DisplayConnectivityTestResult(result *gcp.ConnectivityTestResult, format st
 }
 
 // DisplayConnectivityTestList formats and displays a list of connectivity tests.
+// DisplayConnectivityTestList renders multiple connectivity tests in the requested format.
 func DisplayConnectivityTestList(results []*gcp.ConnectivityTestResult, format string) error {
 	switch format {
 	case "json":
@@ -53,6 +56,7 @@ func DisplayConnectivityTestList(results []*gcp.ConnectivityTestResult, format s
 	}
 }
 
+// connectivityStatus summarises the forward and return reachability information for a test.
 type connectivityStatus struct {
 	forwardStatus    string
 	returnStatus     string
@@ -62,6 +66,7 @@ type connectivityStatus struct {
 	returnReachable  bool
 }
 
+// evaluateConnectivityStatus normalises reachability results into a compact summary.
 func evaluateConnectivityStatus(result *gcp.ConnectivityTestResult) connectivityStatus {
 	status := connectivityStatus{
 		forwardStatus: normalizeStatusLabel(""),
@@ -90,6 +95,7 @@ func evaluateConnectivityStatus(result *gcp.ConnectivityTestResult) connectivity
 	return status
 }
 
+// normalizeStatusLabel standardises raw reachability labels to upper-case tokens.
 func normalizeStatusLabel(raw string) string {
 	value := strings.TrimSpace(raw)
 	if value == "" {
@@ -102,6 +108,7 @@ func normalizeStatusLabel(raw string) string {
 	return upper
 }
 
+// isStatusReachable reports whether the status value indicates success.
 func isStatusReachable(status string) bool {
 	if status == "" {
 		return false
@@ -120,6 +127,7 @@ func isStatusReachable(status string) bool {
 	return strings.Contains(upper, "REACHABLE")
 }
 
+// formatSingleStatus renders the provided status string with optional colouring.
 func formatSingleStatus(status string, reachable bool, colorize bool) string {
 	display := status
 	if strings.TrimSpace(display) == "" {
@@ -146,10 +154,12 @@ func formatSingleStatus(status string, reachable bool, colorize bool) string {
 	return pterm.NewStyle(pterm.Bold, pterm.FgRed).Sprint(display)
 }
 
+// formatForwardStatus renders the forward path status for display.
 func formatForwardStatus(status connectivityStatus, colorize bool) string {
 	return formatSingleStatus(status.forwardStatus, status.forwardReachable, colorize)
 }
 
+// formatReturnStatus renders the return path status for display.
 func formatReturnStatus(status connectivityStatus, colorize bool) string {
 	if !status.hasReturn {
 		return formatSingleStatus("N/A", false, colorize)
@@ -159,6 +169,7 @@ func formatReturnStatus(status connectivityStatus, colorize bool) string {
 }
 
 // displayText displays a connectivity test result in human-readable format.
+// displayText prints a human readable summary of a connectivity test.
 func displayText(result *gcp.ConnectivityTestResult) error {
 	statusInfo := evaluateConnectivityStatus(result)
 
@@ -238,6 +249,7 @@ func displayText(result *gcp.ConnectivityTestResult) error {
 }
 
 // displayDetailed displays a connectivity test with full details.
+// displayDetailed prints the summary plus metadata such as timestamps and descriptions.
 func displayDetailed(result *gcp.ConnectivityTestResult) error {
 	if err := displayText(result); err != nil {
 		return err
@@ -266,6 +278,7 @@ func displayDetailed(result *gcp.ConnectivityTestResult) error {
 }
 
 // displayJSON displays result as JSON.
+// displayJSON pretty-prints connectivity data as JSON.
 func displayJSON(data interface{}) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
@@ -274,6 +287,7 @@ func displayJSON(data interface{}) error {
 }
 
 // displayListText displays a list of tests in text format.
+// displayListText prints multiple connectivity tests in a compact text format.
 func displayListText(results []*gcp.ConnectivityTestResult) error {
 	if len(results) == 0 {
 		fmt.Println("No connectivity tests found")
@@ -310,6 +324,7 @@ func displayListText(results []*gcp.ConnectivityTestResult) error {
 }
 
 // displayTable displays results in table format.
+// displayTable prints connectivity tests as a fixed-width table.
 func displayTable(results []*gcp.ConnectivityTestResult) error {
 	if len(results) == 0 {
 		fmt.Println("No connectivity tests found")
@@ -378,6 +393,7 @@ func displayTable(results []*gcp.ConnectivityTestResult) error {
 }
 
 // displayForwardAndReturnPaths displays forward and return traces, pairing them when possible.
+// displayForwardAndReturnPaths renders paired forward and return traces when available.
 func displayForwardAndReturnPaths(forwardTraces []*gcp.Trace, returnTraces []*gcp.Trace, isReachable bool) {
 	pairs := len(forwardTraces)
 	if len(returnTraces) < pairs {
@@ -468,8 +484,7 @@ func displayForwardAndReturnPaths(forwardTraces []*gcp.Trace, returnTraces []*gc
 	}
 }
 
-// displayForwardAndReturnSideBySide displays forward and return traces in two columns.
-
+// renderCombinedTrace builds a formatted string showing forward and return paths side by side.
 func renderCombinedTrace(forward, backward *gcp.Trace, index, total int) string {
 	if forward == nil || backward == nil {
 		return ""
@@ -517,6 +532,7 @@ func renderCombinedTrace(forward, backward *gcp.Trace, index, total int) string 
 	return builder.String()
 }
 
+// traceStepCells produces the rendered columns for a trace step.
 func traceStepCells(trace *gcp.Trace, index int) [5]string {
 	if trace == nil || index >= len(trace.Steps) {
 		return [5]string{"", "", "", "", ""}
@@ -538,12 +554,17 @@ func traceStepCells(trace *gcp.Trace, index int) [5]string {
 	return [5]string{stepNum, getStepIcon(index, len(trace.Steps), step.CausesDrop), stepType, resource, status}
 }
 
+// fitsTerminalWidth reports whether the rendered block fits within the current terminal width.
 func fitsTerminalWidth(block string) bool {
 	width, ok := detectTerminalWidth()
-	if !ok {
+	return fitsTerminalWidthWithLimit(block, width, ok)
+}
+
+// fitsTerminalWidthWithLimit reports whether the rendered block fits within the provided width.
+func fitsTerminalWidthWithLimit(block string, width int, limitKnown bool) bool {
+	if !limitKnown {
 		return true
 	}
-
 	maxWidth := 0
 
 	for _, line := range strings.Split(block, "\n") {
@@ -560,6 +581,7 @@ func fitsTerminalWidth(block string) bool {
 }
 
 // displaySingleTrace displays a single trace with a title.
+// displaySingleTrace prints a single trace using an indented table.
 func displaySingleTrace(trace *gcp.Trace, title string) {
 	fmt.Println("    " + pterm.NewStyle(pterm.Bold).Sprint(title))
 
@@ -599,10 +621,12 @@ func displaySingleTrace(trace *gcp.Trace, title string) {
 
 // padRight pads a string to the right with spaces, accounting for ANSI color codes.
 
+// visibleWidth returns the printable width of the string without ANSI codes.
 func visibleWidth(s string) int {
 	return runewidth.StringWidth(stripAnsiCodes(s))
 }
 
+// padRight pads a string with spaces on the right up to the desired width.
 func padRight(s string, width int) string {
 	current := visibleWidth(s)
 	if current >= width {
@@ -612,6 +636,7 @@ func padRight(s string, width int) string {
 	return s + strings.Repeat(" ", width-current)
 }
 
+// padRightWithPlain pads using the plain (non-colourised) variant to preserve alignment.
 func padRightWithPlain(display, plain string, width int) string {
 	plainWidth := runewidth.StringWidth(plain)
 	if plainWidth >= width {
@@ -622,6 +647,7 @@ func padRightWithPlain(display, plain string, width int) string {
 }
 
 // stripAnsiCodes removes ANSI escape codes from a string for length calculation.
+// stripAnsiCodes removes ANSI escape sequences from a string.
 func stripAnsiCodes(s string) string {
 	// Simple regex to strip ANSI codes: \x1b\[[0-9;]*m
 	result := ""
@@ -649,6 +675,7 @@ func stripAnsiCodes(s string) string {
 }
 
 // getStepIcon returns the appropriate icon for a step based on its position and status.
+// getStepIcon returns the icon representing a trace step's position and outcome.
 func getStepIcon(index, total int, causesDrop bool) string {
 	if causesDrop {
 		return "✗"
@@ -666,6 +693,7 @@ func getStepIcon(index, total int, causesDrop bool) string {
 }
 
 // formatTraceStepForTable formats a trace step for table display, returning type, resource, and status.
+// formatTraceStepForTable converts a trace step into a tuple suitable for table display.
 func formatTraceStepForTable(step *gcp.TraceStep) (stepType string, resource string, status string) {
 	if step.Instance != "" {
 		return "VM Instance", extractResourceName(step.Instance), "OK"
@@ -699,6 +727,7 @@ func formatTraceStepForTable(step *gcp.TraceStep) (stepType string, resource str
 }
 
 // displaySuggestedFixes displays suggested fixes for failed tests.
+// displaySuggestedFixes prints actionable hints based on failed reachability traces.
 func displaySuggestedFixes(result *gcp.ConnectivityTestResult, status connectivityStatus) {
 	if result == nil || status.overall {
 		return
@@ -715,6 +744,7 @@ func displaySuggestedFixes(result *gcp.ConnectivityTestResult, status connectivi
 	}
 }
 
+// displaySuggestedFixesForDetails inspects detailed traces and emits a fix suggestion if possible.
 func displaySuggestedFixesForDetails(result *gcp.ConnectivityTestResult, details *gcp.ReachabilityDetails, reverse bool) bool {
 	if details == nil || len(details.Traces) == 0 {
 		return false
@@ -769,6 +799,7 @@ func displaySuggestedFixesForDetails(result *gcp.ConnectivityTestResult, details
 }
 
 // formatEndpoint formats an endpoint for display.
+// formatEndpoint returns a short human readable description of an endpoint.
 func formatEndpoint(endpoint *gcp.EndpointInfo, includePort bool) string {
 	if endpoint == nil {
 		return "N/A"
@@ -806,6 +837,7 @@ func formatEndpoint(endpoint *gcp.EndpointInfo, includePort bool) string {
 }
 
 // extractResourceName extracts the resource name from a full resource path.
+// extractResourceName returns the trailing segment of a resource URL or identifier.
 func extractResourceName(resourcePath string) string {
 	parts := strings.Split(resourcePath, "/")
 	if len(parts) > 0 {
@@ -816,6 +848,7 @@ func extractResourceName(resourcePath string) string {
 }
 
 // truncate truncates a string to maxLen characters.
+// truncate shortens strings longer than maxLen using an ellipsis when necessary.
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s

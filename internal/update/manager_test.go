@@ -35,7 +35,7 @@ func TestAssetForCurrentPlatformErr(t *testing.T) {
 	release := &Release{
 		TagName: "v1.2.3",
 		Assets: []Asset{
-			{Name: "compass-linux-arm64"},
+			{Name: "compass-unknown-arm64"},
 		},
 	}
 
