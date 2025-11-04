@@ -481,13 +481,71 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 				return nil
 			}
 			if event.Rune() == '?' {
-				// Show help
-				status.SetText(" [green]s[-] SSH  [green]d[-] details  [green]r[-] refresh  [green]/[-] filter  [green]Esc[-] clear filter or quit  [green]q/Ctrl+C[-] quit")
-				time.AfterFunc(5*time.Second, func() {
-					app.QueueUpdateDraw(func() {
-						status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
-					})
+				// Show help overlay
+				helpText := `[yellow::b]Compass TUI - Keyboard Shortcuts[-:-:-]
+
+[yellow]Navigation[-]
+  [white]↑/k[-]           Move selection up
+  [white]↓/j[-]           Move selection down
+  [white]Home/g[-]        Jump to first item
+  [white]End/G[-]         Jump to last item
+  [white]PgUp[-]          Page up
+  [white]PgDn[-]          Page down
+
+[yellow]Instance Actions[-]
+  [white]s[-]             SSH to selected instance
+  [white]d[-]             Show instance details
+  [white]r[-]             Refresh instance data from GCP
+
+[yellow]Filtering[-]
+  [white]/[-]             Enter filter mode
+  [white]Enter[-]         Apply filter (in filter mode)
+  [white]Esc[-]           Cancel/clear filter, or quit TUI
+
+[yellow]General[-]
+  [white]?[-]             Show this help
+  [white]q[-]             Quit
+  [white]Ctrl+C[-]        Quit
+  [white]Esc[-]           Close modals, clear filter, or quit
+
+[darkgray]Press Esc or ? to close this help[-]`
+
+				helpView := tview.NewTextView().
+					SetDynamicColors(true).
+					SetText(helpText).
+					SetScrollable(true)
+				helpView.SetBorder(true).
+					SetTitle(" Help - Keyboard Shortcuts ").
+					SetTitleAlign(tview.AlignCenter)
+
+				// Create help modal with fixed size
+				helpModal := tview.NewFlex().
+					AddItem(nil, 0, 1, false).
+					AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+						AddItem(nil, 0, 1, false).
+						AddItem(helpView, 28, 0, true).
+						AddItem(nil, 0, 1, false), 70, 0, true).
+					AddItem(nil, 0, 1, false)
+
+				// Create pages for help modal
+				helpPages := tview.NewPages().
+					AddPage("main", flex, true, true).
+					AddPage("help", helpModal, true, true)
+
+				// Set up help modal input handler
+				helpView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+					if event.Key() == tcell.KeyEscape || (event.Key() == tcell.KeyRune && event.Rune() == '?') {
+						helpPages.RemovePage("help")
+						app.SetRoot(flex, true)
+						app.SetFocus(table)
+						modalOpen = false
+						return nil
+					}
+					return event
 				})
+
+				modalOpen = true
+				app.SetRoot(helpPages, true).SetFocus(helpView)
 				return nil
 			}
 			if event.Rune() == 'q' {

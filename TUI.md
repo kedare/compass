@@ -5,14 +5,14 @@ Implement a k9s-style keyboard-driven TUI interface for compass, accessible via 
 
 ---
 
-## ✅ Current Status: Phase 2 Complete
+## ✅ Current Status: Phase 3 Complete
 
-### What's Working Now (v0.2 - Enhanced Instance Management)
+### What's Working Now (v0.3 - Help System)
 - ✅ Basic TUI launches successfully via `compass interactive`
 - ✅ Displays instances from cache in a table format
 - ✅ Keyboard navigation (arrow keys, vim-style j/k)
 - ✅ Clean display without log interference
-- ✅ Proper Ctrl+C and 'q' quit handling
+- ✅ Proper Ctrl+C, 'q', and ESC quit handling
 - ✅ Mouse support enabled
 - ✅ Status bar with dynamic keyboard hints
 - ✅ Loads cached instances from all projects
@@ -21,6 +21,8 @@ Implement a k9s-style keyboard-driven TUI interface for compass, accessible via 
 - ✅ SSH connection with 's' key (auto-detects IAP)
 - ✅ Background refresh with 'r' key
 - ✅ Instance detail modal with 'd' key
+- ✅ Comprehensive help overlay with '?' key
+- ✅ Smart ESC handling (closes modals, clears filter, or quits)
 
 ### Known Issues Fixed
 - ❌ **Complex App architecture caused hang** - The original PageStack/Component lifecycle was causing a deadlock
@@ -118,19 +120,24 @@ cmd/
 
 ---
 
-### Phase 3: Help System 📋 TODO
+### Phase 3: Help System ✅ COMPLETED
 **Goal**: Provide keyboard shortcut reference
 
-**Features to Add**:
-- [ ] Help overlay (press `?`)
-- [ ] Show all keyboard shortcuts
-- [ ] Context-sensitive help per view
-- [ ] Dismiss with Esc or ?
+**Features Implemented**:
+- [x] Help overlay (press `?`)
+- [x] Show all keyboard shortcuts in organized sections
+- [x] Scrollable help view for long content
+- [x] Dismiss with Esc or `?` (toggle behavior)
+- [x] Modal uses fixed size (70 columns x 28 rows)
+- [x] Integrates with modalOpen flag for proper ESC handling
 
-**Implementation**:
-- Modal overlay with TextView
-- Dynamic content based on current view
-- Scrollable if content is long
+**Implementation Details**:
+- Modal overlay with TextView using tview.Pages
+- Organized shortcuts into sections: Navigation, Instance Actions, Filtering, General
+- Color-coded text (yellow headers, white keys, darkgray footer)
+- Centered modal with flexible margins
+- Sets modalOpen flag to prevent ESC from quitting while help is shown
+- Help can be toggled on/off with '?' key
 
 ---
 
