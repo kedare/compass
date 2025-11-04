@@ -1,8 +1,12 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/kedare/compass/internal/cache"
@@ -12,42 +16,80 @@ import (
 
 // instanceData holds information about an instance for filtering
 type instanceData struct {
-	Name     string
-	Project  string
-	Zone     string
-	Status   string
+	Name       string
+	Project    string
+	Zone       string
+	Status     string
+	ExternalIP string
+	InternalIP string
 	SearchText string // Combined text for fuzzy search
+	CanUseIAP  bool
 }
 
 // RunDirect runs a minimal TUI without the full app structure
 func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 	app := tview.NewApplication()
+	ctx := context.Background()
 
 	// Store all instances for filtering
 	var allInstances []instanceData
+	var isRefreshing bool
+	var modalOpen bool
 
-	// Load instances from cache
-	projects := c.GetProjects()
-	for _, project := range projects {
-		locations, ok := c.GetLocationsByProject(project)
-		if !ok {
-			continue
-		}
+	// Function to load instances from cache or GCP
+	loadInstances := func(useLiveData bool) {
+		isRefreshing = true
+		allInstances = []instanceData{}
 
-		for _, location := range locations {
-			if location.Type == "instance" || location.Type == "mig" {
-				inst := instanceData{
-					Name:    location.Name,
-					Project: project,
-					Zone:    location.Location,
-					Status:  "[green]CACHED[-]",
+		projects := c.GetProjects()
+		for _, project := range projects {
+			locations, ok := c.GetLocationsByProject(project)
+			if !ok {
+				continue
+			}
+
+			for _, location := range locations {
+				if location.Type == "instance" || location.Type == "mig" {
+					inst := instanceData{
+						Name:    location.Name,
+						Project: project,
+						Zone:    location.Location,
+						Status:  "[gray]LOADING...[-]",
+					}
+
+					// If live data requested, fetch from GCP
+					if useLiveData {
+						// Create a client for the correct project
+						projectClient, err := gcp.NewClient(ctx, project)
+						if err == nil {
+							gcpInst, err := projectClient.FindInstance(ctx, location.Name, location.Location)
+							if err == nil {
+								inst.Status = formatStatus(gcpInst.Status)
+								inst.ExternalIP = gcpInst.ExternalIP
+								inst.InternalIP = gcpInst.InternalIP
+								inst.CanUseIAP = gcpInst.CanUseIAP
+							} else {
+								inst.Status = "[red]ERROR[-]"
+							}
+						} else {
+							inst.Status = "[red]ERROR[-]"
+						}
+					} else {
+						// Use cached data
+						inst.Status = "[yellow]CACHED[-]"
+					}
+
+					// Create combined search text
+					inst.SearchText = strings.ToLower(inst.Name + " " + inst.Project + " " + inst.Zone)
+					allInstances = append(allInstances, inst)
 				}
-				// Create combined search text for fuzzy matching
-				inst.SearchText = strings.ToLower(inst.Name + " " + inst.Project + " " + inst.Zone)
-				allInstances = append(allInstances, inst)
 			}
 		}
+		isRefreshing = false
 	}
+
+	// Initial load from cache (fast)
+	loadInstances(false)
 
 	// Create a simple table
 	table := tview.NewTable().
@@ -134,7 +176,7 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 	// Status bar
 	status := tview.NewTextView().
 		SetDynamicColors(true).
-		SetText(" [yellow]↑/↓[-] navigate  [yellow]/[-] filter  [yellow]Ctrl+C[-] quit  [yellow]?[-] help")
+		SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
 
 	// Layout
 	flex := tview.NewFlex().
@@ -152,9 +194,9 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 			flex.RemoveItem(filterInput)
 			app.SetFocus(table)
 			if currentFilter != "" {
-				status.SetText(fmt.Sprintf(" [green]Filter active: '%s'[-]  [yellow]Esc[-] clear  [yellow]/[-] edit", currentFilter))
+				status.SetText(fmt.Sprintf(" [green]Filter active: '%s'[-]  [yellow]Esc[-] clear  [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] edit  [yellow]r[-] refresh", currentFilter))
 			} else {
-				status.SetText(" [yellow]↑/↓[-] navigate  [yellow]/[-] filter  [yellow]Ctrl+C[-] quit  [yellow]?[-] help")
+				status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
 			}
 		} else if key == tcell.KeyEscape {
 			// Cancel filter mode without applying
@@ -163,9 +205,9 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 			flex.RemoveItem(filterInput)
 			app.SetFocus(table)
 			if currentFilter != "" {
-				status.SetText(fmt.Sprintf(" [green]Filter active: '%s'[-]  [yellow]Esc[-] clear  [yellow]/[-] edit", currentFilter))
+				status.SetText(fmt.Sprintf(" [green]Filter active: '%s'[-]  [yellow]Esc[-] clear  [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] edit  [yellow]r[-] refresh", currentFilter))
 			} else {
-				status.SetText(" [yellow]↑/↓[-] navigate  [yellow]/[-] filter  [yellow]Ctrl+C[-] quit  [yellow]?[-] help")
+				status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
 			}
 		}
 	})
@@ -182,20 +224,233 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 			return event
 		}
 
+		// Don't allow actions during refresh
+		if isRefreshing {
+			return event
+		}
+
 		switch event.Key() {
 		case tcell.KeyCtrlC:
 			app.Stop()
 			return nil
+
 		case tcell.KeyEscape:
-			// Clear filter if active
+			// Don't handle ESC if a modal is open (let the modal handle it)
+			if modalOpen {
+				return event
+			}
+			// Clear filter if active, otherwise quit
 			if currentFilter != "" {
 				currentFilter = ""
 				filterInput.SetText("")
 				updateTable("")
-				status.SetText(" [yellow]↑/↓[-] navigate  [yellow]/[-] filter  [yellow]Ctrl+C[-] quit  [yellow]?[-] help")
+				status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc[-] quit  [yellow]?[-] help")
 				return nil
 			}
+			// No filter active, quit the TUI
+			app.Stop()
+			return nil
 		case tcell.KeyRune:
+			if event.Rune() == 's' {
+				// SSH to selected instance
+				row, _ := table.GetSelection()
+				if row <= 0 || row >= table.GetRowCount() {
+					status.SetText(" [red]No instance selected[-]")
+					time.AfterFunc(2*time.Second, func() {
+						app.QueueUpdateDraw(func() {
+							status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
+						})
+					})
+					return nil
+				}
+
+				// Find the instance by matching name in the table
+				nameCell := table.GetCell(row, 0)
+				if nameCell == nil {
+					return nil
+				}
+				instanceName := nameCell.Text
+
+				// Find matching instance in allInstances
+				var selectedInst *instanceData
+				for i := range allInstances {
+					if allInstances[i].Name == instanceName {
+						selectedInst = &allInstances[i]
+						break
+					}
+				}
+
+				if selectedInst != nil {
+					// Suspend TUI and run SSH
+					app.Suspend(func() {
+						args := []string{
+							"compute",
+							"ssh",
+							selectedInst.Name,
+							"--project=" + selectedInst.Project,
+							"--zone=" + selectedInst.Zone,
+						}
+
+						// Use IAP if no external IP or IAP flag is set
+						if selectedInst.ExternalIP == "" || selectedInst.CanUseIAP {
+							args = append(args, "--tunnel-through-iap")
+						}
+
+						cmd := exec.Command("gcloud", args...)
+						cmd.Stdin = os.Stdin
+						cmd.Stdout = os.Stdout
+						cmd.Stderr = os.Stderr
+
+						if err := cmd.Run(); err != nil {
+							// Error is already shown by gcloud, just wait for user
+							fmt.Println("\nPress Enter to return to TUI...")
+							fmt.Scanln()
+						}
+					})
+
+					// After resume
+					status.SetText(fmt.Sprintf(" [green]Disconnected from %s[-]", selectedInst.Name))
+					time.AfterFunc(3*time.Second, func() {
+						app.QueueUpdateDraw(func() {
+							status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
+						})
+					})
+				}
+				return nil
+			}
+			if event.Rune() == 'd' {
+				// Show instance details
+				row, _ := table.GetSelection()
+				if row <= 0 || row >= table.GetRowCount() {
+					status.SetText(" [red]No instance selected[-]")
+					time.AfterFunc(2*time.Second, func() {
+						app.QueueUpdateDraw(func() {
+							status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
+						})
+					})
+					return nil
+				}
+
+				// Find the instance by matching name in the table
+				nameCell := table.GetCell(row, 0)
+				if nameCell == nil {
+					return nil
+				}
+				instanceName := nameCell.Text
+
+				// Find matching instance in allInstances
+				var selectedInst *instanceData
+				for i := range allInstances {
+					if allInstances[i].Name == instanceName {
+						selectedInst = &allInstances[i]
+						break
+					}
+				}
+
+				if selectedInst != nil {
+					// Fetch full instance details from GCP
+					status.SetText(" [yellow]Loading instance details...[-]")
+					go func() {
+						// Create a client for the correct project
+						projectClient, err := gcp.NewClient(ctx, selectedInst.Project)
+						if err != nil {
+							app.QueueUpdateDraw(func() {
+								status.SetText(fmt.Sprintf(" [red]Error creating client: %v[-]", err))
+								time.AfterFunc(3*time.Second, func() {
+									app.QueueUpdateDraw(func() {
+										status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
+									})
+								})
+							})
+							return
+						}
+
+						gcpInst, err := projectClient.FindInstance(ctx, selectedInst.Name, selectedInst.Zone)
+						app.QueueUpdateDraw(func() {
+							if err != nil {
+								status.SetText(fmt.Sprintf(" [red]Error loading details: %v[-]", err))
+								time.AfterFunc(3*time.Second, func() {
+									app.QueueUpdateDraw(func() {
+										status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
+									})
+								})
+								return
+							}
+
+							// Create detail modal
+							externalIPDisplay := gcpInst.ExternalIP
+							if externalIPDisplay == "" {
+								externalIPDisplay = "[gray](none)[-]"
+							}
+							internalIPDisplay := gcpInst.InternalIP
+							if internalIPDisplay == "" {
+								internalIPDisplay = "[gray](none)[-]"
+							}
+
+							detailText := fmt.Sprintf(`[yellow]Instance Details[-]
+
+[darkgray]Name:[-]         %s
+[darkgray]Project:[-]      %s
+[darkgray]Zone:[-]         %s
+[darkgray]Status:[-]       %s
+[darkgray]Machine Type:[-] %s
+
+[yellow]Network[-]
+[darkgray]External IP:[-]  %s
+[darkgray]Internal IP:[-]  %s
+[darkgray]Can Use IAP:[-]  %t
+
+[darkgray]Press Esc to close[-]`,
+								gcpInst.Name,
+								selectedInst.Project,
+								gcpInst.Zone,
+								gcpInst.Status,
+								gcpInst.MachineType,
+								externalIPDisplay,
+								internalIPDisplay,
+								gcpInst.CanUseIAP,
+							)
+
+							detailView := tview.NewTextView().
+								SetDynamicColors(true).
+								SetText(detailText).
+								SetScrollable(true)
+							detailView.SetBorder(true).SetTitle(fmt.Sprintf(" %s ", selectedInst.Name))
+
+							// Create a modal with fixed size
+							modal := tview.NewFlex().
+								AddItem(nil, 0, 1, false).
+								AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+									AddItem(nil, 0, 1, false).
+									AddItem(detailView, 20, 0, true).
+									AddItem(nil, 0, 1, false), 80, 0, true).
+								AddItem(nil, 0, 1, false)
+
+							// Add modal to the layout
+							pages := tview.NewPages().
+								AddPage("main", flex, true, true).
+								AddPage("modal", modal, true, true)
+
+							// Set up modal input handler
+							detailView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+								if event.Key() == tcell.KeyEscape {
+									pages.RemovePage("modal")
+									app.SetRoot(flex, true)
+									app.SetFocus(table)
+									modalOpen = false
+									status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
+									return nil
+								}
+								return event
+							})
+
+							modalOpen = true
+							app.SetRoot(pages, true).SetFocus(detailView)
+						})
+					}()
+				}
+				return nil
+			}
 			if event.Rune() == '/' {
 				// Enter filter mode
 				filterMode = true
@@ -208,9 +463,31 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 				status.SetText(" [yellow]Type to filter, Enter to apply, Esc to cancel[-]")
 				return nil
 			}
+			if event.Rune() == 'r' {
+				// Refresh instance data from GCP
+				status.SetText(" [yellow]Refreshing instance data from GCP...[-]")
+				go func() {
+					loadInstances(true)
+					app.QueueUpdateDraw(func() {
+						updateTable(currentFilter)
+						status.SetText(" [green]Refreshed![-]")
+						time.AfterFunc(2*time.Second, func() {
+							app.QueueUpdateDraw(func() {
+								status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
+							})
+						})
+					})
+				}()
+				return nil
+			}
 			if event.Rune() == '?' {
 				// Show help
-				status.SetText(" [green]↑/↓[-] navigate  [green]/[-] fuzzy filter  [green]Esc[-] clear filter  [green]q/Ctrl+C[-] quit")
+				status.SetText(" [green]s[-] SSH  [green]d[-] details  [green]r[-] refresh  [green]/[-] filter  [green]Esc[-] clear filter or quit  [green]q/Ctrl+C[-] quit")
+				time.AfterFunc(5*time.Second, func() {
+					app.QueueUpdateDraw(func() {
+						status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
+					})
+				})
 				return nil
 			}
 			if event.Rune() == 'q' {

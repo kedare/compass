@@ -5,17 +5,22 @@ Implement a k9s-style keyboard-driven TUI interface for compass, accessible via 
 
 ---
 
-## ✅ Current Status: MVP Working
+## ✅ Current Status: Phase 2 Complete
 
-### What's Working Now (v0.1 - Minimal Viable Product)
+### What's Working Now (v0.2 - Enhanced Instance Management)
 - ✅ Basic TUI launches successfully via `compass interactive`
 - ✅ Displays instances from cache in a table format
 - ✅ Keyboard navigation (arrow keys, vim-style j/k)
 - ✅ Clean display without log interference
 - ✅ Proper Ctrl+C and 'q' quit handling
 - ✅ Mouse support enabled
-- ✅ Status bar with keyboard hints
+- ✅ Status bar with dynamic keyboard hints
 - ✅ Loads cached instances from all projects
+- ✅ Real-time filtering with '/' (substring matching)
+- ✅ Color-coded instance status
+- ✅ SSH connection with 's' key (auto-detects IAP)
+- ✅ Background refresh with 'r' key
+- ✅ Instance detail modal with 'd' key
 
 ### Known Issues Fixed
 - ❌ **Complex App architecture caused hang** - The original PageStack/Component lifecycle was causing a deadlock
@@ -79,25 +84,36 @@ cmd/
 
 ---
 
-### Phase 2: Enhanced Instance View 🚧 TODO
+### Phase 2: Enhanced Instance View ✅ COMPLETED
 **Goal**: Add filtering, sorting, and SSH capability
 
-**Features to Add**:
-- [ ] Filter mode (press `/` to filter instances)
-- [ ] Filter by name, project, zone, or IP
-- [ ] Sort by column (press column number or `s` to cycle)
-- [ ] Color-coded status (green=RUNNING, red=STOPPED, yellow=other)
-- [ ] SSH to selected instance (press Enter)
-  - [ ] Suspend TUI properly
-  - [ ] Execute SSH via gcloud
-  - [ ] Resume TUI after SSH exits
-- [ ] Refresh instances (press `r`)
-- [ ] Show instance details (press `d`)
+**Features Implemented**:
+- [x] Filter mode (press `/` to filter instances)
+- [x] Filter by name, project, or zone with substring matching
+- [x] Live filtering as you type (real-time results)
+- [x] Color-coded status (green=RUNNING, red=STOPPED/TERMINATED, yellow=PROVISIONING/STAGING/STOPPING, orange=SUSPENDED, gray=other)
+- [x] SSH to selected instance (press `s`)
+  - [x] Suspend TUI properly with `app.Suspend()`
+  - [x] Execute SSH via gcloud with proper args
+  - [x] Auto-detect IAP requirement (no external IP or CanUseIAP flag)
+  - [x] Resume TUI after SSH exits
+- [x] Refresh instances (press `r`)
+  - [x] Background refresh without blocking UI
+  - [x] Fetches live data from GCP API
+  - [x] Updates status with loading indicator
+- [x] Show instance details (press `d`)
+  - [x] Modal overlay with full instance information
+  - [x] Shows name, project, zone, status, machine type
+  - [x] Shows external IP, internal IP, IAP capability
+  - [x] Press Esc to close modal
 
-**Implementation Notes**:
-- Extend `direct.go` with filter input field (toggle visibility)
-- Use `app.Suspend()` for SSH sessions
-- Add color tags to status cells based on instance state
+**Implementation Details**:
+- Extended `direct.go` with filter input field (toggle visibility with `/`)
+- Uses `app.Suspend()` for SSH sessions, properly restores TUI afterward
+- Added `formatStatus()` helper function in `helpers.go` for color coding
+- Background goroutines with `app.QueueUpdateDraw()` for refresh
+- Modal detail view using tview.Pages for overlay
+- Status bar updates dynamically based on context (filtering, normal, etc.)
 - Implement input field for filter with Enter/Esc handling
 
 ---

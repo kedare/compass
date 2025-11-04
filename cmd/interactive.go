@@ -5,6 +5,7 @@ import (
 
 	"github.com/kedare/compass/internal/cache"
 	"github.com/kedare/compass/internal/gcp"
+	"github.com/kedare/compass/internal/logger"
 	"github.com/kedare/compass/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -30,37 +31,30 @@ func init() {
 }
 
 func runInteractive(cmd *cobra.Command, args []string) error {
-	fmt.Println("Starting interactive mode...")
+	logger.Log.Info("Starting interactive mode...")
 
 	// Get cache
-	fmt.Println("Initializing cache...")
+	logger.Log.Debug("Initializing cache...")
 	c, err := cache.New()
 	if err != nil {
 		return fmt.Errorf("failed to initialize cache: %w", err)
 	}
-	fmt.Println("Cache initialized")
+	logger.Log.Debugf("Cache initialized with %d projects", len(c.GetProjects()))
 
 	// Create GCP client (empty project string means use default)
-	fmt.Println("Creating GCP client...")
+	logger.Log.Debug("Creating GCP client...")
 	gcpClient, err := gcp.NewClient(cmd.Context(), "")
 	if err != nil {
 		return fmt.Errorf("failed to create GCP client: %w", err)
 	}
-	fmt.Println("GCP client created")
-
-	// Create TUI app
-	fmt.Println("Creating TUI app...")
-	fmt.Printf("Cache has %d projects\n", len(c.GetProjects()))
-
-	// Don't use NewApp, create a minimal app directly
-	fmt.Println("TUI app created (skipping full initialization)")
+	logger.Log.Debug("GCP client created")
 
 	// Run the simplified version directly without NewApp
-	fmt.Println("Starting TUI (press Ctrl+C to quit)...")
+	logger.Log.Info("Starting TUI (press Ctrl+C to quit)...")
 	if err := tui.RunDirect(c, gcpClient); err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
 
-	fmt.Println("TUI exited")
+	logger.Log.Info("TUI exited")
 	return nil
 }
