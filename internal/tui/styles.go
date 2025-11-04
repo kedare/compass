@@ -18,8 +18,8 @@ type Styles struct {
 	StatusInfo    tcell.Color
 
 	// Table colors
-	TableHeaderBg tcell.Color
-	TableHeaderFg tcell.Color
+	TableHeaderBg   tcell.Color
+	TableHeaderFg   tcell.Color
 	TableSelectedBg tcell.Color
 	TableSelectedFg tcell.Color
 
@@ -47,8 +47,8 @@ func DefaultStyles() *Styles {
 		StatusInfo:    tcell.ColorDodgerBlue,
 
 		// Table
-		TableHeaderBg: tcell.ColorDarkCyan,
-		TableHeaderFg: tcell.ColorBlack,
+		TableHeaderBg:   tcell.ColorDarkCyan,
+		TableHeaderFg:   tcell.ColorBlack,
 		TableSelectedBg: tcell.ColorDarkCyan,
 		TableSelectedFg: tcell.ColorWhite,
 

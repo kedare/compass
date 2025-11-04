@@ -25,18 +25,17 @@ type Config struct {
 // App is the main TUI application
 type App struct {
 	*tview.Application
-	config      *Config
-	styles      *Styles
-	pageStack   *PageStack
-	header      *tview.TextView
-	crumbs      *tview.TextView
-	statusBar   *tview.TextView
-	flash       *tview.TextView
-	content     *tview.Flex
-	globalKeys  KeyActions
-	ctx         context.Context
-	cancel      context.CancelFunc
-	flashMx     sync.Mutex
+	config     *Config
+	styles     *Styles
+	pageStack  *PageStack
+	header     *tview.TextView
+	crumbs     *tview.TextView
+	statusBar  *tview.TextView
+	flash      *tview.TextView
+	globalKeys KeyActions
+	ctx        context.Context
+	cancel     context.CancelFunc
+	flashMx    sync.Mutex
 }
 
 // NewApp creates a new TUI application

@@ -5,9 +5,9 @@ Implement a k9s-style keyboard-driven TUI interface for compass, accessible via 
 
 ---
 
-## ✅ Current Status: Phase 3 Complete
+## ✅ Current Status: Phase 4 Complete
 
-### What's Working Now (v0.3 - Help System)
+### What's Working Now (v0.4 - VPN Inspector)
 - ✅ Basic TUI launches successfully via `compass interactive`
 - ✅ Displays instances from cache in a table format
 - ✅ Keyboard navigation (arrow keys, vim-style j/k)
@@ -23,6 +23,11 @@ Implement a k9s-style keyboard-driven TUI interface for compass, accessible via 
 - ✅ Instance detail modal with 'd' key
 - ✅ Comprehensive help overlay with '?' key
 - ✅ Smart ESC handling (closes modals, clears filter, or quits)
+- ✅ VPN Inspector view with 'v' key
+- ✅ Hierarchical VPN display (gateways, tunnels, BGP sessions)
+- ✅ Color-coded VPN status (green=UP/ESTABLISHED, red=DOWN/ERROR)
+- ✅ VPN detail modals for gateways, tunnels, and BGP sessions
+- ✅ Orphan tunnel and BGP session detection
 
 ### Known Issues Fixed
 - ❌ **Complex App architecture caused hang** - The original PageStack/Component lifecycle was causing a deadlock
@@ -141,31 +146,34 @@ cmd/
 
 ---
 
-### Phase 4: VPN Inspector 🔍 TODO
+### Phase 4: VPN Inspector ✅ COMPLETED
 **Goal**: Browse VPN gateways, tunnels, and BGP sessions
 
-**Features to Add**:
-- [ ] Navigate to VPN view (press `v` from main view)
-- [ ] Hierarchical tree view:
-  ```
-  ▼ project-1
-    ▼ gateway-1 (2 tunnels, 2 BGP sessions)
-      ▶ tunnel-1 (UP) [green]
-      ▶ tunnel-2 (DOWN) [red] ⚠️
-    ▶ gateway-2
-  ▼ project-2
-    ▶ gateway-3
-  ```
-- [ ] Expand/collapse with Enter or Space
-- [ ] Detail panel showing gateway/tunnel/BGP info
-- [ ] Color-coded status (UP=green, DOWN=red)
-- [ ] Warning indicators for orphaned tunnels
-- [ ] Refresh data (press `r`)
+**Features Implemented**:
+- [x] Navigate to VPN view (press `v` from main view)
+- [x] Hierarchical table display with indentation:
+  - Level 0: Gateways and section headers
+  - Level 1: Tunnels under gateways
+  - Level 2: BGP sessions under tunnels
+- [x] Show VPN statistics in title (gateway count, tunnel count, BGP count)
+- [x] Detail modals for gateways, tunnels, and BGP sessions (press `d`)
+- [x] Color-coded status:
+  - Tunnels: green=ESTABLISHED, red=ERROR states, yellow=PROVISIONING, orange=HANDSHAKE
+  - BGP: green=UP/Established, red=DOWN
+- [x] Warning sections for orphaned resources:
+  - Orphan tunnels (Classic VPN without gateway)
+  - Orphan BGP sessions (not linked to tunnels)
+- [x] Refresh data (press `r`) with background loading
+- [x] Return to instance view (press Esc)
+- [x] Context-sensitive help (press `?`)
 
-**Data Source**:
-- Reuse `gcp.Client.ListVPNOverview()`
-- Reuse `gcp.Client.GetVPNGateway()`
-- Format using existing `output.DisplayVPNOverview()` logic
+**Implementation Details**:
+- Created separate `vpn_view.go` file for VPN view logic
+- Uses `gcp.Client.ListVPNOverview()` to fetch all VPN data
+- Table-based display with visual indentation for hierarchy
+- Modal overlay system consistent with instance detail modals
+- Proper modalOpen flag integration for ESC handling
+- Helper functions: `formatTunnelStatus()`, `formatBGPStatus()`, `extractNetworkName()`
 
 ---
 

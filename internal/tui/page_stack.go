@@ -9,12 +9,12 @@ import (
 
 // PageStack manages a stack of components for navigation
 type PageStack struct {
-	pages   *tview.Pages
-	stack   []Component
-	app     *App
-	mx      sync.RWMutex
-	ctx     context.Context
-	cancel  context.CancelFunc
+	pages  *tview.Pages
+	stack  []Component
+	app    *App
+	mx     sync.RWMutex
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewPageStack creates a new page stack

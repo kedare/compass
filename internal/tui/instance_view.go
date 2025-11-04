@@ -17,14 +17,14 @@ import (
 // InstanceView displays the list of instances
 type InstanceView struct {
 	*BaseComponent
-	app         *App
-	table       *tview.Table
-	filterInput *tview.InputField
-	layout      *tview.Flex
-	filterMode  bool
-	filterText  string
-	instances   []gcp.Instance
-	mx          sync.RWMutex
+	app           *App
+	table         *tview.Table
+	filterInput   *tview.InputField
+	layout        *tview.Flex
+	filterMode    bool
+	filterText    string
+	instances     []gcp.Instance
+	mx            sync.RWMutex
 	refreshTicker *time.Ticker
 	cancelRefresh context.CancelFunc
 }
@@ -69,11 +69,12 @@ func NewInstanceView(app *App) *InstanceView {
 		SetLabel("Filter: ").
 		SetFieldWidth(0).
 		SetDoneFunc(func(key tcell.Key) {
-			if key == tcell.KeyEnter {
+			switch key {
+			case tcell.KeyEnter:
 				view.filterText = view.filterInput.GetText()
 				view.updateTable()
 				view.toggleFilterMode()
-			} else if key == tcell.KeyEscape {
+			case tcell.KeyEscape:
 				view.filterInput.SetText("")
 				view.filterText = ""
 				view.toggleFilterMode()
@@ -344,7 +345,7 @@ func (v *InstanceView) sshToSelected() {
 		if err := cmd.Run(); err != nil {
 			fmt.Printf("\nSSH connection failed: %v\n", err)
 			fmt.Println("Press Enter to return...")
-			fmt.Scanln()
+			_, _ = fmt.Scanln()
 		}
 	})
 

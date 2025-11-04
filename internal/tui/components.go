@@ -25,7 +25,7 @@ type Component interface {
 	Primitive() tview.Primitive
 
 	// Actions returns the keyboard actions for this component
-	Actions() KeyActions
+	Actions() *KeyActions
 
 	// HandleKey handles keyboard events not covered by actions
 	HandleKey(event *tcell.EventKey) *tcell.EventKey
@@ -64,8 +64,8 @@ func (b *BaseComponent) Stop() {
 }
 
 // Actions returns the keyboard actions
-func (b *BaseComponent) Actions() KeyActions {
-	return b.actions
+func (b *BaseComponent) Actions() *KeyActions {
+	return &b.actions
 }
 
 // HandleKey provides default key handling (pass-through)

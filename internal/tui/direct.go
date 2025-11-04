@@ -14,6 +14,23 @@ import (
 	"github.com/rivo/tview"
 )
 
+// Status bar message constants
+const (
+	statusDefault        = " [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]v[-] VPN  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help"
+	statusFilterActive   = " [green]Filter active: '%s'[-]  [yellow]Esc[-] clear  [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] edit  [yellow]r[-] refresh  [yellow]v[-] VPN"
+	statusFilterMode     = " [yellow]Type to filter, Enter to apply, Esc to cancel[-]"
+	statusFilterCleared  = " [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc[-] quit  [yellow]?[-] help"
+	statusNoSelection    = " [red]No instance selected[-]"
+	statusDisconnected   = " [green]Disconnected from %s[-]"
+	statusRefreshing     = " [yellow]Refreshing instance data from GCP...[-]"
+	statusRefreshed      = " [green]Refreshed![-]"
+	statusLoadingDetails = " [yellow]Loading instance details...[-]"
+	statusLoadingVPN     = " [yellow]Loading VPN view...[-]"
+	statusErrorDetails   = " [red]Error loading details: %v[-]"
+	statusErrorClient    = " [red]Error creating client: %v[-]"
+	statusErrorVPN       = " [red]Error loading VPN view: %v[-]"
+)
+
 // instanceData holds information about an instance for filtering
 type instanceData struct {
 	Name       string
@@ -176,7 +193,7 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 	// Status bar
 	status := tview.NewTextView().
 		SetDynamicColors(true).
-		SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
+		SetText(statusDefault)
 
 	// Layout
 	flex := tview.NewFlex().
@@ -186,7 +203,8 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 
 	// Setup filter input handlers
 	filterInput.SetDoneFunc(func(key tcell.Key) {
-		if key == tcell.KeyEnter {
+		switch key {
+		case tcell.KeyEnter:
 			// Apply filter and exit filter mode
 			currentFilter = filterInput.GetText()
 			updateTable(currentFilter)
@@ -194,20 +212,20 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 			flex.RemoveItem(filterInput)
 			app.SetFocus(table)
 			if currentFilter != "" {
-				status.SetText(fmt.Sprintf(" [green]Filter active: '%s'[-]  [yellow]Esc[-] clear  [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] edit  [yellow]r[-] refresh", currentFilter))
+				status.SetText(fmt.Sprintf(statusFilterActive, currentFilter))
 			} else {
-				status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
+				status.SetText(statusDefault)
 			}
-		} else if key == tcell.KeyEscape {
+		case tcell.KeyEscape:
 			// Cancel filter mode without applying
 			filterInput.SetText(currentFilter)
 			filterMode = false
 			flex.RemoveItem(filterInput)
 			app.SetFocus(table)
 			if currentFilter != "" {
-				status.SetText(fmt.Sprintf(" [green]Filter active: '%s'[-]  [yellow]Esc[-] clear  [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] edit  [yellow]r[-] refresh", currentFilter))
+				status.SetText(fmt.Sprintf(statusFilterActive, currentFilter))
 			} else {
-				status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
+				status.SetText(statusDefault)
 			}
 		}
 	})
@@ -244,7 +262,7 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 				currentFilter = ""
 				filterInput.SetText("")
 				updateTable("")
-				status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc[-] quit  [yellow]?[-] help")
+				status.SetText(statusFilterCleared)
 				return nil
 			}
 			// No filter active, quit the TUI
@@ -255,10 +273,10 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 				// SSH to selected instance
 				row, _ := table.GetSelection()
 				if row <= 0 || row >= table.GetRowCount() {
-					status.SetText(" [red]No instance selected[-]")
+					status.SetText(statusNoSelection)
 					time.AfterFunc(2*time.Second, func() {
 						app.QueueUpdateDraw(func() {
-							status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
+							status.SetText(statusDefault)
 						})
 					})
 					return nil
@@ -304,15 +322,15 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 						if err := cmd.Run(); err != nil {
 							// Error is already shown by gcloud, just wait for user
 							fmt.Println("\nPress Enter to return to TUI...")
-							fmt.Scanln()
+							_, _ = fmt.Scanln()
 						}
 					})
 
 					// After resume
-					status.SetText(fmt.Sprintf(" [green]Disconnected from %s[-]", selectedInst.Name))
+					status.SetText(fmt.Sprintf(statusDisconnected, selectedInst.Name))
 					time.AfterFunc(3*time.Second, func() {
 						app.QueueUpdateDraw(func() {
-							status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
+							status.SetText(statusDefault)
 						})
 					})
 				}
@@ -322,10 +340,10 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 				// Show instance details
 				row, _ := table.GetSelection()
 				if row <= 0 || row >= table.GetRowCount() {
-					status.SetText(" [red]No instance selected[-]")
+					status.SetText(statusNoSelection)
 					time.AfterFunc(2*time.Second, func() {
 						app.QueueUpdateDraw(func() {
-							status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
+							status.SetText(statusDefault)
 						})
 					})
 					return nil
@@ -349,16 +367,16 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 
 				if selectedInst != nil {
 					// Fetch full instance details from GCP
-					status.SetText(" [yellow]Loading instance details...[-]")
+					status.SetText(statusLoadingDetails)
 					go func() {
 						// Create a client for the correct project
 						projectClient, err := gcp.NewClient(ctx, selectedInst.Project)
 						if err != nil {
 							app.QueueUpdateDraw(func() {
-								status.SetText(fmt.Sprintf(" [red]Error creating client: %v[-]", err))
+								status.SetText(fmt.Sprintf(statusErrorClient, err))
 								time.AfterFunc(3*time.Second, func() {
 									app.QueueUpdateDraw(func() {
-										status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
+										status.SetText(statusDefault)
 									})
 								})
 							})
@@ -368,10 +386,10 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 						gcpInst, err := projectClient.FindInstance(ctx, selectedInst.Name, selectedInst.Zone)
 						app.QueueUpdateDraw(func() {
 							if err != nil {
-								status.SetText(fmt.Sprintf(" [red]Error loading details: %v[-]", err))
+								status.SetText(fmt.Sprintf(statusErrorDetails, err))
 								time.AfterFunc(3*time.Second, func() {
 									app.QueueUpdateDraw(func() {
-										status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
+										status.SetText(statusDefault)
 									})
 								})
 								return
@@ -438,7 +456,7 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 									app.SetRoot(flex, true)
 									app.SetFocus(table)
 									modalOpen = false
-									status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
+									status.SetText(statusDefault)
 									return nil
 								}
 								return event
@@ -460,20 +478,20 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 				flex.AddItem(table, 0, 1, false)
 				flex.AddItem(status, 1, 0, false)
 				app.SetFocus(filterInput)
-				status.SetText(" [yellow]Type to filter, Enter to apply, Esc to cancel[-]")
+				status.SetText(statusFilterMode)
 				return nil
 			}
 			if event.Rune() == 'r' {
 				// Refresh instance data from GCP
-				status.SetText(" [yellow]Refreshing instance data from GCP...[-]")
+				status.SetText(statusRefreshing)
 				go func() {
 					loadInstances(true)
 					app.QueueUpdateDraw(func() {
 						updateTable(currentFilter)
-						status.SetText(" [green]Refreshed![-]")
+						status.SetText(statusRefreshed)
 						time.AfterFunc(2*time.Second, func() {
 							app.QueueUpdateDraw(func() {
-								status.SetText(" [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help")
+								status.SetText(statusDefault)
 							})
 						})
 					})
@@ -496,6 +514,9 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
   [white]s[-]             SSH to selected instance
   [white]d[-]             Show instance details
   [white]r[-]             Refresh instance data from GCP
+
+[yellow]Views[-]
+  [white]v[-]             Switch to VPN view
 
 [yellow]Filtering[-]
   [white]/[-]             Enter filter mode
@@ -546,6 +567,30 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 
 				modalOpen = true
 				app.SetRoot(helpPages, true).SetFocus(helpView)
+				return nil
+			}
+			if event.Rune() == 'v' {
+				// Switch to VPN view
+				status.SetText(statusLoadingVPN)
+				go func() {
+					app.QueueUpdateDraw(func() {
+						err := RunVPNView(ctx, gcpClient, app, func() {
+							// Callback to return to instance view
+							app.SetInputCapture(nil) // Clear VPN input handler
+							app.SetRoot(flex, true).SetFocus(table)
+							updateTable(currentFilter)
+							status.SetText(statusDefault)
+						})
+						if err != nil {
+							status.SetText(fmt.Sprintf(statusErrorVPN, err))
+							time.AfterFunc(3*time.Second, func() {
+								app.QueueUpdateDraw(func() {
+									status.SetText(statusDefault)
+								})
+							})
+						}
+					})
+				}()
 				return nil
 			}
 			if event.Rune() == 'q' {

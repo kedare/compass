@@ -45,7 +45,7 @@ func (k *KeyActions) Delete(key tcell.Key) {
 }
 
 // Get retrieves a key action
-func (k KeyActions) Get(key tcell.Key) (KeyAction, bool) {
+func (k *KeyActions) Get(key tcell.Key) (KeyAction, bool) {
 	k.mx.RLock()
 	defer k.mx.RUnlock()
 	action, ok := k.actions[key]
@@ -71,7 +71,7 @@ func (k *KeyActions) List() map[tcell.Key]KeyAction {
 }
 
 // Hints returns visible action hints for status bar
-func (k KeyActions) Hints() []string {
+func (k *KeyActions) Hints() []string {
 	k.mx.RLock()
 	defer k.mx.RUnlock()
 

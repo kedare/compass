@@ -8,11 +8,9 @@ import (
 // Table is an enhanced table widget
 type Table struct {
 	*tview.Table
-	headers      []string
-	sortColumn   int
-	sortAsc      bool
-	selectedRow  int
-	filterActive bool
+	headers    []string
+	sortColumn int
+	sortAsc    bool
 }
 
 // NewTable creates a new table widget
