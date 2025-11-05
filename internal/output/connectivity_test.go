@@ -509,13 +509,13 @@ func TestFormatTraceStepForTable(t *testing.T) {
 	t.Parallel()
 
 	step := &gcp.TraceStep{Firewall: "fw", CausesDrop: true}
-	typ, resource, status := formatTraceStepForTable(step)
+	typ, resource, status := FormatTraceStepForTable(step)
 	require.Equal(t, "Firewall", typ)
 	require.Equal(t, "fw", resource)
 	require.Equal(t, "BLOCKED", status)
 
 	step = &gcp.TraceStep{Instance: "projects/p/zones/z/instances/demo"}
-	typ, resource, status = formatTraceStepForTable(step)
+	typ, resource, status = FormatTraceStepForTable(step)
 	require.Equal(t, "VM Instance", typ)
 	require.Equal(t, "demo", resource)
 	require.Equal(t, "OK", status)

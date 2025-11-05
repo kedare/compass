@@ -66,3 +66,5 @@ coverage.out
 vendor/
 coverage.html
 coverage.out
+
+k9s/
