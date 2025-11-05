@@ -642,7 +642,6 @@ func formatTestState(test *gcp.ConnectivityTestResult) string {
 	return "[gray]PENDING[-]"
 }
 
-
 // convertAnsiToTview converts ANSI escape codes to tview color tags
 func convertAnsiToTview(s string) string {
 	var result strings.Builder

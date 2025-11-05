@@ -43,6 +43,7 @@ type instanceData struct {
 	InternalIP string
 	SearchText string // Combined text for fuzzy search
 	CanUseIAP  bool
+	HasLiveData bool // Whether this instance has been loaded with live data from GCP
 }
 
 // RunDirect runs a minimal TUI without the full app structure
@@ -87,6 +88,7 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 								inst.ExternalIP = gcpInst.ExternalIP
 								inst.InternalIP = gcpInst.InternalIP
 								inst.CanUseIAP = gcpInst.CanUseIAP
+								inst.HasLiveData = true
 							} else {
 								inst.Status = "[red]ERROR[-]"
 							}
@@ -96,6 +98,7 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 					} else {
 						// Use cached data
 						inst.Status = "[yellow]CACHED[-]"
+						inst.HasLiveData = false
 					}
 
 					// Create combined search text
@@ -285,17 +288,23 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 					return nil
 				}
 
-				// Find the instance by matching name in the table
+				// Get instance details from table cells (name, project, zone)
 				nameCell := table.GetCell(row, 0)
-				if nameCell == nil {
+				projectCell := table.GetCell(row, 1)
+				zoneCell := table.GetCell(row, 2)
+				if nameCell == nil || projectCell == nil || zoneCell == nil {
 					return nil
 				}
 				instanceName := nameCell.Text
+				instanceProject := projectCell.Text
+				instanceZone := zoneCell.Text
 
-				// Find matching instance in allInstances
+				// Find matching instance in allInstances using name, project, AND zone
 				var selectedInst *instanceData
 				for i := range allInstances {
-					if allInstances[i].Name == instanceName {
+					if allInstances[i].Name == instanceName &&
+						allInstances[i].Project == instanceProject &&
+						allInstances[i].Zone == instanceZone {
 						selectedInst = &allInstances[i]
 						break
 					}
@@ -312,8 +321,13 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 							"--zone=" + selectedInst.Zone,
 						}
 
-						// Use IAP if no external IP or IAP flag is set
-						if selectedInst.ExternalIP == "" || selectedInst.CanUseIAP {
+						// Only use IAP when we have live data confirming it's needed:
+						// - HasLiveData is true AND ExternalIP is empty (no public IP), OR
+						// - CanUseIAP is explicitly set to true
+						// This prevents defaulting to IAP when data is from cache and IP info is unknown
+						if selectedInst.HasLiveData && selectedInst.ExternalIP == "" {
+							args = append(args, "--tunnel-through-iap")
+						} else if selectedInst.CanUseIAP {
 							args = append(args, "--tunnel-through-iap")
 						}
 
@@ -352,17 +366,23 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 					return nil
 				}
 
-				// Find the instance by matching name in the table
+				// Get instance details from table cells (name, project, zone)
 				nameCell := table.GetCell(row, 0)
-				if nameCell == nil {
+				projectCell := table.GetCell(row, 1)
+				zoneCell := table.GetCell(row, 2)
+				if nameCell == nil || projectCell == nil || zoneCell == nil {
 					return nil
 				}
 				instanceName := nameCell.Text
+				instanceProject := projectCell.Text
+				instanceZone := zoneCell.Text
 
-				// Find matching instance in allInstances
+				// Find matching instance in allInstances using name, project, AND zone
 				var selectedInst *instanceData
 				for i := range allInstances {
-					if allInstances[i].Name == instanceName {
+					if allInstances[i].Name == instanceName &&
+						allInstances[i].Project == instanceProject &&
+						allInstances[i].Zone == instanceZone {
 						selectedInst = &allInstances[i]
 						break
 					}
