@@ -35,14 +35,14 @@ const (
 
 // instanceData holds information about an instance for filtering
 type instanceData struct {
-	Name       string
-	Project    string
-	Zone       string
-	Status     string
-	ExternalIP string
-	InternalIP string
-	SearchText string // Combined text for fuzzy search
-	CanUseIAP  bool
+	Name        string
+	Project     string
+	Zone        string
+	Status      string
+	ExternalIP  string
+	InternalIP  string
+	SearchText  string // Combined text for fuzzy search
+	CanUseIAP   bool
 	HasLiveData bool // Whether this instance has been loaded with live data from GCP
 }
 
