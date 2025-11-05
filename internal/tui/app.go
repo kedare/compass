@@ -99,6 +99,9 @@ func (a *App) setupGlobalKeys() {
 		Action: func(evt *tcell.EventKey) *tcell.EventKey {
 			if a.pageStack.Depth() > 1 {
 				a.pageStack.Pop()
+			} else {
+				// At root level, quit the app
+				a.Stop()
 			}
 			return nil
 		},

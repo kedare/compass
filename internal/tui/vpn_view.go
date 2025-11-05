@@ -21,24 +21,36 @@ type vpnEntry struct {
 	Parent      string // Parent gateway for tunnels/BGP
 	DetailedMsg string
 	Level       int // Indentation level (0=gateway, 1=tunnel, 2=bgp)
+
+	// References to actual data structures for detailed views
+	Gateway *gcp.VPNGatewayInfo
+	Tunnel  *gcp.VPNTunnelInfo
+	BGP     *gcp.BGPSessionInfo
 }
 
 // RunVPNView shows the VPN overview
 func RunVPNView(ctx context.Context, gcpClient *gcp.Client, app *tview.Application, onBack func()) error {
+	return RunVPNViewWithProgress(ctx, gcpClient, app, nil, onBack)
+}
+
+// RunVPNViewWithProgress shows the VPN overview with optional progress callback
+func RunVPNViewWithProgress(ctx context.Context, gcpClient *gcp.Client, app *tview.Application, progress func(string), onBack func()) error {
 	var vpnData *gcp.VPNOverview
-	var entries []vpnEntry
+	var allEntries []vpnEntry
 	var isRefreshing bool
 	var modalOpen bool
+	var filterMode bool
+	var currentFilter string
 
 	// Function to load VPN data
-	loadVPNData := func() {
+	loadVPNData := func(progressCallback func(string)) {
 		isRefreshing = true
-		entries = []vpnEntry{}
+		allEntries = []vpnEntry{}
 
-		overview, err := gcpClient.ListVPNOverview(ctx, nil)
+		overview, err := gcpClient.ListVPNOverview(ctx, progressCallback)
 		if err != nil {
 			// Show error
-			entries = append(entries, vpnEntry{
+			allEntries = append(allEntries, vpnEntry{
 				Type:   "error",
 				Name:   "Failed to load VPN data",
 				Status: err.Error(),
@@ -65,8 +77,9 @@ func RunVPNView(ctx context.Context, gcpClient *gcp.Client, app *tview.Applicati
 				Region:  gw.Region,
 				Network: extractNetworkName(gw.Network),
 				Level:   0,
+				Gateway: gw,
 			}
-			entries = append(entries, gwEntry)
+			allEntries = append(allEntries, gwEntry)
 
 			// Tunnel entries
 			for _, tunnel := range gw.Tunnels {
@@ -78,8 +91,9 @@ func RunVPNView(ctx context.Context, gcpClient *gcp.Client, app *tview.Applicati
 					Parent:      gw.Name,
 					DetailedMsg: tunnel.DetailedStatus,
 					Level:       1,
+					Tunnel:      tunnel,
 				}
-				entries = append(entries, tunnelEntry)
+				allEntries = append(allEntries, tunnelEntry)
 
 				// BGP entries
 				for _, bgp := range tunnel.BgpSessions {
@@ -90,15 +104,16 @@ func RunVPNView(ctx context.Context, gcpClient *gcp.Client, app *tview.Applicati
 						Region: bgp.Region,
 						Parent: tunnel.Name,
 						Level:  2,
+						BGP:    bgp,
 					}
-					entries = append(entries, bgpEntry)
+					allEntries = append(allEntries, bgpEntry)
 				}
 			}
 		}
 
 		// Add orphan tunnels
 		if len(overview.OrphanTunnels) > 0 {
-			entries = append(entries, vpnEntry{
+			allEntries = append(allEntries, vpnEntry{
 				Type:   "section",
 				Name:   "⚠️  Orphan Tunnels (Classic VPN)",
 				Status: fmt.Sprintf("%d tunnels", len(overview.OrphanTunnels)),
@@ -112,14 +127,15 @@ func RunVPNView(ctx context.Context, gcpClient *gcp.Client, app *tview.Applicati
 					Region:      tunnel.Region,
 					DetailedMsg: tunnel.DetailedStatus,
 					Level:       1,
+					Tunnel:      tunnel,
 				}
-				entries = append(entries, tunnelEntry)
+				allEntries = append(allEntries, tunnelEntry)
 			}
 		}
 
 		// Add orphan BGP sessions
 		if len(overview.OrphanSessions) > 0 {
-			entries = append(entries, vpnEntry{
+			allEntries = append(allEntries, vpnEntry{
 				Type:   "section",
 				Name:   "⚠️  Orphan BGP Sessions",
 				Status: fmt.Sprintf("%d sessions", len(overview.OrphanSessions)),
@@ -132,8 +148,9 @@ func RunVPNView(ctx context.Context, gcpClient *gcp.Client, app *tview.Applicati
 					Status: formatBGPStatus(bgp.SessionState),
 					Region: bgp.Region,
 					Level:  1,
+					BGP:    bgp,
 				}
-				entries = append(entries, bgpEntry)
+				allEntries = append(allEntries, bgpEntry)
 			}
 		}
 
@@ -159,15 +176,39 @@ func RunVPNView(ctx context.Context, gcpClient *gcp.Client, app *tview.Applicati
 		table.SetCell(0, col, cell)
 	}
 
+	// Filter input
+	filterInput := tview.NewInputField().
+		SetLabel(" Filter: ").
+		SetFieldWidth(0).
+		SetFieldBackgroundColor(tcell.ColorBlack).
+		SetLabelColor(tcell.ColorYellow)
+
 	// Update table with entries
-	updateTable := func() {
+	updateTable := func(filter string) {
 		// Clear existing rows (keep header)
 		for row := table.GetRowCount() - 1; row > 0; row-- {
 			table.RemoveRow(row)
 		}
 
+		// Filter entries
+		filterLower := strings.ToLower(filter)
+		var filteredEntries []vpnEntry
+		if filter == "" {
+			filteredEntries = allEntries
+		} else {
+			for _, entry := range allEntries {
+				// Match against name, region, network, status
+				if strings.Contains(strings.ToLower(entry.Name), filterLower) ||
+					strings.Contains(strings.ToLower(entry.Region), filterLower) ||
+					strings.Contains(strings.ToLower(entry.Network), filterLower) ||
+					strings.Contains(strings.ToLower(entry.Status), filterLower) {
+					filteredEntries = append(filteredEntries, entry)
+				}
+			}
+		}
+
 		currentRow := 1
-		for _, entry := range entries {
+		for _, entry := range filteredEntries {
 			// Add indentation based on level
 			indent := strings.Repeat("  ", entry.Level)
 			name := indent + entry.Name
@@ -194,10 +235,15 @@ func RunVPNView(ctx context.Context, gcpClient *gcp.Client, app *tview.Applicati
 			tunnelCount += len(vpnData.OrphanTunnels)
 			bgpCount += len(vpnData.OrphanSessions)
 		}
-		table.SetTitle(fmt.Sprintf(" VPN Overview (%d gateways, %d tunnels, %d BGP) ", gwCount, tunnelCount, bgpCount))
+
+		titleSuffix := ""
+		if filter != "" {
+			titleSuffix = fmt.Sprintf(" [filtered: %d/%d] ", len(filteredEntries), len(allEntries))
+		}
+		table.SetTitle(fmt.Sprintf(" VPN Overview (%d gateways, %d tunnels, %d BGP)%s ", gwCount, tunnelCount, bgpCount, titleSuffix))
 
 		// Select first data row if available
-		if len(entries) > 0 {
+		if len(filteredEntries) > 0 {
 			table.Select(1, 0)
 		}
 	}
@@ -205,7 +251,7 @@ func RunVPNView(ctx context.Context, gcpClient *gcp.Client, app *tview.Applicati
 	// Status bar
 	status := tview.NewTextView().
 		SetDynamicColors(true).
-		SetText(" [yellow]Esc[-] back  [yellow]d[-] details  [yellow]r[-] refresh  [yellow]?[-] help")
+		SetText(" [yellow]Esc[-] back  [yellow]d[-] details  [yellow]Shift+R[-] refresh  [yellow]/[-] filter  [yellow]?[-] help")
 
 	// Layout
 	flex := tview.NewFlex().
@@ -213,12 +259,52 @@ func RunVPNView(ctx context.Context, gcpClient *gcp.Client, app *tview.Applicati
 		AddItem(table, 0, 1, true).
 		AddItem(status, 1, 0, false)
 
+	// Setup filter input handlers
+	filterInput.SetDoneFunc(func(key tcell.Key) {
+		switch key {
+		case tcell.KeyEnter:
+			// Apply filter and exit filter mode
+			currentFilter = filterInput.GetText()
+			updateTable(currentFilter)
+			filterMode = false
+			flex.RemoveItem(filterInput)
+			flex.Clear()
+			flex.AddItem(table, 0, 1, true)
+			flex.AddItem(status, 1, 0, false)
+			app.SetFocus(table)
+			if currentFilter != "" {
+				status.SetText(fmt.Sprintf(" [green]Filter active: %s[-]", currentFilter))
+			} else {
+				status.SetText(" [yellow]Esc[-] back  [yellow]d[-] details  [yellow]r[-] refresh  [yellow]/[-] filter  [yellow]?[-] help")
+			}
+		case tcell.KeyEscape:
+			// Cancel filter mode without applying
+			filterInput.SetText(currentFilter)
+			filterMode = false
+			flex.RemoveItem(filterInput)
+			flex.Clear()
+			flex.AddItem(table, 0, 1, true)
+			flex.AddItem(status, 1, 0, false)
+			app.SetFocus(table)
+			if currentFilter != "" {
+				status.SetText(fmt.Sprintf(" [green]Filter active: %s[-]", currentFilter))
+			} else {
+				status.SetText(" [yellow]Esc[-] back  [yellow]d[-] details  [yellow]r[-] refresh  [yellow]/[-] filter  [yellow]?[-] help")
+			}
+		}
+	})
+
 	// Initial load
-	loadVPNData()
-	updateTable()
+	loadVPNData(progress)
+	updateTable("")
 
 	// Setup keyboard
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		// If in filter mode, let the input field handle it
+		if filterMode {
+			return event
+		}
+
 		// Don't handle ESC if a modal is open
 		if modalOpen && event.Key() == tcell.KeyEscape {
 			return event
@@ -231,23 +317,80 @@ func RunVPNView(ctx context.Context, gcpClient *gcp.Client, app *tview.Applicati
 
 		switch event.Key() {
 		case tcell.KeyEscape:
+			// Clear filter if active, otherwise go back
+			if currentFilter != "" {
+				currentFilter = ""
+				filterInput.SetText("")
+				updateTable("")
+				status.SetText(" [yellow]Filter cleared[-]")
+				time.AfterFunc(2*time.Second, func() {
+					app.QueueUpdateDraw(func() {
+						status.SetText(" [yellow]Esc[-] back  [yellow]d[-] details  [yellow]r[-] refresh  [yellow]/[-] filter  [yellow]?[-] help")
+					})
+				})
+				return nil
+			}
 			// Go back to instance view
 			onBack()
 			return nil
 
 		case tcell.KeyRune:
 			switch event.Rune() {
-			case 'r':
-				// Refresh VPN data
-				status.SetText(" [yellow]Refreshing VPN data...[-]")
+			case '/':
+				// Enter filter mode
+				filterMode = true
+				filterInput.SetText(currentFilter)
+				flex.Clear()
+				flex.AddItem(filterInput, 1, 0, true)
+				flex.AddItem(table, 0, 1, false)
+				flex.AddItem(status, 1, 0, false)
+				app.SetFocus(filterInput)
+				return nil
+
+			case 'R':
+				// Refresh VPN data with loading screen
+				refreshCtx, cancelRefresh := context.WithCancel(ctx)
+
+				updateMsg, spinnerDone := showLoadingScreen(app, " Refreshing VPN Data ", "Initializing...", func() {
+					cancelRefresh()
+					app.SetRoot(flex, true).SetFocus(table)
+					status.SetText(" [yellow]Refresh cancelled[-]")
+					time.AfterFunc(2*time.Second, func() {
+						app.QueueUpdateDraw(func() {
+							if currentFilter != "" {
+								status.SetText(fmt.Sprintf(" [green]Filter active: %s[-]", currentFilter))
+							} else {
+								status.SetText(" [yellow]Esc[-] back  [yellow]d[-] details  [yellow]Shift+R[-] refresh  [yellow]/[-] filter  [yellow]?[-] help")
+							}
+						})
+					})
+				})
+
+				// Progress callback for VPN loading
+				progressCallback := func(msg string) {
+					updateMsg(msg)
+				}
+
 				go func() {
-					loadVPNData()
+					loadVPNData(progressCallback)
 					app.QueueUpdateDraw(func() {
-						updateTable()
+						select {
+						case spinnerDone <- true:
+						default:
+						}
+						if refreshCtx.Err() == context.Canceled {
+							return
+						}
+						app.SetRoot(flex, true).SetFocus(table)
+						updateTable(currentFilter)
 						status.SetText(" [green]Refreshed![-]")
 						time.AfterFunc(2*time.Second, func() {
 							app.QueueUpdateDraw(func() {
-								status.SetText(" [yellow]Esc[-] back  [yellow]d[-] details  [yellow]r[-] refresh  [yellow]?[-] help")
+								if currentFilter != "" {
+									status.SetText(fmt.Sprintf(" [green]Filter active: %s[-]", currentFilter))
+								} else {
+									status.SetText(" [yellow]Esc[-] back  [yellow]d[-] details  [yellow]Shift+R[-] refresh  [yellow]/[-] filter  [yellow]?[-] help")
+								}
 							})
 						})
 					})
@@ -257,23 +400,27 @@ func RunVPNView(ctx context.Context, gcpClient *gcp.Client, app *tview.Applicati
 			case 'd':
 				// Show details for selected item
 				row, _ := table.GetSelection()
-				if row <= 0 || row > len(entries) {
+				if row <= 0 || row > len(allEntries) {
 					status.SetText(" [red]No item selected[-]")
 					time.AfterFunc(2*time.Second, func() {
 						app.QueueUpdateDraw(func() {
-							status.SetText(" [yellow]Esc[-] back  [yellow]d[-] details  [yellow]r[-] refresh  [yellow]?[-] help")
+							if currentFilter != "" {
+								status.SetText(fmt.Sprintf(" [green]Filter active: %s[-]", currentFilter))
+							} else {
+								status.SetText(" [yellow]Esc[-] back  [yellow]d[-] details  [yellow]r[-] refresh  [yellow]/[-] filter  [yellow]?[-] help")
+							}
 						})
 					})
 					return nil
 				}
 
-				entry := entries[row-1]
-				showVPNDetail(app, table, flex, entry, &modalOpen, status)
+				entry := allEntries[row-1]
+				showVPNDetail(app, table, flex, entry, &modalOpen, status, currentFilter)
 				return nil
 
 			case '?':
 				// Show help
-				showVPNHelp(app, table, flex, &modalOpen)
+				showVPNHelp(app, table, flex, &modalOpen, currentFilter, status)
 				return nil
 			}
 		}
@@ -284,84 +431,198 @@ func RunVPNView(ctx context.Context, gcpClient *gcp.Client, app *tview.Applicati
 	return nil
 }
 
-func showVPNDetail(app *tview.Application, table *tview.Table, mainFlex *tview.Flex, entry vpnEntry, modalOpen *bool, status *tview.TextView) {
-	var detailText string
+func showVPNDetail(app *tview.Application, table *tview.Table, mainFlex *tview.Flex, entry vpnEntry, modalOpen *bool, status *tview.TextView, currentFilter string) {
+	var detailText strings.Builder
 
 	switch entry.Type {
 	case "gateway":
-		detailText = fmt.Sprintf(`[yellow]VPN Gateway Details[-]
+		if entry.Gateway != nil {
+			gw := entry.Gateway
+			detailText.WriteString("[yellow::b]VPN Gateway Details[-:-:-]\n\n")
+			detailText.WriteString(fmt.Sprintf("[white::b]Name:[-:-:-]        %s\n", gw.Name))
+			detailText.WriteString(fmt.Sprintf("[white::b]Region:[-:-:-]      %s\n", gw.Region))
+			detailText.WriteString(fmt.Sprintf("[white::b]Network:[-:-:-]     %s\n", extractNetworkName(gw.Network)))
 
-[darkgray]Name:[-]     %s
-[darkgray]Region:[-]   %s
-[darkgray]Network:[-]  %s
-[darkgray]Status:[-]   %s
+			if gw.Description != "" {
+				detailText.WriteString(fmt.Sprintf("[white::b]Description:[-:-:-] %s\n", gw.Description))
+			}
 
-[darkgray]Press Esc to close[-]`,
-			entry.Name, entry.Region, entry.Network, entry.Status)
+			detailText.WriteString(fmt.Sprintf("[white::b]Tunnels:[-:-:-]     %d\n", len(gw.Tunnels)))
+
+			if len(gw.Interfaces) > 0 {
+				detailText.WriteString("\n[yellow::b]Interfaces:[-:-:-]\n")
+				for _, iface := range gw.Interfaces {
+					detailText.WriteString(fmt.Sprintf("  • Interface #%d: %s\n", iface.Id, iface.IpAddress))
+				}
+			}
+
+			if len(gw.Labels) > 0 {
+				detailText.WriteString("\n[yellow::b]Labels:[-:-:-]\n")
+				for k, v := range gw.Labels {
+					detailText.WriteString(fmt.Sprintf("  • %s: %s\n", k, v))
+				}
+			}
+		}
 
 	case "tunnel", "orphan-tunnel":
-		detailText = fmt.Sprintf(`[yellow]VPN Tunnel Details[-]
+		if entry.Tunnel != nil {
+			tunnel := entry.Tunnel
+			detailText.WriteString("[yellow::b]VPN Tunnel Details[-:-:-]\n\n")
+			detailText.WriteString(fmt.Sprintf("[white::b]Name:[-:-:-]           %s\n", tunnel.Name))
+			detailText.WriteString(fmt.Sprintf("[white::b]Region:[-:-:-]         %s\n", tunnel.Region))
+			detailText.WriteString(fmt.Sprintf("[white::b]Status:[-:-:-]         %s\n", tunnel.Status))
 
-[darkgray]Name:[-]           %s
-[darkgray]Region:[-]         %s
-[darkgray]Status:[-]         %s
-[darkgray]Detailed Status:[-] %s
+			if tunnel.DetailedStatus != "" {
+				detailText.WriteString(fmt.Sprintf("[white::b]Detailed Status:[-:-:-] %s\n", tunnel.DetailedStatus))
+			}
 
-[darkgray]Press Esc to close[-]`,
-			entry.Name, entry.Region, entry.Status, entry.DetailedMsg)
+			if tunnel.Description != "" {
+				detailText.WriteString(fmt.Sprintf("[white::b]Description:[-:-:-]    %s\n", tunnel.Description))
+			}
+
+			detailText.WriteString(fmt.Sprintf("[white::b]Local Gateway IP:[-:-:-] %s\n", tunnel.LocalGatewayIP))
+			detailText.WriteString(fmt.Sprintf("[white::b]Peer IP:[-:-:-]        %s\n", tunnel.PeerIP))
+
+			if tunnel.PeerGateway != "" {
+				detailText.WriteString(fmt.Sprintf("[white::b]Peer Gateway:[-:-:-]   %s\n", extractNetworkName(tunnel.PeerGateway)))
+			}
+
+			if tunnel.RouterName != "" {
+				detailText.WriteString(fmt.Sprintf("[white::b]Router:[-:-:-]         %s\n", tunnel.RouterName))
+			}
+
+			if tunnel.IkeVersion > 0 {
+				detailText.WriteString(fmt.Sprintf("[white::b]IKE Version:[-:-:-]    %d\n", tunnel.IkeVersion))
+			}
+
+			// BGP Sessions
+			if len(tunnel.BgpSessions) > 0 {
+				detailText.WriteString("\n[yellow::b]BGP Sessions:[-:-:-]\n")
+				for _, bgp := range tunnel.BgpSessions {
+					detailText.WriteString(fmt.Sprintf("\n  [white::b]• %s[-:-:-]\n", bgp.Name))
+					detailText.WriteString(fmt.Sprintf("    Status:      %s / %s\n", bgp.SessionStatus, bgp.SessionState))
+					detailText.WriteString(fmt.Sprintf("    Local:       %s (AS%d)\n", bgp.LocalIP, bgp.LocalASN))
+					detailText.WriteString(fmt.Sprintf("    Peer:        %s (AS%d)\n", bgp.PeerIP, bgp.PeerASN))
+					detailText.WriteString(fmt.Sprintf("    Priority:    %d\n", bgp.RoutePriority))
+					detailText.WriteString(fmt.Sprintf("    Enabled:     %v\n", bgp.Enabled))
+
+					if len(bgp.AdvertisedPrefixes) > 0 {
+						detailText.WriteString(fmt.Sprintf("    [green]Advertised:[-]  %d prefixes\n", len(bgp.AdvertisedPrefixes)))
+						for _, prefix := range bgp.AdvertisedPrefixes {
+							detailText.WriteString(fmt.Sprintf("      • %s\n", prefix))
+						}
+					} else {
+						detailText.WriteString("    [gray]Advertised:  0 prefixes[-]\n")
+					}
+
+					if len(bgp.LearnedPrefixes) > 0 {
+						detailText.WriteString(fmt.Sprintf("    [green]Learned:[-]     %d prefixes\n", len(bgp.LearnedPrefixes)))
+						for _, prefix := range bgp.LearnedPrefixes {
+							detailText.WriteString(fmt.Sprintf("      • %s\n", prefix))
+						}
+					} else {
+						detailText.WriteString("    [gray]Learned:     0 prefixes[-]\n")
+					}
+				}
+			}
+		}
 
 	case "bgp", "orphan-bgp":
-		detailText = fmt.Sprintf(`[yellow]BGP Session Details[-]
+		if entry.BGP != nil {
+			bgp := entry.BGP
+			detailText.WriteString("[yellow::b]BGP Session Details[-:-:-]\n\n")
+			detailText.WriteString(fmt.Sprintf("[white::b]Name:[-:-:-]           %s\n", bgp.Name))
+			detailText.WriteString(fmt.Sprintf("[white::b]Region:[-:-:-]         %s\n", bgp.Region))
+			detailText.WriteString(fmt.Sprintf("[white::b]Router:[-:-:-]         %s\n", bgp.RouterName))
+			detailText.WriteString(fmt.Sprintf("[white::b]Interface:[-:-:-]      %s\n", bgp.Interface))
+			detailText.WriteString(fmt.Sprintf("[white::b]Session Status:[-:-:-] %s\n", bgp.SessionStatus))
+			detailText.WriteString(fmt.Sprintf("[white::b]Session State:[-:-:-]  %s\n", bgp.SessionState))
+			detailText.WriteString(fmt.Sprintf("[white::b]Enabled:[-:-:-]        %v\n", bgp.Enabled))
+			detailText.WriteString(fmt.Sprintf("\n[white::b]Local IP:[-:-:-]       %s\n", bgp.LocalIP))
+			detailText.WriteString(fmt.Sprintf("[white::b]Local ASN:[-:-:-]      %d\n", bgp.LocalASN))
+			detailText.WriteString(fmt.Sprintf("[white::b]Peer IP:[-:-:-]        %s\n", bgp.PeerIP))
+			detailText.WriteString(fmt.Sprintf("[white::b]Peer ASN:[-:-:-]       %d\n", bgp.PeerASN))
+			detailText.WriteString(fmt.Sprintf("[white::b]Route Priority:[-:-:-] %d\n", bgp.RoutePriority))
 
-[darkgray]Name:[-]   %s
-[darkgray]Region:[-] %s
-[darkgray]Status:[-] %s
+			if bgp.AdvertisedMode != "" {
+				detailText.WriteString(fmt.Sprintf("[white::b]Advertise Mode:[-:-:-] %s\n", bgp.AdvertisedMode))
+			}
 
-[darkgray]Press Esc to close[-]`,
-			entry.Name, entry.Region, entry.Status)
+			if len(bgp.AdvertisedGroups) > 0 {
+				detailText.WriteString(fmt.Sprintf("\n[white::b]Advertised Groups:[-:-:-] %s\n", strings.Join(bgp.AdvertisedGroups, ", ")))
+			}
+
+			if len(bgp.AdvertisedPrefixes) > 0 {
+				detailText.WriteString(fmt.Sprintf("\n[green::b]Advertised Prefixes (%d):[-:-:-]\n", len(bgp.AdvertisedPrefixes)))
+				for _, prefix := range bgp.AdvertisedPrefixes {
+					detailText.WriteString(fmt.Sprintf("  • %s\n", prefix))
+				}
+			} else {
+				detailText.WriteString("\n[gray]No advertised prefixes[-]\n")
+			}
+
+			if len(bgp.LearnedPrefixes) > 0 {
+				detailText.WriteString(fmt.Sprintf("\n[green::b]Learned Prefixes (%d):[-:-:-]\n", len(bgp.LearnedPrefixes)))
+				for _, prefix := range bgp.LearnedPrefixes {
+					detailText.WriteString(fmt.Sprintf("  • %s\n", prefix))
+				}
+			} else {
+				detailText.WriteString("\n[gray]No learned prefixes[-]\n")
+			}
+
+			if len(bgp.BestRoutePrefixes) > 0 {
+				detailText.WriteString(fmt.Sprintf("\n[yellow::b]Best Routes (%d):[-:-:-]\n", len(bgp.BestRoutePrefixes)))
+				for _, prefix := range bgp.BestRoutePrefixes {
+					detailText.WriteString(fmt.Sprintf("  • %s\n", prefix))
+				}
+			}
+		}
 
 	default:
-		detailText = "[red]No details available[-]"
+		detailText.WriteString("[red]No details available[-]")
 	}
+
+	detailText.WriteString("\n[darkgray]Press Esc to close[-]")
 
 	detailView := tview.NewTextView().
 		SetDynamicColors(true).
-		SetText(detailText).
-		SetScrollable(true)
+		SetText(detailText.String()).
+		SetScrollable(true).
+		SetWordWrap(true)
 	detailView.SetBorder(true).SetTitle(fmt.Sprintf(" %s ", entry.Name))
 
-	// Create modal with fixed size
-	modal := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(detailView, 20, 0, true).
-			AddItem(nil, 0, 1, false), 80, 0, true).
-		AddItem(nil, 0, 1, false)
+	// Create status bar for detail view
+	detailStatus := tview.NewTextView().
+		SetDynamicColors(true).
+		SetText(" [yellow]Esc[-] back  [yellow]↑/↓[-] scroll")
 
-	// Create pages
-	pages := tview.NewPages().
-		AddPage("main", mainFlex, true, true).
-		AddPage("modal", modal, true, true)
+	// Create fullscreen detail layout
+	detailFlex := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(detailView, 0, 1, true).
+		AddItem(detailStatus, 1, 0, false)
 
-	// Set up modal input handler
+	// Set up input handler
 	detailView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape {
-			pages.RemovePage("modal")
+			*modalOpen = false
 			app.SetRoot(mainFlex, true)
 			app.SetFocus(table)
-			*modalOpen = false
-			status.SetText(" [yellow]Esc[-] back  [yellow]d[-] details  [yellow]r[-] refresh  [yellow]?[-] help")
+			if currentFilter != "" {
+				status.SetText(fmt.Sprintf(" [green]Filter active: %s[-]", currentFilter))
+			} else {
+				status.SetText(" [yellow]Esc[-] back  [yellow]d[-] details  [yellow]r[-] refresh  [yellow]/[-] filter  [yellow]?[-] help")
+			}
 			return nil
 		}
 		return event
 	})
 
 	*modalOpen = true
-	app.SetRoot(pages, true).SetFocus(detailView)
+	app.SetRoot(detailFlex, true).SetFocus(detailView)
 }
 
-func showVPNHelp(app *tview.Application, table *tview.Table, mainFlex *tview.Flex, modalOpen *bool) {
+func showVPNHelp(app *tview.Application, table *tview.Table, mainFlex *tview.Flex, modalOpen *bool, currentFilter string, status *tview.TextView) {
 	helpText := `[yellow::b]VPN View - Keyboard Shortcuts[-:-:-]
 
 [yellow]Navigation[-]
@@ -372,8 +633,9 @@ func showVPNHelp(app *tview.Application, table *tview.Table, mainFlex *tview.Fle
 
 [yellow]Actions[-]
   [white]d[-]             Show details for selected item
-  [white]r[-]             Refresh VPN data from GCP
-  [white]Esc[-]           Return to instance view
+  [white]Shift+R[-]       Refresh VPN data from GCP
+  [white]/[-]             Enter filter/search mode
+  [white]Esc[-]           Clear filter (if active) or return to instance view
 
 [yellow]General[-]
   [white]?[-]             Show this help
@@ -388,34 +650,35 @@ func showVPNHelp(app *tview.Application, table *tview.Table, mainFlex *tview.Fle
 		SetTitle(" VPN Help ").
 		SetTitleAlign(tview.AlignCenter)
 
-	// Create help modal
-	helpModal := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(helpView, 20, 0, true).
-			AddItem(nil, 0, 1, false), 60, 0, true).
-		AddItem(nil, 0, 1, false)
+	// Create status bar for help view
+	helpStatus := tview.NewTextView().
+		SetDynamicColors(true).
+		SetText(" [yellow]Esc[-] back  [yellow]?[-] close help")
 
-	// Create pages
-	helpPages := tview.NewPages().
-		AddPage("main", mainFlex, true, true).
-		AddPage("help", helpModal, true, true)
+	// Create fullscreen help layout
+	helpFlex := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(helpView, 0, 1, true).
+		AddItem(helpStatus, 1, 0, false)
 
-	// Set up help modal input handler
+	// Set up input handler
 	helpView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape || (event.Key() == tcell.KeyRune && event.Rune() == '?') {
-			helpPages.RemovePage("help")
+			*modalOpen = false
 			app.SetRoot(mainFlex, true)
 			app.SetFocus(table)
-			*modalOpen = false
+			if currentFilter != "" {
+				status.SetText(fmt.Sprintf(" [green]Filter active: %s[-]", currentFilter))
+			} else {
+				status.SetText(" [yellow]Esc[-] back  [yellow]d[-] details  [yellow]r[-] refresh  [yellow]/[-] filter  [yellow]?[-] help")
+			}
 			return nil
 		}
 		return event
 	})
 
 	*modalOpen = true
-	app.SetRoot(helpPages, true).SetFocus(helpView)
+	app.SetRoot(helpFlex, true).SetFocus(helpView)
 }
 
 // Helper functions

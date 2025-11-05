@@ -11,8 +11,9 @@ import (
 )
 
 var interactiveCmd = &cobra.Command{
-	Use:   "interactive",
-	Short: "Launch interactive TUI interface",
+	Use:     "interactive",
+	Aliases: []string{"i", "tui"},
+	Short:   "Launch interactive TUI interface",
 	Long: `Start the terminal UI for interactive exploration of GCP resources.
 
 The TUI provides keyboard-driven navigation similar to k9s, allowing you to:

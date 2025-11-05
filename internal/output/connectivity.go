@@ -540,7 +540,7 @@ func traceStepCells(trace *gcp.Trace, index int) [5]string {
 
 	step := trace.Steps[index]
 	stepNum := strconv.Itoa(index + 1)
-	stepType, resource, status := formatTraceStepForTable(step)
+	stepType, resource, status := FormatTraceStepForTable(step)
 
 	if step.CausesDrop {
 		stepNum = pterm.NewStyle(pterm.Bold, pterm.FgRed).Sprint(stepNum)
@@ -582,8 +582,14 @@ func fitsTerminalWidthWithLimit(block string, width int, limitKnown bool) bool {
 
 // displaySingleTrace displays a single trace with a title.
 // displaySingleTrace prints a single trace using an indented table.
-func displaySingleTrace(trace *gcp.Trace, title string) {
-	fmt.Println("    " + pterm.NewStyle(pterm.Bold).Sprint(title))
+// FormatSingleTrace formats a single trace as a table string (reusable for CLI and TUI)
+func FormatSingleTrace(trace *gcp.Trace, title string) string {
+	if trace == nil {
+		return ""
+	}
+
+	var result strings.Builder
+	result.WriteString("    " + pterm.NewStyle(pterm.Bold).Sprint(title) + "\n")
 
 	tableData := pterm.TableData{
 		{"#", "Step", "Type", "Resource", "Status"},
@@ -591,7 +597,7 @@ func displaySingleTrace(trace *gcp.Trace, title string) {
 
 	for i, step := range trace.Steps {
 		stepNum := strconv.Itoa(i + 1)
-		stepType, resource, status := formatTraceStepForTable(step)
+		stepType, resource, status := FormatTraceStepForTable(step)
 
 		if step.CausesDrop {
 			stepNum = pterm.NewStyle(pterm.Bold, pterm.FgRed).Sprint(stepNum)
@@ -608,15 +614,21 @@ func displaySingleTrace(trace *gcp.Trace, title string) {
 	// Indent the table output
 	rendered, err := pterm.DefaultTable.WithHasHeader().WithData(tableData).Srender()
 	if err != nil {
-		return
+		return result.String()
 	}
 
 	lines := strings.Split(rendered, "\n")
 	for _, line := range lines {
 		if strings.TrimSpace(line) != "" {
-			fmt.Println("    " + line)
+			result.WriteString("    " + line + "\n")
 		}
 	}
+
+	return result.String()
+}
+
+func displaySingleTrace(trace *gcp.Trace, title string) {
+	fmt.Print(FormatSingleTrace(trace, title))
 }
 
 // padRight pads a string to the right with spaces, accounting for ANSI color codes.
@@ -694,7 +706,8 @@ func getStepIcon(index, total int, causesDrop bool) string {
 
 // formatTraceStepForTable formats a trace step for table display, returning type, resource, and status.
 // formatTraceStepForTable converts a trace step into a tuple suitable for table display.
-func formatTraceStepForTable(step *gcp.TraceStep) (stepType string, resource string, status string) {
+// FormatTraceStepForTable formats a trace step for table display (exported for reuse)
+func FormatTraceStepForTable(step *gcp.TraceStep) (stepType string, resource string, status string) {
 	if step.Instance != "" {
 		return "VM Instance", extractResourceName(step.Instance), "OK"
 	}

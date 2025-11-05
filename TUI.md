@@ -5,9 +5,9 @@ Implement a k9s-style keyboard-driven TUI interface for compass, accessible via 
 
 ---
 
-## ✅ Current Status: Phase 4 Complete
+## ✅ Current Status: Phase 5 Complete
 
-### What's Working Now (v0.4 - VPN Inspector)
+### What's Working Now (v0.5 - Connectivity Tests)
 - ✅ Basic TUI launches successfully via `compass interactive`
 - ✅ Displays instances from cache in a table format
 - ✅ Keyboard navigation (arrow keys, vim-style j/k)
@@ -28,6 +28,13 @@ Implement a k9s-style keyboard-driven TUI interface for compass, accessible via 
 - ✅ Color-coded VPN status (green=UP/ESTABLISHED, red=DOWN/ERROR)
 - ✅ VPN detail modals for gateways, tunnels, and BGP sessions
 - ✅ Orphan tunnel and BGP session detection
+- ✅ Connectivity Tests view with 'c' key
+- ✅ List all connectivity tests with source, destination, protocol, and result
+- ✅ Color-coded test results (green=REACHABLE, red=UNREACHABLE, yellow=AMBIGUOUS)
+- ✅ Test detail modals showing full test configuration and results
+- ✅ Rerun connectivity tests with 'r' key
+- ✅ Delete connectivity tests with Del key
+- ✅ Refresh test list with Ctrl+R
 
 ### Known Issues Fixed
 - ❌ **Complex App architecture caused hang** - The original PageStack/Component lifecycle was causing a deadlock
@@ -177,26 +184,39 @@ cmd/
 
 ---
 
-### Phase 5: Connectivity Tests 🔗 TODO
+### Phase 5: Connectivity Tests ✅ COMPLETED
 **Goal**: Manage network connectivity tests
 
-**Features to Add**:
-- [ ] Navigate to connectivity tests (press `c`)
-- [ ] List all tests with status
+**Features Implemented**:
+- [x] Navigate to connectivity tests (press `c`)
+- [x] List all tests with status
+- [x] View test details (press `d`)
+- [x] Rerun test (press `r`)
+- [x] Delete test (press Del)
+- [x] Color-coded results (REACHABLE=green, UNREACHABLE=red, AMBIGUOUS=yellow)
+- [x] Context-sensitive help (press `?`)
+- [x] Refresh test list (press Ctrl+R)
+- [x] Return to instance view (press Esc)
+
+**Features Not Yet Implemented**:
 - [ ] Create new test (press `n`)
   - [ ] Form-based test creation
   - [ ] Source/destination selection
   - [ ] Protocol/port configuration
-- [ ] View test details (press Enter)
-- [ ] Rerun test (press `r`)
-- [ ] Delete test (press `d` or Del)
 - [ ] Watch test until completion (press `w`)
-- [ ] Color-coded results (REACHABLE=green, UNREACHABLE=red)
+
+**Implementation Details**:
+- Created separate `connectivity_view.go` file for connectivity tests view
+- Uses `gcp.ConnectivityClient` to list, rerun, and delete tests
+- Table-based display with columns: Name, Source, Destination, Protocol, Result
+- Modal overlay for test details showing full configuration and reachability results
+- Delete confirmation modal for safety
+- Background operations for rerun and delete actions
+- Helper functions: `formatEndpoint()`, `formatTestResult()`, `formatReachabilityDetails()`
 
 **Data Source**:
 - Reuse `gcp.ConnectivityClient` methods
-- Poll test status with backoff
-- Display reachability analysis and path trace
+- Display reachability analysis and path trace in detail modal
 
 ---
 
@@ -348,14 +368,21 @@ cmd/
 | `d` | Detail panel |
 | `r` | Refresh |
 
+### Connectivity Tests (Current Implementation)
+| Key | Action |
+|-----|--------|
+| `d` | View test details |
+| `r` | Rerun test |
+| `Del` | Delete test |
+| `Ctrl+R` | Refresh test list |
+| `?` | Show help |
+| `Esc` | Return to instance view |
+
 ### Connectivity Tests (Planned)
 | Key | Action |
 |-----|--------|
-| `n` | New test |
-| `Enter` | View details |
-| `r` | Rerun test |
-| `w` | Watch test |
-| `d` or `Del` | Delete test |
+| `n` | New test (TODO) |
+| `w` | Watch test (TODO) |
 
 ---
 
@@ -364,15 +391,15 @@ cmd/
 ### ✅ What's Currently Integrated
 - **Cache System**: `cache.Cache.GetProjects()`, `cache.Cache.GetLocationsByProject()`
 - **CLI Framework**: Cobra subcommand `compass interactive`
-- **GCP Client**: Created but not yet used in TUI
+- **GCP Client**: `gcp.Client` for instance operations
+- **SSH Execution**: Via gcloud command with IAP auto-detection
+- **VPN Data**: `gcp.Client.ListVPNOverview()`, `gcp.Client.GetVPNGateway()`
+- **Connectivity Tests**: `gcp.ConnectivityClient.ListTests()`, `gcp.ConnectivityClient.RunTest()`, `gcp.ConnectivityClient.DeleteTest()`
+- **Instance Details**: `gcp.Client.FindInstance()`
 - **Data Model**: Uses `cache.CachedLocation` type
 
 ### 📋 What Needs Integration
-- **SSH Execution**: `ssh.Client` for SSH sessions
-- **VPN Data**: `gcp.Client.ListVPNOverview()`, `gcp.Client.GetVPNGateway()`
-- **Connectivity Tests**: `gcp.ConnectivityClient.*` methods
 - **IP Lookup**: `gcp.Client.LookupIP()`
-- **Instance Details**: `gcp.Client.FindInstance()`
 
 ---
 
@@ -414,11 +441,13 @@ cmd/
 ### Working Files ✅
 ```
 internal/tui/
-├── direct.go              # Main TUI implementation (94 lines)
+├── direct.go              # Main TUI implementation with navigation
+├── vpn_view.go            # VPN Inspector view
+├── connectivity_view.go   # Connectivity Tests view
 └── styles.go              # Color schemes (partial use)
 
 cmd/
-└── interactive.go         # CLI integration (67 lines)
+└── interactive.go         # CLI integration
 ```
 
 ### Deprecated Files ⚠️ (Can be deleted or refactored)
@@ -705,13 +734,13 @@ Based on simplified architecture:
 
 The TUI implementation is **working at MVP level** using a simplified direct approach. The complex component-based architecture was causing deadlocks and has been abandoned in favor of a straightforward tview implementation.
 
-**Current State**: Basic instance list view is functional and stable.
+**Current State**: Multiple views are functional and stable. Instance list, VPN Inspector, and Connectivity Tests views are all working.
 
-**Next Priority**: Add SSH capability (Phase 2) to make the TUI actually useful for daily work.
+**Next Priority**: Phase 6 (IP Lookup) to add IP address search functionality.
 
-**Long-term Vision**: Full-featured TUI with multiple views (VPN, connectivity tests, IP lookup) providing a comprehensive GCP management interface, similar to k9s for Kubernetes.
+**Long-term Vision**: Full-featured TUI with multiple views (instances, VPN, connectivity tests, IP lookup, project management) providing a comprehensive GCP management interface, similar to k9s for Kubernetes.
 
 ---
 
-*Last Updated: 2025-11-04*
-*Status: MVP Working, Phase 2 Ready to Start*
+*Last Updated: 2025-11-05*
+*Status: Phase 5 Complete - Connectivity Tests Working*

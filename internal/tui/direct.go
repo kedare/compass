@@ -16,19 +16,21 @@ import (
 
 // Status bar message constants
 const (
-	statusDefault        = " [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]v[-] VPN  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help"
-	statusFilterActive   = " [green]Filter active: '%s'[-]  [yellow]Esc[-] clear  [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] edit  [yellow]r[-] refresh  [yellow]v[-] VPN"
-	statusFilterMode     = " [yellow]Type to filter, Enter to apply, Esc to cancel[-]"
-	statusFilterCleared  = " [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc[-] quit  [yellow]?[-] help"
-	statusNoSelection    = " [red]No instance selected[-]"
-	statusDisconnected   = " [green]Disconnected from %s[-]"
-	statusRefreshing     = " [yellow]Refreshing instance data from GCP...[-]"
-	statusRefreshed      = " [green]Refreshed![-]"
-	statusLoadingDetails = " [yellow]Loading instance details...[-]"
-	statusLoadingVPN     = " [yellow]Loading VPN view...[-]"
-	statusErrorDetails   = " [red]Error loading details: %v[-]"
-	statusErrorClient    = " [red]Error creating client: %v[-]"
-	statusErrorVPN       = " [red]Error loading VPN view: %v[-]"
+	statusDefault             = " [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]v[-] VPN  [yellow]c[-] connectivity  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help"
+	statusFilterActive        = " [green]Filter active: '%s'[-]  [yellow]Esc[-] clear  [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] edit  [yellow]r[-] refresh  [yellow]v[-] VPN  [yellow]c[-] connectivity"
+	statusFilterMode          = " [yellow]Type to filter, Enter to apply, Esc to cancel[-]"
+	statusFilterCleared       = " [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc[-] quit  [yellow]?[-] help"
+	statusNoSelection         = " [red]No instance selected[-]"
+	statusDisconnected        = " [green]Disconnected from %s[-]"
+	statusRefreshing          = " [yellow]Refreshing instance data from GCP...[-]"
+	statusRefreshed           = " [green]Refreshed![-]"
+	statusLoadingDetails      = " [yellow]Loading instance details...[-]"
+	statusLoadingVPN          = " [yellow]Loading VPN view...[-]"
+	statusLoadingConnectivity = " [yellow]Loading connectivity tests...[-]"
+	statusErrorDetails        = " [red]Error loading details: %v[-]"
+	statusErrorClient         = " [red]Error creating client: %v[-]"
+	statusErrorVPN            = " [red]Error loading VPN view: %v[-]"
+	statusErrorConnectivity   = " [red]Error loading connectivity tests: %v[-]"
 )
 
 // instanceData holds information about an instance for filtering
@@ -235,8 +237,9 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 		updateTable(text)
 	})
 
-	// Setup keyboard
-	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+	// Setup keyboard - store reference so we can restore it later
+	var mainInputCapture func(event *tcell.EventKey) *tcell.EventKey
+	mainInputCapture = func(event *tcell.EventKey) *tcell.EventKey {
 		// If in filter mode, let the input field handle it
 		if filterMode {
 			return event
@@ -395,7 +398,7 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 								return
 							}
 
-							// Create detail modal
+							// Create fullscreen detail view
 							externalIPDisplay := gcpInst.ExternalIP
 							if externalIPDisplay == "" {
 								externalIPDisplay = "[gray](none)[-]"
@@ -405,20 +408,20 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 								internalIPDisplay = "[gray](none)[-]"
 							}
 
-							detailText := fmt.Sprintf(`[yellow]Instance Details[-]
+							detailText := fmt.Sprintf(`[yellow::b]Instance Details[-:-:-]
 
-[darkgray]Name:[-]         %s
-[darkgray]Project:[-]      %s
-[darkgray]Zone:[-]         %s
-[darkgray]Status:[-]       %s
-[darkgray]Machine Type:[-] %s
+[white::b]Name:[-:-:-]         %s
+[white::b]Project:[-:-:-]      %s
+[white::b]Zone:[-:-:-]         %s
+[white::b]Status:[-:-:-]       %s
+[white::b]Machine Type:[-:-:-] %s
 
-[yellow]Network[-]
-[darkgray]External IP:[-]  %s
-[darkgray]Internal IP:[-]  %s
-[darkgray]Can Use IAP:[-]  %t
+[yellow::b]Network[-:-:-]
+[white::b]External IP:[-:-:-]  %s
+[white::b]Internal IP:[-:-:-]  %s
+[white::b]Can Use IAP:[-:-:-]  %t
 
-[darkgray]Press Esc to close[-]`,
+[darkgray]Press Esc to go back[-]`,
 								gcpInst.Name,
 								selectedInst.Project,
 								gcpInst.Zone,
@@ -432,38 +435,39 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 							detailView := tview.NewTextView().
 								SetDynamicColors(true).
 								SetText(detailText).
-								SetScrollable(true)
-							detailView.SetBorder(true).SetTitle(fmt.Sprintf(" %s ", selectedInst.Name))
+								SetScrollable(true).
+								SetWordWrap(true)
+							detailView.SetBorder(true).SetTitle(fmt.Sprintf(" Instance: %s ", selectedInst.Name))
 
-							// Create a modal with fixed size
-							modal := tview.NewFlex().
-								AddItem(nil, 0, 1, false).
-								AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-									AddItem(nil, 0, 1, false).
-									AddItem(detailView, 20, 0, true).
-									AddItem(nil, 0, 1, false), 80, 0, true).
-								AddItem(nil, 0, 1, false)
+							// Create status bar for detail view
+							detailStatus := tview.NewTextView().
+								SetDynamicColors(true).
+								SetText(" [yellow]Esc[-] back")
 
-							// Add modal to the layout
-							pages := tview.NewPages().
-								AddPage("main", flex, true, true).
-								AddPage("modal", modal, true, true)
+							// Create fullscreen detail layout
+							detailFlex := tview.NewFlex().
+								SetDirection(tview.FlexRow).
+								AddItem(detailView, 0, 1, true).
+								AddItem(detailStatus, 1, 0, false)
 
-							// Set up modal input handler
+							// Set up input handler
 							detailView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 								if event.Key() == tcell.KeyEscape {
-									pages.RemovePage("modal")
 									app.SetRoot(flex, true)
 									app.SetFocus(table)
 									modalOpen = false
-									status.SetText(statusDefault)
+									if currentFilter != "" {
+										status.SetText(fmt.Sprintf(statusFilterActive, currentFilter))
+									} else {
+										status.SetText(statusDefault)
+									}
 									return nil
 								}
 								return event
 							})
 
 							modalOpen = true
-							app.SetRoot(pages, true).SetFocus(detailView)
+							app.SetRoot(detailFlex, true).SetFocus(detailView)
 						})
 					}()
 				}
@@ -481,12 +485,32 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 				status.SetText(statusFilterMode)
 				return nil
 			}
-			if event.Rune() == 'r' {
-				// Refresh instance data from GCP
-				status.SetText(statusRefreshing)
+			if event.Rune() == 'R' {
+				// Refresh instance data from GCP with loading screen
+				refreshCtx, cancelRefresh := context.WithCancel(ctx)
+
+				_, spinnerDone := showLoadingScreen(app, " Refreshing Instances ", "Refreshing instance data from GCP...", func() {
+					cancelRefresh()
+					app.SetRoot(flex, true).SetFocus(table)
+					status.SetText(" [yellow]Refresh cancelled[-]")
+					time.AfterFunc(2*time.Second, func() {
+						app.QueueUpdateDraw(func() {
+							status.SetText(statusDefault)
+						})
+					})
+				})
+
 				go func() {
 					loadInstances(true)
 					app.QueueUpdateDraw(func() {
+						select {
+						case spinnerDone <- true:
+						default:
+						}
+						if refreshCtx.Err() == context.Canceled {
+							return
+						}
+						app.SetRoot(flex, true).SetFocus(table)
 						updateTable(currentFilter)
 						status.SetText(statusRefreshed)
 						time.AfterFunc(2*time.Second, func() {
@@ -513,7 +537,7 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 [yellow]Instance Actions[-]
   [white]s[-]             SSH to selected instance
   [white]d[-]             Show instance details
-  [white]r[-]             Refresh instance data from GCP
+  [white]Shift+R[-]       Refresh instance data from GCP
 
 [yellow]Views[-]
   [white]v[-]             Switch to VPN view
@@ -539,50 +563,229 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 					SetTitle(" Help - Keyboard Shortcuts ").
 					SetTitleAlign(tview.AlignCenter)
 
-				// Create help modal with fixed size
-				helpModal := tview.NewFlex().
-					AddItem(nil, 0, 1, false).
-					AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-						AddItem(nil, 0, 1, false).
-						AddItem(helpView, 28, 0, true).
-						AddItem(nil, 0, 1, false), 70, 0, true).
-					AddItem(nil, 0, 1, false)
+				// Create status bar for help view
+				helpStatus := tview.NewTextView().
+					SetDynamicColors(true).
+					SetText(" [yellow]Esc[-] back  [yellow]?[-] close help")
 
-				// Create pages for help modal
-				helpPages := tview.NewPages().
-					AddPage("main", flex, true, true).
-					AddPage("help", helpModal, true, true)
+				// Create fullscreen help layout
+				helpFlex := tview.NewFlex().
+					SetDirection(tview.FlexRow).
+					AddItem(helpView, 0, 1, true).
+					AddItem(helpStatus, 1, 0, false)
 
-				// Set up help modal input handler
+				// Set up input handler
 				helpView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 					if event.Key() == tcell.KeyEscape || (event.Key() == tcell.KeyRune && event.Rune() == '?') {
-						helpPages.RemovePage("help")
 						app.SetRoot(flex, true)
 						app.SetFocus(table)
 						modalOpen = false
+						if currentFilter != "" {
+							status.SetText(fmt.Sprintf(statusFilterActive, currentFilter))
+						} else {
+							status.SetText(statusDefault)
+						}
 						return nil
 					}
 					return event
 				})
 
 				modalOpen = true
-				app.SetRoot(helpPages, true).SetFocus(helpView)
+				app.SetRoot(helpFlex, true).SetFocus(helpView)
 				return nil
 			}
 			if event.Rune() == 'v' {
-				// Switch to VPN view
-				status.SetText(statusLoadingVPN)
-				go func() {
-					app.QueueUpdateDraw(func() {
-						err := RunVPNView(ctx, gcpClient, app, func() {
-							// Callback to return to instance view
-							app.SetInputCapture(nil) // Clear VPN input handler
-							app.SetRoot(flex, true).SetFocus(table)
-							updateTable(currentFilter)
-							status.SetText(statusDefault)
+				// Switch to VPN view with cancellable loading
+				loadingCtx, cancelLoading := context.WithCancel(ctx)
+
+				// Create loading screen with progress
+				loadingText := tview.NewTextView().
+					SetDynamicColors(true).
+					SetTextAlign(tview.AlignCenter)
+				loadingText.SetBorder(true).SetTitle(" Loading VPN View ")
+
+				spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+				spinnerIdx := 0
+				currentMessage := "Initializing..."
+
+				updateLoadingText := func() {
+					loadingText.SetText(fmt.Sprintf("\n\n[yellow]%s[-] %s\n\n[gray]Press Ctrl+C or Esc to cancel[-]",
+						spinnerFrames[spinnerIdx], currentMessage))
+					spinnerIdx = (spinnerIdx + 1) % len(spinnerFrames)
+				}
+				updateLoadingText()
+
+				loadingFlex := tview.NewFlex().
+					AddItem(nil, 0, 1, false).
+					AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+						AddItem(nil, 0, 1, false).
+						AddItem(loadingText, 7, 0, true).
+						AddItem(nil, 0, 1, false), 60, 0, true).
+					AddItem(nil, 0, 1, false)
+
+				// Set up cancel handler
+				loadingText.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+					if event.Key() == tcell.KeyEscape || event.Key() == tcell.KeyCtrlC {
+						cancelLoading()
+						app.SetRoot(flex, true).SetFocus(table)
+						status.SetText(" [yellow]Loading cancelled[-]")
+						time.AfterFunc(2*time.Second, func() {
+							app.QueueUpdateDraw(func() {
+								status.SetText(statusDefault)
+							})
 						})
+						return nil
+					}
+					return event
+				})
+
+				app.SetRoot(loadingFlex, true).SetFocus(loadingText)
+
+				// Start spinner animation
+				spinnerDone := make(chan bool, 2) // Buffered to prevent blocking
+				go func() {
+					ticker := time.NewTicker(100 * time.Millisecond)
+					defer ticker.Stop()
+					for {
+						select {
+						case <-ticker.C:
+							app.QueueUpdateDraw(updateLoadingText)
+						case <-spinnerDone:
+							return
+						case <-loadingCtx.Done():
+							return
+						}
+					}
+				}()
+
+				// Progress callback for VPN loading
+				progressCallback := func(msg string) {
+					currentMessage = msg
+					app.QueueUpdateDraw(updateLoadingText)
+				}
+
+				go func() {
+					err := RunVPNViewWithProgress(loadingCtx, gcpClient, app, progressCallback, func() {
+						// Callback to return to instance view
+						select {
+						case spinnerDone <- true:
+						default:
+						}
+						app.SetInputCapture(mainInputCapture) // Restore main input handler
+						app.SetRoot(flex, true).SetFocus(table)
+						updateTable(currentFilter)
+						status.SetText(statusDefault)
+					})
+					app.QueueUpdateDraw(func() {
+						select {
+						case spinnerDone <- true:
+						default:
+						}
 						if err != nil {
+							if loadingCtx.Err() == context.Canceled {
+								// User cancelled, already handled
+								return
+							}
+							app.SetRoot(flex, true).SetFocus(table)
 							status.SetText(fmt.Sprintf(statusErrorVPN, err))
+							time.AfterFunc(3*time.Second, func() {
+								app.QueueUpdateDraw(func() {
+									status.SetText(statusDefault)
+								})
+							})
+						}
+					})
+				}()
+				return nil
+			}
+			if event.Rune() == 'c' {
+				// Switch to connectivity tests view with cancellable loading
+				loadingCtx, cancelLoading := context.WithCancel(ctx)
+
+				// Create loading screen with progress
+				loadingText := tview.NewTextView().
+					SetDynamicColors(true).
+					SetTextAlign(tview.AlignCenter)
+				loadingText.SetBorder(true).SetTitle(" Loading Connectivity Tests ")
+
+				spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+				spinnerIdx := 0
+				currentMessage := "Loading connectivity tests..."
+
+				updateLoadingText := func() {
+					loadingText.SetText(fmt.Sprintf("\n\n[yellow]%s[-] %s\n\n[gray]Press Ctrl+C or Esc to cancel[-]",
+						spinnerFrames[spinnerIdx], currentMessage))
+					spinnerIdx = (spinnerIdx + 1) % len(spinnerFrames)
+				}
+				updateLoadingText()
+
+				loadingFlex := tview.NewFlex().
+					AddItem(nil, 0, 1, false).
+					AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+						AddItem(nil, 0, 1, false).
+						AddItem(loadingText, 7, 0, true).
+						AddItem(nil, 0, 1, false), 60, 0, true).
+					AddItem(nil, 0, 1, false)
+
+				// Set up cancel handler
+				loadingText.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+					if event.Key() == tcell.KeyEscape || event.Key() == tcell.KeyCtrlC {
+						cancelLoading()
+						app.SetRoot(flex, true).SetFocus(table)
+						status.SetText(" [yellow]Loading cancelled[-]")
+						time.AfterFunc(2*time.Second, func() {
+							app.QueueUpdateDraw(func() {
+								status.SetText(statusDefault)
+							})
+						})
+						return nil
+					}
+					return event
+				})
+
+				app.SetRoot(loadingFlex, true).SetFocus(loadingText)
+
+				// Start spinner animation
+				spinnerDone := make(chan bool, 2) // Buffered to prevent blocking
+				go func() {
+					ticker := time.NewTicker(100 * time.Millisecond)
+					defer ticker.Stop()
+					for {
+						select {
+						case <-ticker.C:
+							app.QueueUpdateDraw(updateLoadingText)
+						case <-spinnerDone:
+							return
+						case <-loadingCtx.Done():
+							return
+						}
+					}
+				}()
+
+				go func() {
+					err := RunConnectivityView(loadingCtx, gcpClient, app, func() {
+						// Callback to return to instance view
+						select {
+						case spinnerDone <- true:
+						default:
+						}
+						app.SetInputCapture(mainInputCapture) // Restore main input handler
+						app.SetRoot(flex, true).SetFocus(table)
+						updateTable(currentFilter)
+						status.SetText(statusDefault)
+					})
+					app.QueueUpdateDraw(func() {
+						select {
+						case spinnerDone <- true:
+						default:
+						}
+						if err != nil {
+							if loadingCtx.Err() == context.Canceled {
+								// User cancelled, already handled
+								return
+							}
+							app.SetRoot(flex, true).SetFocus(table)
+							status.SetText(fmt.Sprintf(statusErrorConnectivity, err))
 							time.AfterFunc(3*time.Second, func() {
 								app.QueueUpdateDraw(func() {
 									status.SetText(statusDefault)
@@ -599,7 +802,10 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 			}
 		}
 		return event
-	})
+	}
+
+	// Set the main input capture
+	app.SetInputCapture(mainInputCapture)
 
 	// Run
 	if err := app.SetRoot(flex, true).EnableMouse(true).Run(); err != nil {
