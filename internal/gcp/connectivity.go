@@ -94,15 +94,23 @@ type Trace struct {
 
 // TraceStep represents a single step in the network trace.
 type TraceStep struct {
-	Description  string
-	State        string
-	ProjectID    string
-	Instance     string
-	Firewall     string
-	Route        string
-	VPC          string
-	LoadBalancer string
-	CausesDrop   bool
+	Description      string
+	State            string
+	ProjectID        string
+	Instance         string
+	Firewall         string
+	Route            string
+	VPC              string
+	LoadBalancer     string
+	CausesDrop       bool
+	RouteType        string
+	RouteNextHopType string
+	RouteDestIPRange string
+	RoutePriority    int64
+	HasNAT           bool
+	HasExternalIP    bool
+	DropReason       string
+	AbortCause       string
 }
 
 // NewConnectivityClient creates a new connectivity test client.
@@ -493,6 +501,9 @@ func (c *ConnectivityClient) convertTraceStep(step *networkmanagement.Step) *Tra
 	// Extract resource information
 	if step.Instance != nil {
 		traceStep.Instance = step.Instance.DisplayName
+		if step.Instance.ExternalIp != "" {
+			traceStep.HasExternalIP = true
+		}
 	}
 
 	if step.Firewall != nil {
@@ -501,6 +512,10 @@ func (c *ConnectivityClient) convertTraceStep(step *networkmanagement.Step) *Tra
 
 	if step.Route != nil {
 		traceStep.Route = step.Route.DisplayName
+		traceStep.RouteType = step.Route.RouteType
+		traceStep.RouteNextHopType = step.Route.NextHopType
+		traceStep.RouteDestIPRange = step.Route.DestIpRange
+		traceStep.RoutePriority = step.Route.Priority
 	}
 
 	if step.Network != nil {
@@ -509,6 +524,18 @@ func (c *ConnectivityClient) convertTraceStep(step *networkmanagement.Step) *Tra
 
 	if step.LoadBalancer != nil {
 		traceStep.LoadBalancer = step.LoadBalancer.LoadBalancerType
+	}
+
+	if step.Nat != nil {
+		traceStep.HasNAT = true
+	}
+
+	if step.Drop != nil && step.Drop.Cause != "" {
+		traceStep.DropReason = step.Drop.Cause
+	}
+
+	if step.Abort != nil && step.Abort.Cause != "" {
+		traceStep.AbortCause = step.Abort.Cause
 	}
 
 	return traceStep

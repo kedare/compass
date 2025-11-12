@@ -739,6 +739,53 @@ func FormatTraceStepForTable(step *gcp.TraceStep) (stepType string, resource str
 	return "Step", "-", step.State
 }
 
+// isPrivateIP checks if an IP address is in RFC1918 private range
+func isPrivateIP(ip string) bool {
+	if ip == "" {
+		return false
+	}
+	// Simple check for RFC1918 ranges: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+	if strings.HasPrefix(ip, "10.") {
+		return true
+	}
+	if strings.HasPrefix(ip, "192.168.") {
+		return true
+	}
+	if strings.HasPrefix(ip, "172.") {
+		parts := strings.Split(ip, ".")
+		if len(parts) >= 2 {
+			second, err := strconv.Atoi(parts[1])
+			if err == nil && second >= 16 && second <= 31 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasNATInTrace checks if any step in the trace contains NAT
+func hasNATInTrace(trace *gcp.Trace) bool {
+	if trace == nil {
+		return false
+	}
+	for _, step := range trace.Steps {
+		if step.HasNAT || step.State == "NAT" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasNATInTraces checks if any trace contains NAT
+func hasNATInTraces(traces []*gcp.Trace) bool {
+	for _, trace := range traces {
+		if hasNATInTrace(trace) {
+			return true
+		}
+	}
+	return false
+}
+
 // displaySuggestedFixes displays suggested fixes for failed tests.
 // displaySuggestedFixes prints actionable hints based on failed reachability traces.
 func displaySuggestedFixes(result *gcp.ConnectivityTestResult, status connectivityStatus) {
@@ -770,45 +817,55 @@ func displaySuggestedFixesForDetails(result *gcp.ConnectivityTestResult, details
 		source, destination = destination, source
 	}
 
-	// Find the step that caused the drop
+	ctx := fixContext{
+		result:      result,
+		details:     details,
+		source:      source,
+		destination: destination,
+		reverse:     reverse,
+	}
+
+	checkers := getAllCheckers()
+
+	// Iterate through all traces and steps
 	for _, trace := range details.Traces {
 		for _, step := range trace.Steps {
-			if step.CausesDrop {
-				if step.Firewall != "" {
+			// Check each fixer in order
+			for _, checker := range checkers {
+				if suggestion := checker.Check(ctx, step); suggestion != "" {
 					fmt.Println("\n  Suggested Fix:")
-					fmt.Printf("  Add firewall rule allowing %s traffic", result.Protocol)
-
-					if source != nil && source.IPAddress != "" {
-						fmt.Printf(" from %s", source.IPAddress)
+					// Print each line with proper indentation
+					for _, line := range splitLines(suggestion) {
+						fmt.Printf("  %s\n", line)
 					}
-
-					if destination != nil {
-						if destination.IPAddress != "" {
-							fmt.Printf(" to %s", destination.IPAddress)
-						}
-
-						if destination.Port > 0 {
-							fmt.Printf(":%d", destination.Port)
-						}
-					}
-
-					fmt.Println()
-				} else if step.Route != "" {
-					fmt.Println("\n  Suggested Fix:")
-
-					if reverse {
-						fmt.Println("  Check return-path routing configuration and ensure proper route exists")
-					} else {
-						fmt.Println("  Check routing configuration and ensure proper route exists")
-					}
+					return true
 				}
-
-				return true
 			}
 		}
 	}
 
 	return false
+}
+
+// splitLines splits a string by newlines
+func splitLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	result := []string{}
+	current := ""
+	for _, ch := range s {
+		if ch == '\n' {
+			result = append(result, current)
+			current = ""
+		} else {
+			current += string(ch)
+		}
+	}
+	if current != "" {
+		result = append(result, current)
+	}
+	return result
 }
 
 // formatEndpoint formats an endpoint for display.
