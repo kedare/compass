@@ -213,6 +213,15 @@ compass gcp ssh api-server --project prod --zone europe-south1-b
 compass gcp ssh my-mig --project prod --type mig
 ```
 
+**Force or disable IAP tunneling:**
+```bash
+# Always go through IAP even if the VM has a public IP
+compass gcp ssh bastion --project prod --iap=true
+
+# Prefer a direct SSH session when the VM exposes a public IP
+compass gcp ssh metrics-host --project prod --iap=false
+```
+
 **Port forwarding through IAP:**
 ```bash
 # Forward local port 3000 to instance port 3000
@@ -459,6 +468,7 @@ compass gcp ssh [instance-name] [flags]
 | `--zone` | `-z` | GCP zone | Auto-discovered from cache or API |
 | `--type` | `-t` | Resource type: `instance` or `mig` | Auto-detected (tries MIG first, then instance) |
 | `--ssh-flag` | | Additional SSH flags (can be used multiple times) | None |
+| `--iap` | | Force or disable IAP tunneling (`true`/`false`). Compass remembers your choice per instance via the cache. | Automatic (IAP only when the instance lacks an external IP) |
 
 **Global flags:**
 
@@ -575,6 +585,8 @@ compass gcp ssh internal-server \
 - **Project list**: Projects you've selected via `compass gcp projects import` are stored for multi-project operations. These are used when you run commands like `compass gcp ssh` or `compass gcp ip lookup` without specifying a `--project` flag. Entries expire after 30 days of inactivity.
 
 - **Resource locations**: Once `compass gcp ssh` resolves a VM or MIG, its project, zone/region, and resource type are stored for 30 days. When you omit `--project`, `--zone`, or `--type` on subsequent connections, the CLI reuses the cached metadata instantly without making API calls. Providing any of these flags bypasses the cache for that specific parameter.
+
+- **IAP preferences**: When you pass `--iap=true` or `--iap=false`, the selection is stored alongside the instance metadata so future `compass gcp ssh` runs reuse the same tunneling preference automatically.
 
 - **Zone listings**: Discovered zones for a project are cached for 30 days to speed up future region/zone discovery without additional API calls.
 

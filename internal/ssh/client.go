@@ -41,13 +41,18 @@ func NewClient() *Client {
 	}
 }
 
-func (c *Client) ConnectWithIAP(ctx context.Context, instance *gcp.Instance, project string, sshFlags []string) error {
+func (c *Client) ConnectWithIAP(ctx context.Context, instance *gcp.Instance, project string, sshFlags []string, preferredIAP *bool) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	if !instance.CanUseIAP {
-		logger.Log.Debug("IAP not available, using direct connection")
+	useIAP := instance.CanUseIAP
+	if preferredIAP != nil {
+		useIAP = *preferredIAP
+	}
+
+	if !useIAP {
+		logger.Log.Debug("IAP disabled for this connection, using direct SSH")
 
 		return c.connectDirect(ctx, instance, sshFlags)
 	}
