@@ -44,6 +44,8 @@ type LocationInfo struct {
 	Region     string       `json:"region,omitempty"`
 	Type       ResourceType `json:"type"`
 	IsRegional bool         `json:"is_regional,omitempty"`
+	// IAP stores the persisted user preference for using IAP tunneling with this instance.
+	IAP *bool `json:"iap,omitempty"`
 }
 
 // SubnetSecondaryRange captures details about a secondary IP range attached to a subnet.

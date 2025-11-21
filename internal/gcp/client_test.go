@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kedare/compass/internal/cache"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/compute/v1"
 )
@@ -590,4 +591,37 @@ func TestProgressHelpers(t *testing.T) {
 		require.True(t, event.Info)
 		require.NoError(t, event.Err)
 	})
+}
+
+func TestCacheInstancePreservesIAPPreference(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	c, err := cache.New()
+	require.NoError(t, err)
+
+	preferIAP := true
+	require.NoError(t, c.Set("iap-instance", &cache.LocationInfo{
+		Project: "demo",
+		Zone:    "us-central1-a",
+		Type:    cache.ResourceTypeInstance,
+		IAP:     &preferIAP,
+	}))
+
+	client := &Client{
+		cache:   c,
+		project: "demo",
+	}
+
+	client.cacheInstance("iap-instance", &Instance{
+		Name: "iap-instance",
+		Zone: "us-central1-b",
+	})
+
+	stored, ok := c.Get("iap-instance")
+	require.True(t, ok)
+	require.NotNil(t, stored)
+	require.Equal(t, "us-central1-b", stored.Zone)
+	require.NotNil(t, stored.IAP)
+	require.True(t, *stored.IAP)
 }

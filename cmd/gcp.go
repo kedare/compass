@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/kedare/compass/internal/cache"
 	"github.com/kedare/compass/internal/gcp"
 	"github.com/kedare/compass/internal/logger"
 	"github.com/kedare/compass/internal/output"
@@ -30,6 +31,7 @@ var (
 	zone         string
 	sshFlags     []string
 	resourceType string
+	iapFlag      bool
 )
 
 var gcpCmd = &cobra.Command{
@@ -75,6 +77,8 @@ Examples:
 	Run: func(cmd *cobra.Command, args []string) {
 		instanceName := args[0]
 		logger.Log.Infof("Starting connection process for: %s", instanceName)
+
+		iapFlagSet := cmd.Flags().Changed("iap")
 
 		// Validate resource type if specified
 		if resourceType != "" && resourceType != resourceTypeInstance && resourceType != resourceTypeMIG {
@@ -273,14 +277,27 @@ Examples:
 			logger.Log.Fatalf("Failed to locate instance %s", instanceName)
 		}
 
+		var iapPreference *bool
+		if iapFlagSet {
+			iapPreference = boolPtr(iapFlag)
+			logger.Log.Debugf("Using explicit --iap value: %t", iapFlag)
+		} else if pref := loadIAPPreference(instance.Name); pref != nil {
+			iapPreference = pref
+			logger.Log.Debugf("Using cached IAP preference (%t) for %s", *pref, instance.Name)
+		}
+
 		// Update project from the found instance's project
 		project = instance.Project
 
 		logger.Log.Infof("Connecting to instance: %s of project %s in zone: %s", instance.Name, project, instance.Zone)
 
+		if iapFlagSet {
+			rememberIAPPreference(instance, iapFlag)
+		}
+
 		// Connect via SSH with IAP tunnel
 		sshClient := ssh.NewClient()
-		if err := sshClient.ConnectWithIAP(ctx, instance, project, sshFlags); err != nil {
+		if err := sshClient.ConnectWithIAP(ctx, instance, project, sshFlags, iapPreference); err != nil {
 			logger.Log.Fatalf("Failed to connect via SSH: %v", err)
 		}
 
@@ -289,6 +306,75 @@ Examples:
 			gcpClient.RememberProject()
 		}
 	},
+}
+
+// loadIAPPreference returns the cached IAP preference for the provided instance when available.
+func loadIAPPreference(instanceName string) *bool {
+	cacheStore, err := gcp.LoadCache()
+	if err != nil {
+		logger.Log.Debugf("Failed to load cache for IAP preference on %s: %v", instanceName, err)
+		return nil
+	}
+
+	if cacheStore == nil || instanceName == "" {
+		return nil
+	}
+
+	info, found := cacheStore.Get(instanceName)
+	if !found || info == nil || info.IAP == nil {
+		return nil
+	}
+
+	return boolPtr(*info.IAP)
+}
+
+// rememberIAPPreference persists the selected IAP preference for the resolved instance.
+func rememberIAPPreference(instance *gcp.Instance, preferIAP bool) {
+	if instance == nil {
+		return
+	}
+
+	cacheStore, err := gcp.LoadCache()
+	if err != nil {
+		logger.Log.Debugf("Failed to access cache for IAP preference on %s: %v", instance.Name, err)
+		return
+	}
+
+	if cacheStore == nil {
+		return
+	}
+
+	info, found := cacheStore.Get(instance.Name)
+	if !found || info == nil {
+		info = &cache.LocationInfo{
+			Project: instance.Project,
+			Zone:    instance.Zone,
+			Type:    cache.ResourceTypeInstance,
+		}
+	} else {
+		if info.Project == "" {
+			info.Project = instance.Project
+		}
+		if info.Zone == "" {
+			info.Zone = instance.Zone
+		}
+		info.Type = cache.ResourceTypeInstance
+	}
+
+	info.IAP = boolPtr(preferIAP)
+
+	if err := cacheStore.Set(instance.Name, info); err != nil {
+		logger.Log.Warnf("Failed to cache IAP preference for %s: %v", instance.Name, err)
+		return
+	}
+
+	logger.Log.Debugf("Stored IAP preference (%t) for %s", preferIAP, instance.Name)
+}
+
+// boolPtr returns a pointer to the provided boolean value.
+func boolPtr(value bool) *bool {
+	v := value
+	return &v
 }
 
 func resolveInstanceFromMIG(ctx context.Context, cmd *cobra.Command, client *gcp.Client, migName, location string) (*gcp.Instance, error) {
@@ -959,6 +1045,7 @@ func init() {
 	gcpSshCmd.Flags().StringVarP(&zone, "zone", "z", "", "GCP zone (auto-discovered if not specified)")
 	gcpSshCmd.Flags().StringVarP(&resourceType, "type", "t", "", "Resource type: 'instance' or 'mig' (auto-detected if not specified)")
 	gcpSshCmd.Flags().StringSliceVar(&sshFlags, "ssh-flag", []string{}, "Additional SSH flags to pass to the SSH command (can be used multiple times)")
+	gcpSshCmd.Flags().BoolVar(&iapFlag, "iap", false, "Force usage of IAP tunneling (true/false). Defaults to automatic detection based on the instance configuration")
 	if err := gcpSshCmd.RegisterFlagCompletionFunc("zone", gcpSSHZoneCompletion); err != nil {
 		logger.Log.Fatalf("Failed to register zone completion: %v", err)
 	}

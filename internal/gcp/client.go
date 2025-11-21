@@ -199,15 +199,10 @@ func NewClient(ctx context.Context, project string) (*Client, error) {
 		project: project,
 	}
 
-	if cache.Enabled() {
-		// Initialize cache
-		c, err := cache.New()
-		if err != nil {
-			logger.Log.Warnf("Failed to initialize cache: %v", err)
-			// Continue without cache
-			c = nil
-		}
-
+	c, err := getSharedCache()
+	if err != nil {
+		logger.Log.Warnf("Failed to initialize cache: %v", err)
+	} else {
 		client.cache = c
 	}
 
@@ -1325,12 +1320,21 @@ func readProjectFromGCloudConfig() (string, error) {
 	return "", errors.New("project not found in gcloud config")
 }
 
-// cacheInstance stores instance location information in the cache.
+// cacheInstance stores instance location information in the cache while preserving
+// any previously saved user preferences (like the IAP flag).
 func (c *Client) cacheInstance(instanceName string, instance *Instance) {
+	if c == nil || c.cache == nil || instance == nil {
+		return
+	}
+
 	info := &cache.LocationInfo{
 		Project: c.project,
 		Zone:    instance.Zone,
 		Type:    cache.ResourceTypeInstance,
+	}
+
+	if stored, found := c.cache.Get(instanceName); found && stored != nil && stored.IAP != nil {
+		info.IAP = stored.IAP
 	}
 
 	if err := c.cache.Set(instanceName, info); err != nil {
