@@ -14,16 +14,17 @@ import (
 // Spinner provides a terminal spinner using pterm when a TTY is available and gracefully
 // degrades to log-style messages otherwise. Spinners are completely suppressed in JSON mode.
 type Spinner struct {
-	mu         sync.Mutex
-	message    string
-	writer     *os.File
-	enabled    bool
-	active     bool
-	stopped    bool
-	spinner    *pterm.SpinnerPrinter
-	multi      *multiSpinnerManager
-	multiInUse bool
-	jsonMode   bool // If true, suppress all output including fallback messages
+	mu            sync.Mutex
+	message       string
+	writer        *os.File
+	spinnerWriter io.Writer
+	enabled       bool
+	active        bool
+	stopped       bool
+	spinner       *pterm.SpinnerPrinter
+	multi         *multiSpinnerManager
+	multiInUse    bool
+	jsonMode      bool // If true, suppress all output including fallback messages
 }
 
 // NewSpinner creates a spinner that renders to stderr. Call Start before recording progress.
@@ -68,18 +69,13 @@ func (s *Spinner) Start() {
 			logger.Log.Debugf("Failed to initialize spinner writer: %v", err)
 			s.enabled = false
 		} else {
-			sp, startErr := pterm.DefaultSpinner.
-				WithShowTimer(false).
-				WithRemoveWhenDone(true).
-				WithWriter(writer).
-				Start(s.message)
-			if startErr != nil {
-				logger.Log.Debugf("Failed to start spinner: %v", startErr)
+			s.spinnerWriter = writer
+			if s.startSpinnerLocked(s.message) {
+				s.multiInUse = true
+			} else {
+				s.spinnerWriter = nil
 				s.enabled = false
 				s.multi.release()
-			} else {
-				s.spinner = sp
-				s.multiInUse = true
 			}
 		}
 	}
@@ -107,7 +103,7 @@ func (s *Spinner) Update(message string) {
 	}
 
 	if s.spinner != nil {
-		s.spinner.UpdateText(message)
+		s.restartSpinnerLocked(message)
 
 		return
 	}
@@ -171,6 +167,62 @@ func (s *Spinner) stop(fn func(*pterm.SpinnerPrinter), fallbackPrefix, fallbackM
 	if s.multiInUse && s.multi != nil {
 		s.multi.release()
 		s.multiInUse = false
+	}
+
+	s.spinnerWriter = nil
+}
+
+// startSpinnerLocked initializes the underlying pterm spinner with the current writer.
+// The caller must hold s.mu.
+func (s *Spinner) startSpinnerLocked(message string) bool {
+	if s.spinnerWriter == nil {
+		return false
+	}
+
+	sp, err := pterm.DefaultSpinner.
+		WithShowTimer(false).
+		WithRemoveWhenDone(true).
+		WithWriter(s.spinnerWriter).
+		Start(message)
+	if err != nil {
+		logger.Log.Debugf("Failed to start spinner: %v", err)
+
+		return false
+	}
+
+	s.spinner = sp
+
+	return true
+}
+
+func (s *Spinner) restartSpinnerLocked(message string) {
+	if s.spinner == nil || s.spinnerWriter == nil {
+		return
+	}
+
+	// Stopping avoids calling SpinnerPrinter.UpdateText, which can race with the
+	// internal render loop and panic when the string header is partially written.
+	if err := s.spinner.Stop(); err != nil {
+		logger.Log.Debugf("Failed to stop spinner before update: %v", err)
+	}
+
+	if s.startSpinnerLocked(message) {
+		return
+	}
+
+	// If restarting fails, disable spinner and fallback to writer output.
+	s.spinner = nil
+	s.enabled = false
+	if s.multiInUse && s.multi != nil {
+		s.multi.release()
+		s.multiInUse = false
+	}
+	s.spinnerWriter = nil
+
+	if !s.jsonMode {
+		if _, err := fmt.Fprintf(s.writer, "%s...\n", message); err != nil {
+			logger.Log.Debugf("Failed to write spinner fallback message: %v", err)
+		}
 	}
 }
 
