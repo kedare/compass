@@ -170,6 +170,9 @@ compass gcp ip lookup 192.168.0.208
 # Import projects for multi-project operations
 compass gcp projects import
 
+# Search cached projects for instances with matching names
+compass gcp search piou
+
 # Inspect VPN gateways
 compass gcp vpn list --project prod
 
@@ -250,6 +253,20 @@ INFO  Connecting to instance: unknown-instance of project prod in zone: us-west1
 INFO  Establishing SSH connection via IAP tunnel...
 user@unknown-instance:~$
 ```
+
+### Resource Search Examples
+
+Use `compass gcp search` to scan every cached project (or a `--project` override) for resource names containing your query. The initial release focuses on Compute Engine instances and prints a table with project, zone, and IP details.
+
+```console
+$ compass gcp search piou
+TYPE              PROJECT       LOCATION         NAME          DETAILS
+compute.instance  prod-project  us-central1-b    piou-runner   status=RUNNING, internalIP=10.20.0.5
+```
+
+- Run `compass gcp projects import` first so the search knows which projects to inspect.
+- Use `--project <id>` when you want to bypass the cache and only inspect a single project.
+- The underlying search engine was built to extend beyond VMs, paving the way for Cloud SQL, IP reservations, load balancers, and other resources in upcoming updates.
 
 ### IP Lookup Examples
 
