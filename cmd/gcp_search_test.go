@@ -130,3 +130,101 @@ func (f searchEngineFunc) SearchWithWarnings(ctx context.Context, projects []str
 	}
 	return &search.SearchOutput{Results: results}, nil
 }
+
+func TestParseSearchTypes(t *testing.T) {
+	t.Run("no filters returns nil", func(t *testing.T) {
+		result, err := parseSearchTypes(nil, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != nil {
+			t.Fatalf("expected nil, got %v", result)
+		}
+	})
+
+	t.Run("only include types", func(t *testing.T) {
+		result, err := parseSearchTypes([]string{"compute.instance", "compute.disk"}, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 2 {
+			t.Fatalf("expected 2 types, got %d", len(result))
+		}
+		if result[0] != search.KindComputeInstance || result[1] != search.KindDisk {
+			t.Fatalf("unexpected types: %v", result)
+		}
+	})
+
+	t.Run("only exclude types", func(t *testing.T) {
+		result, err := parseSearchTypes(nil, []string{"compute.instance"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// Should return all types except compute.instance
+		allKinds := search.AllResourceKinds()
+		expectedLen := len(allKinds) - 1
+		if len(result) != expectedLen {
+			t.Fatalf("expected %d types, got %d", expectedLen, len(result))
+		}
+		// Verify compute.instance is not in the result
+		for _, kind := range result {
+			if kind == search.KindComputeInstance {
+				t.Fatal("compute.instance should be excluded")
+			}
+		}
+	})
+
+	t.Run("include and exclude types", func(t *testing.T) {
+		result, err := parseSearchTypes(
+			[]string{"compute.instance", "compute.disk", "storage.bucket"},
+			[]string{"compute.disk"},
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 2 {
+			t.Fatalf("expected 2 types, got %d", len(result))
+		}
+		// Should have instance and bucket but not disk
+		hasInstance := false
+		hasBucket := false
+		for _, kind := range result {
+			if kind == search.KindComputeInstance {
+				hasInstance = true
+			}
+			if kind == search.KindBucket {
+				hasBucket = true
+			}
+			if kind == search.KindDisk {
+				t.Fatal("compute.disk should be excluded")
+			}
+		}
+		if !hasInstance || !hasBucket {
+			t.Fatalf("expected instance and bucket, got %v", result)
+		}
+	})
+
+	t.Run("invalid include type", func(t *testing.T) {
+		_, err := parseSearchTypes([]string{"invalid.type"}, nil)
+		if err == nil {
+			t.Fatal("expected error for invalid type")
+		}
+	})
+
+	t.Run("invalid exclude type", func(t *testing.T) {
+		_, err := parseSearchTypes(nil, []string{"invalid.type"})
+		if err == nil {
+			t.Fatal("expected error for invalid type")
+		}
+	})
+
+	t.Run("empty strings are ignored", func(t *testing.T) {
+		result, err := parseSearchTypes([]string{"compute.instance", "", "  "}, []string{"", "compute.disk"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 1 || result[0] != search.KindComputeInstance {
+			t.Fatalf("expected only compute.instance, got %v", result)
+		}
+	})
+}

@@ -181,6 +181,7 @@ var (
 )
 
 var searchTypes []string
+var searchNoTypes []string
 
 var gcpSearchCmd = &cobra.Command{
 	Use:   "search <name-fragment>",
@@ -194,7 +195,11 @@ and subnets, Cloud Run services, firewall rules, and Secret Manager secrets. Ret
 every match along with the project and location.
 
 Use --type to filter results to specific resource types. Multiple types can be specified
-by using the flag multiple times (e.g., --type compute.instance --type compute.disk).`,
+by using the flag multiple times (e.g., --type compute.instance --type compute.disk).
+
+Use --no-type to exclude specific resource types from the results. Multiple types can be
+specified by using the flag multiple times (e.g., --no-type storage.bucket --no-type compute.disk).
+When both --type and --no-type are used, --no-type is applied to the --type filter.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -208,7 +213,7 @@ by using the flag multiple times (e.g., --type compute.instance --type compute.d
 		}
 
 		// Parse and validate type filters
-		typeFilters, err := parseSearchTypes(searchTypes)
+		typeFilters, err := parseSearchTypes(searchTypes, searchNoTypes)
 		if err != nil {
 			return err
 		}
@@ -363,11 +368,50 @@ func formatResultDetails(details map[string]string) string {
 }
 
 // parseSearchTypes validates and converts string type filters to ResourceKind values.
-func parseSearchTypes(types []string) ([]search.ResourceKind, error) {
-	if len(types) == 0 {
-		return nil, nil
+// It handles both inclusion (types) and exclusion (noTypes) filters.
+// If types is empty but noTypes is specified, it returns all types except the excluded ones.
+// If both are specified, it returns the intersection (types minus noTypes).
+func parseSearchTypes(types []string, noTypes []string) ([]search.ResourceKind, error) {
+	// Validate and parse excluded types first
+	excludedTypes := make(map[search.ResourceKind]struct{})
+	for _, t := range noTypes {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+
+		if !search.IsValidResourceKind(t) {
+			validKinds := make([]string, 0, len(search.AllResourceKinds()))
+			for _, k := range search.AllResourceKinds() {
+				validKinds = append(validKinds, string(k))
+			}
+
+			return nil, fmt.Errorf("invalid resource type in --no-type %q. Valid types: %s", t, strings.Join(validKinds, ", "))
+		}
+
+		excludedTypes[search.ResourceKind(t)] = struct{}{}
 	}
 
+	// If no inclusion types specified
+	if len(types) == 0 {
+		// If no exclusions either, return nil (all types)
+		if len(excludedTypes) == 0 {
+			return nil, nil
+		}
+
+		// Return all types except excluded ones
+		allKinds := search.AllResourceKinds()
+		result := make([]search.ResourceKind, 0, len(allKinds))
+		for _, kind := range allKinds {
+			if _, excluded := excludedTypes[kind]; !excluded {
+				result = append(result, kind)
+			}
+		}
+
+		return result, nil
+	}
+
+	// Parse and filter inclusion types
 	result := make([]search.ResourceKind, 0, len(types))
 	for _, t := range types {
 		t = strings.TrimSpace(t)
@@ -384,7 +428,11 @@ func parseSearchTypes(types []string) ([]search.ResourceKind, error) {
 			return nil, fmt.Errorf("invalid resource type %q. Valid types: %s", t, strings.Join(validKinds, ", "))
 		}
 
-		result = append(result, search.ResourceKind(t))
+		kind := search.ResourceKind(t)
+		// Only add if not excluded
+		if _, excluded := excludedTypes[kind]; !excluded {
+			result = append(result, kind)
+		}
 	}
 
 	return result, nil
@@ -410,6 +458,10 @@ func init() {
 	gcpSearchCmd.Flags().StringArrayVarP(&searchTypes, "type", "t", nil,
 		"Filter results by resource type (can be specified multiple times)")
 	_ = gcpSearchCmd.RegisterFlagCompletionFunc("type", completeSearchTypes)
+
+	gcpSearchCmd.Flags().StringArrayVar(&searchNoTypes, "no-type", nil,
+		"Exclude specific resource types from results (can be specified multiple times)")
+	_ = gcpSearchCmd.RegisterFlagCompletionFunc("no-type", completeSearchTypes)
 
 	gcpCmd.AddCommand(gcpSearchCmd)
 }
