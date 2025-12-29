@@ -17,6 +17,7 @@ import (
 // resourceSearchEngine captures the engine behaviour used by the Cobra command.
 type resourceSearchEngine interface {
 	Search(ctx context.Context, projects []string, query search.Query) ([]search.Result, error)
+	SearchWithWarnings(ctx context.Context, projects []string, query search.Query) (*search.SearchOutput, error)
 }
 
 var (
@@ -39,17 +40,159 @@ var (
 			},
 		}
 	}
+	migProviderFactory = func() search.Provider {
+		return &search.MIGProvider{
+			NewClient: func(ctx context.Context, project string) (search.MIGClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	instanceTemplateProviderFactory = func() search.Provider {
+		return &search.InstanceTemplateProvider{
+			NewClient: func(ctx context.Context, project string) (search.InstanceTemplateClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	addressProviderFactory = func() search.Provider {
+		return &search.AddressProvider{
+			NewClient: func(ctx context.Context, project string) (search.AddressClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	diskProviderFactory = func() search.Provider {
+		return &search.DiskProvider{
+			NewClient: func(ctx context.Context, project string) (search.DiskClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	snapshotProviderFactory = func() search.Provider {
+		return &search.SnapshotProvider{
+			NewClient: func(ctx context.Context, project string) (search.SnapshotClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	bucketProviderFactory = func() search.Provider {
+		return &search.BucketProvider{
+			NewClient: func(ctx context.Context, project string) (search.BucketClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	forwardingRuleProviderFactory = func() search.Provider {
+		return &search.ForwardingRuleProvider{
+			NewClient: func(ctx context.Context, project string) (search.ForwardingRuleClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	backendServiceProviderFactory = func() search.Provider {
+		return &search.BackendServiceProvider{
+			NewClient: func(ctx context.Context, project string) (search.BackendServiceClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	targetPoolProviderFactory = func() search.Provider {
+		return &search.TargetPoolProvider{
+			NewClient: func(ctx context.Context, project string) (search.TargetPoolClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	healthCheckProviderFactory = func() search.Provider {
+		return &search.HealthCheckProvider{
+			NewClient: func(ctx context.Context, project string) (search.HealthCheckClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	urlMapProviderFactory = func() search.Provider {
+		return &search.URLMapProvider{
+			NewClient: func(ctx context.Context, project string) (search.URLMapClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	cloudSQLProviderFactory = func() search.Provider {
+		return &search.CloudSQLProvider{
+			NewClient: func(ctx context.Context, project string) (search.CloudSQLClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	gkeClusterProviderFactory = func() search.Provider {
+		return &search.GKEClusterProvider{
+			NewClient: func(ctx context.Context, project string) (search.GKEClusterClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	gkeNodePoolProviderFactory = func() search.Provider {
+		return &search.GKENodePoolProvider{
+			NewClient: func(ctx context.Context, project string) (search.GKENodePoolClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	vpcNetworkProviderFactory = func() search.Provider {
+		return &search.VPCNetworkProvider{
+			NewClient: func(ctx context.Context, project string) (search.VPCNetworkClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	subnetProviderFactory = func() search.Provider {
+		return &search.SubnetProvider{
+			NewClient: func(ctx context.Context, project string) (search.SubnetClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	cloudRunProviderFactory = func() search.Provider {
+		return &search.CloudRunProvider{
+			NewClient: func(ctx context.Context, project string) (search.CloudRunClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	firewallRuleProviderFactory = func() search.Provider {
+		return &search.FirewallRuleProvider{
+			NewClient: func(ctx context.Context, project string) (search.FirewallRuleClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	secretProviderFactory = func() search.Provider {
+		return &search.SecretProvider{
+			NewClient: func(ctx context.Context, project string) (search.SecretClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
 	searchEngineFactory = func(providers ...search.Provider) resourceSearchEngine {
 		return search.NewEngine(providers...)
 	}
 )
 
+var searchTypes []string
+
 var gcpSearchCmd = &cobra.Command{
 	Use:   "search <name-fragment>",
 	Short: "Search cached GCP projects for resources by name",
 	Long: `Search across the cached GCP projects (or a --project override) for resources that
-contain the provided text. The search currently covers Compute Engine instances and
-returns every match along with the project and location.`,
+contain the provided text. The search covers Compute Engine instances, managed instance
+groups, instance templates, IP address reservations, disks, snapshots, Cloud Storage
+buckets, load balancer resources (forwarding rules, backend services, target pools,
+health checks, URL maps), Cloud SQL instances, GKE clusters and node pools, VPC networks
+and subnets, Cloud Run services, firewall rules, and Secret Manager secrets. Returns
+every match along with the project and location.
+
+Use --type to filter results to specific resource types. Multiple types can be specified
+by using the flag multiple times (e.g., --type compute.instance --type compute.disk).`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -62,11 +205,38 @@ returns every match along with the project and location.`,
 			return err
 		}
 
-		engine := searchEngineFactory(instanceProviderFactory())
-		query := search.Query{Term: args[0]}
+		// Parse and validate type filters
+		typeFilters, err := parseSearchTypes(searchTypes)
+		if err != nil {
+			return err
+		}
+
+		engine := searchEngineFactory(
+			instanceProviderFactory(),
+			migProviderFactory(),
+			instanceTemplateProviderFactory(),
+			addressProviderFactory(),
+			diskProviderFactory(),
+			snapshotProviderFactory(),
+			bucketProviderFactory(),
+			forwardingRuleProviderFactory(),
+			backendServiceProviderFactory(),
+			targetPoolProviderFactory(),
+			healthCheckProviderFactory(),
+			urlMapProviderFactory(),
+			cloudSQLProviderFactory(),
+			gkeClusterProviderFactory(),
+			gkeNodePoolProviderFactory(),
+			vpcNetworkProviderFactory(),
+			subnetProviderFactory(),
+			cloudRunProviderFactory(),
+			firewallRuleProviderFactory(),
+			secretProviderFactory(),
+		)
+		query := search.Query{Term: args[0], Types: typeFilters}
 
 		spinner, _ := pterm.DefaultSpinner.Start(fmt.Sprintf("Searching %d project(s)...", len(projects)))
-		results, searchErr := engine.Search(ctx, projects, query)
+		output, searchErr := engine.SearchWithWarnings(ctx, projects, query)
 		if searchErr != nil {
 			if spinner != nil {
 				spinner.Fail("Search failed")
@@ -75,10 +245,11 @@ returns every match along with the project and location.`,
 			return searchErr
 		}
 		if spinner != nil {
-			spinner.Success(fmt.Sprintf("Found %d matching resource(s)", len(results)))
+			spinner.Success(fmt.Sprintf("Found %d matching resource(s)", len(output.Results)))
 		}
 
-		displaySearchResults(results)
+		displaySearchResults(output.Results)
+		displaySearchWarnings(output.Warnings)
 
 		return nil
 	},
@@ -106,6 +277,33 @@ func resolveSearchProjects() ([]string, error) {
 	}
 
 	return trimmed, nil
+}
+
+// displaySearchWarnings shows any warnings from providers that failed during search.
+func displaySearchWarnings(warnings []search.SearchWarning) {
+	if len(warnings) == 0 {
+		return
+	}
+
+	// Group warnings by provider to avoid repeating the same API error for every project
+	providerErrors := make(map[search.ResourceKind]int)
+	for _, w := range warnings {
+		providerErrors[w.Provider]++
+	}
+
+	pterm.Println()
+	pterm.Warning.Printf("Some providers encountered errors (%d total):\n", len(warnings))
+	for provider, count := range providerErrors {
+		// Find a sample error for this provider
+		var sampleErr error
+		for _, w := range warnings {
+			if w.Provider == provider {
+				sampleErr = w.Err
+				break
+			}
+		}
+		pterm.Warning.Printf("  - %s: %d project(s) failed - %v\n", provider, count, sampleErr)
+	}
 }
 
 // displaySearchResults renders the search matches to stdout using pterm tables.
@@ -159,6 +357,54 @@ func formatResultDetails(details map[string]string) string {
 	return strings.Join(parts, ", ")
 }
 
+// parseSearchTypes validates and converts string type filters to ResourceKind values.
+func parseSearchTypes(types []string) ([]search.ResourceKind, error) {
+	if len(types) == 0 {
+		return nil, nil
+	}
+
+	result := make([]search.ResourceKind, 0, len(types))
+	for _, t := range types {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+
+		if !search.IsValidResourceKind(t) {
+			validKinds := make([]string, 0, len(search.AllResourceKinds()))
+			for _, k := range search.AllResourceKinds() {
+				validKinds = append(validKinds, string(k))
+			}
+
+			return nil, fmt.Errorf("invalid resource type %q. Valid types: %s", t, strings.Join(validKinds, ", "))
+		}
+
+		result = append(result, search.ResourceKind(t))
+	}
+
+	return result, nil
+}
+
+// completeSearchTypes provides shell completion for the --type flag.
+func completeSearchTypes(_ *cobra.Command, _ []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	allKinds := search.AllResourceKinds()
+	completions := make([]string, 0, len(allKinds))
+
+	toComplete = strings.ToLower(toComplete)
+	for _, kind := range allKinds {
+		kindStr := string(kind)
+		if toComplete == "" || strings.Contains(strings.ToLower(kindStr), toComplete) {
+			completions = append(completions, kindStr)
+		}
+	}
+
+	return completions, cobra.ShellCompDirectiveNoFileComp
+}
+
 func init() {
+	gcpSearchCmd.Flags().StringArrayVarP(&searchTypes, "type", "t", nil,
+		"Filter results by resource type (can be specified multiple times)")
+	_ = gcpSearchCmd.RegisterFlagCompletionFunc("type", completeSearchTypes)
+
 	gcpCmd.AddCommand(gcpSearchCmd)
 }

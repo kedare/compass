@@ -117,3 +117,11 @@ type searchEngineFunc func(ctx context.Context, projects []string, query search.
 func (f searchEngineFunc) Search(ctx context.Context, projects []string, query search.Query) ([]search.Result, error) {
 	return f(ctx, projects, query)
 }
+
+func (f searchEngineFunc) SearchWithWarnings(ctx context.Context, projects []string, query search.Query) (*search.SearchOutput, error) {
+	results, err := f(ctx, projects, query)
+	if err != nil {
+		return nil, err
+	}
+	return &search.SearchOutput{Results: results}, nil
+}

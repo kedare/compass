@@ -256,17 +256,41 @@ user@unknown-instance:~$
 
 ### Resource Search Examples
 
-Use `compass gcp search` to scan every cached project (or a `--project` override) for resource names containing your query. The initial release focuses on Compute Engine instances and prints a table with project, zone, and IP details.
+Use `compass gcp search` to scan every cached project (or a `--project` override) for resource names containing your query. The search covers a wide range of GCP resources and prints a table with type, project, location, name, and details.
 
 ```console
 $ compass gcp search piou
 TYPE              PROJECT       LOCATION         NAME          DETAILS
-compute.instance  prod-project  us-central1-b    piou-runner   status=RUNNING, internalIP=10.20.0.5
+compute.instance  prod-project  us-central1-b    piou-runner   status=RUNNING, machineType=e2-medium
 ```
+
+**Searchable resource types:**
+
+| Type | Kind | Details shown |
+|------|------|---------------|
+| Compute Engine instances | `compute.instance` | Status, machine type |
+| Managed Instance Groups | `compute.mig` | Location, regional/zonal |
+| Instance templates | `compute.instanceTemplate` | Machine type |
+| IP address reservations | `compute.address` | Address, type, status |
+| Persistent disks | `compute.disk` | Size, type, status |
+| Disk snapshots | `compute.snapshot` | Size, source disk, status |
+| Cloud Storage buckets | `storage.bucket` | Location, storage class |
+| Forwarding rules | `compute.forwardingRule` | IP, protocol, port range, scheme |
+| Backend services | `compute.backendService` | Protocol, scheme, backend count |
+| Target pools | `compute.targetPool` | Session affinity, instance count |
+| Health checks | `compute.healthCheck` | Type, port |
+| URL maps | `compute.urlMap` | Default service, host rules |
+| Cloud SQL instances | `sqladmin.instance` | Region, version, tier, state |
+| GKE clusters | `container.cluster` | Location, status, version, node count |
+| GKE node pools | `container.nodePool` | Cluster, machine type, node count |
+| VPC networks | `compute.network` | Auto-create subnets, subnet count |
+| VPC subnets | `compute.subnet` | Region, network, CIDR, purpose |
+| Cloud Run services | `run.service` | Region, URL, latest revision |
+| Firewall rules | `compute.firewall` | Network, direction, priority |
+| Secret Manager secrets | `secretmanager.secret` | Replication type |
 
 - Run `compass gcp projects import` first so the search knows which projects to inspect.
 - Use `--project <id>` when you want to bypass the cache and only inspect a single project.
-- The underlying search engine was built to extend beyond VMs, paving the way for Cloud SQL, IP reservations, load balancers, and other resources in upcoming updates.
 
 ### IP Lookup Examples
 

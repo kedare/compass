@@ -3,12 +3,9 @@ package search
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
 	"sync"
-
-	"golang.org/x/sync/errgroup"
 )
 
 const defaultProjectConcurrency = 4
@@ -34,7 +31,19 @@ func NewEngine(providers ...Provider) *Engine {
 }
 
 // Search executes the configured providers across the provided projects.
+// It returns partial results even when some providers fail, collecting errors as warnings.
 func (e *Engine) Search(ctx context.Context, projects []string, query Query) ([]Result, error) {
+	output, err := e.SearchWithWarnings(ctx, projects, query)
+	if err != nil {
+		return nil, err
+	}
+	return output.Results, nil
+}
+
+// SearchWithWarnings executes the configured providers across the provided projects.
+// Unlike Search, it returns both results and any warnings from failed providers.
+// This allows callers to display partial results while informing users about failures.
+func (e *Engine) SearchWithWarnings(ctx context.Context, projects []string, query Query) (*SearchOutput, error) {
 	if e == nil {
 		return nil, ErrNoProviders
 	}
@@ -52,6 +61,14 @@ func (e *Engine) Search(ctx context.Context, projects []string, query Query) ([]
 		return nil, ErrEmptyQuery
 	}
 
+	// Filter providers by type if type filter is specified.
+	// This avoids making API calls for resource types we don't care about.
+	activeProviders := filterProvidersByType(e.providers, query)
+	if len(activeProviders) == 0 {
+		// No providers match the requested types
+		return &SearchOutput{}, nil
+	}
+
 	limit := e.MaxConcurrentProjects
 	if limit <= 0 {
 		limit = defaultProjectConcurrency
@@ -60,18 +77,35 @@ func (e *Engine) Search(ctx context.Context, projects []string, query Query) ([]
 	sem := make(chan struct{}, limit)
 	var mu sync.Mutex
 	var results []Result
+	var warnings []SearchWarning
 
-	eg, egCtx := errgroup.WithContext(ctx)
+	var wg sync.WaitGroup
 	for _, project := range trimmed {
 		project := project
-		eg.Go(func() error {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			for _, provider := range e.providers {
-				providerResults, err := provider.Search(egCtx, project, query)
+			// Check if context was cancelled
+			if ctx.Err() != nil {
+				return
+			}
+
+			for _, provider := range activeProviders {
+				providerResults, err := provider.Search(ctx, project, query)
 				if err != nil {
-					return fmt.Errorf("%s: %w", project, err)
+					// Record warning but continue with other providers
+					mu.Lock()
+					warnings = append(warnings, SearchWarning{
+						Project:  project,
+						Provider: provider.Kind(),
+						Err:      err,
+					})
+					mu.Unlock()
+					continue
 				}
 
 				if len(providerResults) == 0 {
@@ -82,14 +116,10 @@ func (e *Engine) Search(ctx context.Context, projects []string, query Query) ([]
 				results = append(results, providerResults...)
 				mu.Unlock()
 			}
-
-			return nil
-		})
+		}()
 	}
 
-	if err := eg.Wait(); err != nil {
-		return nil, err
-	}
+	wg.Wait()
 
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].Project != results[j].Project {
@@ -104,7 +134,18 @@ func (e *Engine) Search(ctx context.Context, projects []string, query Query) ([]
 		return results[i].Location < results[j].Location
 	})
 
-	return results, nil
+	// Sort warnings for consistent output
+	sort.Slice(warnings, func(i, j int) bool {
+		if warnings[i].Project != warnings[j].Project {
+			return warnings[i].Project < warnings[j].Project
+		}
+		return warnings[i].Provider < warnings[j].Provider
+	})
+
+	return &SearchOutput{
+		Results:  results,
+		Warnings: warnings,
+	}, nil
 }
 
 // uniqueProjects trims, deduplicates, and preserves order of project IDs.
@@ -123,4 +164,21 @@ func uniqueProjects(projects []string) []string {
 		ordered = append(ordered, project)
 	}
 	return ordered
+}
+
+// filterProvidersByType returns only providers whose Kind matches the query's type filter.
+// If no type filter is set, all providers are returned.
+func filterProvidersByType(providers []Provider, query Query) []Provider {
+	if len(query.Types) == 0 {
+		return providers
+	}
+
+	filtered := make([]Provider, 0, len(providers))
+	for _, provider := range providers {
+		if query.MatchesType(provider.Kind()) {
+			filtered = append(filtered, provider)
+		}
+	}
+
+	return filtered
 }

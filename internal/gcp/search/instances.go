@@ -20,6 +20,11 @@ type InstanceProvider struct {
 	NewClient InstanceClientFactory
 }
 
+// Kind returns the resource kind this provider handles.
+func (p *InstanceProvider) Kind() ResourceKind {
+	return KindComputeInstance
+}
+
 // Search implements the Provider interface.
 func (p *InstanceProvider) Search(ctx context.Context, project string, query Query) ([]Result, error) {
 	if p == nil || p.NewClient == nil {
