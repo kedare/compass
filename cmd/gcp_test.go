@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
@@ -53,8 +54,20 @@ func TestGcpSshCommandFlags(t *testing.T) {
 	require.Equal(t, "z", zoneFlag.Shorthand)
 	require.NotEmpty(t, zoneFlag.Usage)
 
-	_, directive := gcpSSHZoneCompletion(gcpSshCmd, nil, "")
-	require.Equal(t, cobra.ShellCompDirectiveNoFileComp, directive)
+	t.Run("zone flag completion runs", func(t *testing.T) {
+		// Mock the compute client to avoid real GCP API calls
+		stub := &stubComputeClient{
+			zones: []string{"us-central1-a", "europe-west1-b"},
+		}
+		origFactory := newComputeClientFunc
+		newComputeClientFunc = func(ctx context.Context, projectID string) (computeClient, error) {
+			return stub, nil
+		}
+		t.Cleanup(func() { newComputeClientFunc = origFactory })
+
+		_, directive := gcpSSHZoneCompletion(gcpSshCmd, nil, "")
+		require.Equal(t, cobra.ShellCompDirectiveNoFileComp, directive)
+	})
 
 	typeFlag := gcpSshCmd.Flags().Lookup("type")
 	require.NotNil(t, typeFlag)
