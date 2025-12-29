@@ -62,6 +62,11 @@ func TestResolveSearchProjectsErrorsWithoutCache(t *testing.T) {
 }
 
 func TestGCPSearchCommandInvokesEngine(t *testing.T) {
+	// Disable spinner to avoid race conditions
+	prevUseSpinner := useSpinner
+	useSpinner = false
+	t.Cleanup(func() { useSpinner = prevUseSpinner })
+
 	prevSearchFactory := searchEngineFactory
 	prevProviderFactory := instanceProviderFactory
 	prevProject := project

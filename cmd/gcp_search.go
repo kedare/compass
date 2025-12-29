@@ -176,6 +176,8 @@ var (
 	searchEngineFactory = func(providers ...search.Provider) resourceSearchEngine {
 		return search.NewEngine(providers...)
 	}
+	// useSpinner controls whether to show a spinner during search (disabled in tests to avoid races)
+	useSpinner = true
 )
 
 var searchTypes []string
@@ -235,7 +237,10 @@ by using the flag multiple times (e.g., --type compute.instance --type compute.d
 		)
 		query := search.Query{Term: args[0], Types: typeFilters}
 
-		spinner, _ := pterm.DefaultSpinner.Start(fmt.Sprintf("Searching %d project(s)...", len(projects)))
+		var spinner *pterm.SpinnerPrinter
+		if useSpinner {
+			spinner, _ = pterm.DefaultSpinner.Start(fmt.Sprintf("Searching %d project(s)...", len(projects)))
+		}
 		output, searchErr := engine.SearchWithWarnings(ctx, projects, query)
 		if searchErr != nil {
 			if spinner != nil {
