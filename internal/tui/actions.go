@@ -3,14 +3,21 @@ package tui
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/kedare/compass/internal/gcp"
 	"github.com/kedare/compass/internal/gcp/search"
 	"github.com/rivo/tview"
+)
+
+const (
+	// cloudConsoleBaseURL is the base URL for Google Cloud Console
+	cloudConsoleBaseURL = "https://console.cloud.google.com"
 )
 
 // ResourceAction represents an action that can be performed on a resource
@@ -45,28 +52,19 @@ func GetActionsForResourceType(resourceType string) []ResourceAction {
 		return []ResourceAction{
 			{Key: 's', Name: "SSH", Description: "SSH to instance"},
 			{Key: 'd', Name: "Details", Description: "Show details"},
-		}
-	case string(search.KindManagedInstanceGroup):
-		return []ResourceAction{
-			{Key: 'd', Name: "Details", Description: "Show details"},
+			{Key: 'b', Name: "Browser", Description: "Open in Cloud Console"},
 		}
 	case string(search.KindBucket):
 		return []ResourceAction{
 			{Key: 'd', Name: "Details", Description: "Show details"},
-			{Key: 'o', Name: "Open", Description: "Open in browser"},
-		}
-	case string(search.KindGKECluster):
-		return []ResourceAction{
-			{Key: 'd', Name: "Details", Description: "Show details"},
-		}
-	case string(search.KindCloudSQLInstance):
-		return []ResourceAction{
-			{Key: 'd', Name: "Details", Description: "Show details"},
+			{Key: 'b', Name: "Browser", Description: "Open in Cloud Console"},
+			{Key: 'o', Name: "Open", Description: "Open bucket in browser"},
 		}
 	default:
-		// Default actions for any resource
+		// Most resource types support details and browser
 		return []ResourceAction{
 			{Key: 'd', Name: "Details", Description: "Show details"},
+			{Key: 'b', Name: "Browser", Description: "Open in Cloud Console"},
 		}
 	}
 }
@@ -288,16 +286,269 @@ func (e *InstanceActionExecutor) ExecuteDetails(ctx *ActionContext, showDetailFu
 func FormatInstanceDetails(instance *gcp.Instance, project string) string {
 	var details strings.Builder
 	details.WriteString("[yellow::b]Compute Instance[-:-:-]\n\n")
+
+	// Basic info
 	details.WriteString(fmt.Sprintf("[white::b]Name:[-:-:-]         %s\n", instance.Name))
 	details.WriteString(fmt.Sprintf("[white::b]Project:[-:-:-]      %s\n", project))
 	details.WriteString(fmt.Sprintf("[white::b]Zone:[-:-:-]         %s\n", instance.Zone))
 	details.WriteString(fmt.Sprintf("[white::b]Status:[-:-:-]       %s\n", instance.Status))
-	details.WriteString(fmt.Sprintf("[white::b]Machine Type:[-:-:-] %s\n", instance.MachineType))
-	details.WriteString(fmt.Sprintf("[white::b]Internal IP:[-:-:-]  %s\n", instance.InternalIP))
-	if instance.ExternalIP != "" {
-		details.WriteString(fmt.Sprintf("[white::b]External IP:[-:-:-]  %s\n", instance.ExternalIP))
+	if instance.Description != "" {
+		details.WriteString(fmt.Sprintf("[white::b]Description:[-:-:-]  %s\n", instance.Description))
 	}
-	details.WriteString(fmt.Sprintf("[white::b]Can Use IAP:[-:-:-]  %v\n", instance.CanUseIAP))
+	if instance.CreationTimestamp != "" {
+		details.WriteString(fmt.Sprintf("[white::b]Created:[-:-:-]      %s\n", instance.CreationTimestamp))
+	}
+
+	details.WriteString("\n")
+
+	// Machine configuration
+	details.WriteString("[cyan::b]Machine Configuration[-:-:-]\n")
+	details.WriteString(fmt.Sprintf("  [white::b]Machine Type:[-:-:-]     %s\n", instance.MachineType))
+	if instance.CPUPlatform != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]CPU Platform:[-:-:-]     %s\n", instance.CPUPlatform))
+	}
+
+	details.WriteString("\n")
+
+	// Network
+	details.WriteString("[cyan::b]Network[-:-:-]\n")
+	details.WriteString(fmt.Sprintf("  [white::b]Internal IP:[-:-:-]      %s\n", instance.InternalIP))
+	if instance.ExternalIP != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]External IP:[-:-:-]      %s\n", instance.ExternalIP))
+	}
+	if instance.Network != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Network:[-:-:-]          %s\n", instance.Network))
+	}
+	if instance.Subnetwork != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Subnetwork:[-:-:-]       %s\n", instance.Subnetwork))
+	}
+	details.WriteString(fmt.Sprintf("  [white::b]Can Use IAP:[-:-:-]      %v\n", instance.CanUseIAP))
+	if len(instance.NetworkTags) > 0 {
+		details.WriteString(fmt.Sprintf("  [white::b]Network Tags:[-:-:-]     %s\n", strings.Join(instance.NetworkTags, ", ")))
+	}
+
+	// Disks
+	if len(instance.Disks) > 0 {
+		details.WriteString("\n")
+		details.WriteString("[cyan::b]Disks[-:-:-]\n")
+		for i, disk := range instance.Disks {
+			bootStr := ""
+			if disk.Boot {
+				bootStr = " [boot]"
+			}
+			sizeStr := ""
+			if disk.DiskSizeGb > 0 {
+				sizeStr = fmt.Sprintf(" (%dGB)", disk.DiskSizeGb)
+			}
+			details.WriteString(fmt.Sprintf("  [white::b]Disk %d:[-:-:-]           %s%s%s\n", i+1, disk.Name, sizeStr, bootStr))
+		}
+	}
+
+	details.WriteString("\n")
+
+	// Scheduling
+	details.WriteString("[cyan::b]Scheduling[-:-:-]\n")
+	details.WriteString(fmt.Sprintf("  [white::b]Preemptible:[-:-:-]      %v\n", instance.Preemptible))
+	details.WriteString(fmt.Sprintf("  [white::b]Auto Restart:[-:-:-]     %v\n", instance.AutomaticRestart))
+	if instance.OnHostMaintenance != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Host Maintenance:[-:-:-] %s\n", instance.OnHostMaintenance))
+	}
+
+	// Service accounts
+	if len(instance.ServiceAccounts) > 0 {
+		details.WriteString("\n")
+		details.WriteString("[cyan::b]Identity & Access[-:-:-]\n")
+		for _, sa := range instance.ServiceAccounts {
+			details.WriteString(fmt.Sprintf("  [white::b]Service Account:[-:-:-]  %s\n", sa))
+		}
+	}
+
+	// Labels
+	if len(instance.Labels) > 0 {
+		details.WriteString("\n")
+		details.WriteString("[cyan::b]Labels[-:-:-]\n")
+		for k, v := range instance.Labels {
+			details.WriteString(fmt.Sprintf("  %s=%s\n", k, v))
+		}
+	}
+
+	// Metadata keys
+	if len(instance.MetadataKeys) > 0 {
+		details.WriteString("\n")
+		details.WriteString("[cyan::b]Metadata Keys[-:-:-]\n")
+		details.WriteString(fmt.Sprintf("  %s\n", strings.Join(instance.MetadataKeys, ", ")))
+	}
+
+	details.WriteString("\n[darkgray]Press Esc to close[-]")
+	return details.String()
+}
+
+// FormatInstanceTemplateDetails formats instance template information for display
+func FormatInstanceTemplateDetails(name, project, location string, detailsMap map[string]string) string {
+	var details strings.Builder
+
+	details.WriteString("[yellow::b]Instance Template[-:-:-]\n\n")
+
+	// Basic info
+	details.WriteString(fmt.Sprintf("[white::b]Name:[-:-:-]         %s\n", name))
+	details.WriteString(fmt.Sprintf("[white::b]Project:[-:-:-]      %s\n", project))
+	details.WriteString(fmt.Sprintf("[white::b]Location:[-:-:-]     %s\n", location))
+
+	// Description (if present)
+	if desc := detailsMap["description"]; desc != "" {
+		details.WriteString(fmt.Sprintf("[white::b]Description:[-:-:-]  %s\n", desc))
+	}
+
+	details.WriteString("\n")
+
+	// Machine configuration
+	details.WriteString("[cyan::b]Machine Configuration[-:-:-]\n")
+	if mt := detailsMap["machineType"]; mt != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Machine Type:[-:-:-]     %s\n", mt))
+	}
+	if cpu := detailsMap["minCpuPlatform"]; cpu != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Min CPU Platform:[-:-:-] %s\n", cpu))
+	}
+	if gpu := detailsMap["gpuAccelerators"]; gpu != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]GPU Accelerators:[-:-:-] %s\n", gpu))
+	}
+
+	details.WriteString("\n")
+
+	// Disks
+	details.WriteString("[cyan::b]Disks[-:-:-]\n")
+	if disks := detailsMap["disks"]; disks != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Configuration:[-:-:-]    %s\n", disks))
+	}
+	if img := detailsMap["sourceImage"]; img != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Source Image:[-:-:-]     %s\n", img))
+	}
+
+	details.WriteString("\n")
+
+	// Network
+	details.WriteString("[cyan::b]Network[-:-:-]\n")
+	if nets := detailsMap["networks"]; nets != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Interfaces:[-:-:-]       %s\n", nets))
+	}
+	if fwd := detailsMap["canIpForward"]; fwd != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]IP Forwarding:[-:-:-]    %s\n", fwd))
+	}
+	if tags := detailsMap["tags"]; tags != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Network Tags:[-:-:-]     %s\n", tags))
+	}
+
+	details.WriteString("\n")
+
+	// Scheduling
+	details.WriteString("[cyan::b]Scheduling[-:-:-]\n")
+	if pre := detailsMap["preemptible"]; pre != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Preemptible:[-:-:-]      %s\n", pre))
+	}
+	if ar := detailsMap["automaticRestart"]; ar != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Auto Restart:[-:-:-]     %s\n", ar))
+	}
+	if ohm := detailsMap["onHostMaintenance"]; ohm != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Host Maintenance:[-:-:-] %s\n", ohm))
+	}
+
+	details.WriteString("\n")
+
+	// Identity
+	details.WriteString("[cyan::b]Identity & Access[-:-:-]\n")
+	if sa := detailsMap["serviceAccounts"]; sa != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Service Accounts:[-:-:-] %s\n", sa))
+	}
+
+	// Labels (if present)
+	if labels := detailsMap["labels"]; labels != "" {
+		details.WriteString("\n")
+		details.WriteString("[cyan::b]Labels[-:-:-]\n")
+		details.WriteString(fmt.Sprintf("  %s\n", labels))
+	}
+
+	// Metadata keys (if present)
+	if meta := detailsMap["metadataKeys"]; meta != "" {
+		details.WriteString("\n")
+		details.WriteString("[cyan::b]Metadata Keys[-:-:-]\n")
+		details.WriteString(fmt.Sprintf("  %s\n", meta))
+	}
+
+	details.WriteString("\n[darkgray]Press Esc to close[-]")
+	return details.String()
+}
+
+// FormatMIGDetails formats managed instance group information for display
+func FormatMIGDetails(name, project, location string, detailsMap map[string]string) string {
+	var details strings.Builder
+
+	details.WriteString("[yellow::b]Managed Instance Group[-:-:-]\n\n")
+
+	// Basic info
+	details.WriteString(fmt.Sprintf("[white::b]Name:[-:-:-]             %s\n", name))
+	details.WriteString(fmt.Sprintf("[white::b]Project:[-:-:-]          %s\n", project))
+	details.WriteString(fmt.Sprintf("[white::b]Location:[-:-:-]         %s\n", location))
+	if scope := detailsMap["scope"]; scope != "" {
+		details.WriteString(fmt.Sprintf("[white::b]Scope:[-:-:-]            %s\n", scope))
+	}
+	if desc := detailsMap["description"]; desc != "" {
+		details.WriteString(fmt.Sprintf("[white::b]Description:[-:-:-]      %s\n", desc))
+	}
+
+	details.WriteString("\n")
+
+	// Size & Status
+	details.WriteString("[cyan::b]Size & Status[-:-:-]\n")
+	if target := detailsMap["targetSize"]; target != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Target Size:[-:-:-]      %s\n", target))
+	}
+	if current := detailsMap["currentSize"]; current != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Current Size:[-:-:-]     %s\n", current))
+	}
+	if status := detailsMap["status"]; status != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Status:[-:-:-]           %s\n", status))
+	}
+
+	details.WriteString("\n")
+
+	// Instance Template
+	details.WriteString("[cyan::b]Instance Configuration[-:-:-]\n")
+	if tmpl := detailsMap["instanceTemplate"]; tmpl != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Instance Template:[-:-:-] %s\n", tmpl))
+	}
+	if baseName := detailsMap["baseInstanceName"]; baseName != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Base Instance Name:[-:-:-] %s\n", baseName))
+	}
+
+	// Update Policy
+	if detailsMap["updateType"] != "" || detailsMap["maxSurge"] != "" || detailsMap["maxUnavailable"] != "" {
+		details.WriteString("\n")
+		details.WriteString("[cyan::b]Update Policy[-:-:-]\n")
+		if updateType := detailsMap["updateType"]; updateType != "" {
+			details.WriteString(fmt.Sprintf("  [white::b]Update Type:[-:-:-]      %s\n", updateType))
+		}
+		if maxSurge := detailsMap["maxSurge"]; maxSurge != "" {
+			details.WriteString(fmt.Sprintf("  [white::b]Max Surge:[-:-:-]        %s\n", maxSurge))
+		}
+		if maxUnavail := detailsMap["maxUnavailable"]; maxUnavail != "" {
+			details.WriteString(fmt.Sprintf("  [white::b]Max Unavailable:[-:-:-]  %s\n", maxUnavail))
+		}
+	}
+
+	// Named Ports
+	if ports := detailsMap["namedPorts"]; ports != "" {
+		details.WriteString("\n")
+		details.WriteString("[cyan::b]Named Ports[-:-:-]\n")
+		details.WriteString(fmt.Sprintf("  %s\n", ports))
+	}
+
+	// Target Zones (for regional MIGs)
+	if zones := detailsMap["targetZones"]; zones != "" {
+		details.WriteString("\n")
+		details.WriteString("[cyan::b]Distribution Policy[-:-:-]\n")
+		details.WriteString(fmt.Sprintf("  [white::b]Target Zones:[-:-:-]     %s\n", zones))
+	}
+
 	details.WriteString("\n[darkgray]Press Esc to close[-]")
 	return details.String()
 }
@@ -349,4 +600,97 @@ func (e *BucketActionExecutor) ExecuteOpen(ctx *ActionContext) {
 func isCommandAvailable(name string) bool {
 	_, err := exec.LookPath(name)
 	return err == nil
+}
+
+// buildCloudConsoleURL constructs a Google Cloud Console URL with the given path and project
+func buildCloudConsoleURL(urlPath, project string) string {
+	u, _ := url.Parse(cloudConsoleBaseURL)
+	u.Path = urlPath
+	q := u.Query()
+	q.Set("project", project)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// GetCloudConsoleURL returns the Google Cloud Console URL for a resource
+func GetCloudConsoleURL(resourceType, name, project, location string, details map[string]string) string {
+	switch resourceType {
+	case string(search.KindComputeInstance):
+		return buildCloudConsoleURL(path.Join("compute/instancesDetail/zones", location, "instances", name), project)
+
+	case string(search.KindInstanceTemplate):
+		return buildCloudConsoleURL(path.Join("compute/instanceTemplates/details", name), project)
+
+	case string(search.KindManagedInstanceGroup):
+		return buildCloudConsoleURL(path.Join("compute/instanceGroups/details", location, name), project)
+
+	case string(search.KindBucket):
+		return buildCloudConsoleURL(path.Join("storage/browser", name), project)
+
+	case string(search.KindGKECluster):
+		return buildCloudConsoleURL(path.Join("kubernetes/clusters/details", location, name, "details"), project)
+
+	case string(search.KindGKENodePool):
+		cluster := details["cluster"]
+		if cluster == "" {
+			cluster = "unknown"
+		}
+		return buildCloudConsoleURL(path.Join("kubernetes/nodepool", location, cluster, name), project)
+
+	case string(search.KindCloudSQLInstance):
+		return buildCloudConsoleURL(path.Join("sql/instances", name, "overview"), project)
+
+	case string(search.KindCloudRunService):
+		return buildCloudConsoleURL(path.Join("run/detail", location, name, "metrics"), project)
+
+	case string(search.KindSecret):
+		return buildCloudConsoleURL(path.Join("security/secret-manager/secret", name), project)
+
+	case string(search.KindAddress):
+		return buildCloudConsoleURL("networking/addresses/list", project)
+
+	case string(search.KindDisk):
+		return buildCloudConsoleURL(path.Join("compute/disksDetail/zones", location, "disks", name), project)
+
+	case string(search.KindSnapshot):
+		return buildCloudConsoleURL(path.Join("compute/snapshotsDetail/projects", project, "global/snapshots", name), project)
+
+	case string(search.KindForwardingRule):
+		return buildCloudConsoleURL(path.Join("net-services/loadbalancing/advanced/forwardingRules/details", location, name), project)
+
+	case string(search.KindBackendService):
+		return buildCloudConsoleURL(path.Join("net-services/loadbalancing/advanced/backendServices/details", name), project)
+
+	case string(search.KindHealthCheck):
+		return buildCloudConsoleURL("compute/healthChecks", project)
+
+	case string(search.KindURLMap):
+		return buildCloudConsoleURL(path.Join("net-services/loadbalancing/advanced/urlMaps/details", name), project)
+
+	case string(search.KindVPCNetwork):
+		return buildCloudConsoleURL(path.Join("networking/networks/details", name), project)
+
+	case string(search.KindSubnet):
+		return buildCloudConsoleURL(path.Join("networking/subnetworks/details", location, name), project)
+
+	case string(search.KindFirewallRule):
+		return buildCloudConsoleURL(path.Join("networking/firewalls/details", name), project)
+
+	default:
+		return buildCloudConsoleURL("home/dashboard", project)
+	}
+}
+
+// OpenInBrowser opens a URL in the default browser
+func OpenInBrowser(url string) error {
+	var cmd *exec.Cmd
+	switch {
+	case isCommandAvailable("xdg-open"):
+		cmd = exec.Command("xdg-open", url)
+	case isCommandAvailable("open"):
+		cmd = exec.Command("open", url)
+	default:
+		return fmt.Errorf("no browser command available")
+	}
+	return cmd.Start()
 }

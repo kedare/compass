@@ -687,6 +687,14 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 					executor.ExecuteDetails(actionCtx, func(details string) {
 						showInstanceDetailModal(app, table, flex, entryName, details, &modalOpen, status, currentFilter, updateStatusWithActions)
 					})
+				} else if selectedEntry.Type == string(search.KindInstanceTemplate) {
+					// For instance templates, use formatted details
+					details := FormatInstanceTemplateDetails(selectedEntry.Name, selectedEntry.Project, selectedEntry.Location, selectedEntry.Details)
+					showInstanceDetailModal(app, table, flex, selectedEntry.Name, details, &modalOpen, status, currentFilter, updateStatusWithActions)
+				} else if selectedEntry.Type == string(search.KindManagedInstanceGroup) {
+					// For MIGs, use formatted details
+					details := FormatMIGDetails(selectedEntry.Name, selectedEntry.Project, selectedEntry.Location, selectedEntry.Details)
+					showInstanceDetailModal(app, table, flex, selectedEntry.Name, details, &modalOpen, status, currentFilter, updateStatusWithActions)
 				} else {
 					// For other types, show generic details
 					showSearchResultDetail(app, table, flex, selectedEntry, &modalOpen, status, currentFilter, updateStatusWithActions)
@@ -694,7 +702,7 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 				return nil
 
 			case 'o':
-				// Open in browser (for buckets)
+				// Open in browser (for buckets) - legacy shortcut
 				selectedEntry := getSelectedEntry()
 				if selectedEntry == nil {
 					return nil
@@ -729,6 +737,26 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 					}
 					executor.ExecuteOpen(actionCtx)
 				}
+				return nil
+
+			case 'b':
+				// Open in Google Cloud Console
+				selectedEntry := getSelectedEntry()
+				if selectedEntry == nil {
+					return nil
+				}
+
+				url := GetCloudConsoleURL(selectedEntry.Type, selectedEntry.Name, selectedEntry.Project, selectedEntry.Location, selectedEntry.Details)
+				if err := OpenInBrowser(url); err != nil {
+					status.SetText(fmt.Sprintf(" [yellow]URL: %s[-]", url))
+				} else {
+					status.SetText(" [green]Opened in browser[-]")
+				}
+				time.AfterFunc(2*time.Second, func() {
+					app.QueueUpdateDraw(func() {
+						updateStatusWithActions()
+					})
+				})
 				return nil
 
 			case '?':

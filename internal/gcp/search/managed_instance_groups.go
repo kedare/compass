@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/kedare/compass/internal/gcp"
 )
@@ -67,6 +68,58 @@ func migDetails(mig *gcp.ManagedInstanceGroup) map[string]string {
 		details["scope"] = "regional"
 	} else {
 		details["scope"] = "zonal"
+	}
+
+	if mig.Description != "" {
+		details["description"] = mig.Description
+	}
+
+	// Size info
+	details["targetSize"] = fmt.Sprintf("%d", mig.TargetSize)
+	if mig.CurrentSize > 0 {
+		details["currentSize"] = fmt.Sprintf("%d", mig.CurrentSize)
+	}
+
+	// Instance template
+	if mig.InstanceTemplate != "" {
+		details["instanceTemplate"] = mig.InstanceTemplate
+	}
+
+	// Base instance name
+	if mig.BaseInstanceName != "" {
+		details["baseInstanceName"] = mig.BaseInstanceName
+	}
+
+	// Status
+	if mig.IsStable {
+		details["status"] = "stable"
+	} else {
+		details["status"] = "updating"
+	}
+
+	// Update policy
+	if mig.UpdateType != "" {
+		details["updateType"] = mig.UpdateType
+	}
+	if mig.MaxSurge != "" {
+		details["maxSurge"] = mig.MaxSurge
+	}
+	if mig.MaxUnavailable != "" {
+		details["maxUnavailable"] = mig.MaxUnavailable
+	}
+
+	// Named ports
+	if len(mig.NamedPorts) > 0 {
+		var ports []string
+		for name, port := range mig.NamedPorts {
+			ports = append(ports, fmt.Sprintf("%s:%d", name, port))
+		}
+		details["namedPorts"] = strings.Join(ports, ", ")
+	}
+
+	// Target zones (for regional MIGs)
+	if len(mig.TargetZones) > 0 {
+		details["targetZones"] = strings.Join(mig.TargetZones, ", ")
 	}
 
 	return details
