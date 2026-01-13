@@ -1074,6 +1074,16 @@ func extractDestRanges(routes []*compute.Route) []string {
 	return result
 }
 
+// ListVPNGateways returns all HA VPN gateways in the project.
+func (c *Client) ListVPNGateways(ctx context.Context) ([]*VPNGatewayInfo, error) {
+	return c.listVpnGateways(ctx, nil)
+}
+
+// ListVPNTunnels returns all VPN tunnels in the project.
+func (c *Client) ListVPNTunnels(ctx context.Context) ([]*VPNTunnelInfo, error) {
+	return c.listVpnTunnels(ctx, nil)
+}
+
 func routerReference(link, fallbackRegion string) (string, string) {
 	if strings.TrimSpace(link) == "" {
 		return fallbackRegion, ""

@@ -26,7 +26,7 @@ type searchEntry struct {
 }
 
 // RunSearchView shows the search interface with progressive results
-func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, outputRedir *outputRedirector, onBack func()) error {
+func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, outputRedir *outputRedirector, parallelism int, onBack func()) error {
 	var allResults []searchEntry
 	var allWarnings []search.SearchWarning
 	var searchError error
@@ -44,7 +44,7 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 	}
 
 	// Create search engine with all providers
-	engine := createSearchEngine()
+	engine := createSearchEngine(parallelism)
 
 	// Create UI components
 	searchInput := tview.NewInputField().
@@ -309,9 +309,9 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 
 		if entry == nil {
 			if count > 0 {
-				status.SetText(fmt.Sprintf(" [green]%d results[-]  [yellow]Enter[-] search  [yellow]Esc[-] back  [yellow]/[-] filter  [yellow]?[-] help", count))
+				status.SetText(fmt.Sprintf(" [green]%d results[-]  [yellow]Enter[-] search  [yellow]/[-] filter  [yellow]Esc[-] back  [yellow]?[-] help", count))
 			} else {
-				status.SetText(" [yellow]Enter[-] search  [yellow]Esc[-] back  [yellow]/[-] filter  [yellow]?[-] help")
+				status.SetText(" [yellow]Enter[-] search  [yellow]/[-] filter  [yellow]Esc[-] back  [yellow]?[-] help")
 			}
 			return
 		}
@@ -319,7 +319,7 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 		if currentFilter != "" {
 			status.SetText(fmt.Sprintf(" [green]Filter: %s[-]  %s  [yellow]/[-] edit  [yellow]Esc[-] clear  [yellow]?[-] help", currentFilter, actionStr))
 		} else {
-			status.SetText(fmt.Sprintf(" %s  [yellow]Enter[-] search  [yellow]Esc[-] back  [yellow]/[-] filter  [yellow]?[-] help", actionStr))
+			status.SetText(fmt.Sprintf(" %s  [yellow]Enter[-] search  [yellow]/[-] filter  [yellow]Esc[-] back  [yellow]?[-] help", actionStr))
 		}
 	}
 
@@ -773,8 +773,8 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 }
 
 // createSearchEngine creates a search engine with all providers
-func createSearchEngine() *search.Engine {
-	return search.NewEngine(
+func createSearchEngine(parallelism int) *search.Engine {
+	engine := search.NewEngine(
 		&search.InstanceProvider{
 			NewClient: func(ctx context.Context, project string) (search.InstanceClient, error) {
 				return gcp.NewClient(ctx, project)
@@ -875,7 +875,19 @@ func createSearchEngine() *search.Engine {
 				return gcp.NewClient(ctx, project)
 			},
 		},
+		&search.VPNGatewayProvider{
+			NewClient: func(ctx context.Context, project string) (search.VPNGatewayClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		},
+		&search.VPNTunnelProvider{
+			NewClient: func(ctx context.Context, project string) (search.VPNTunnelClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		},
 	)
+	engine.MaxConcurrentProjects = parallelism
+	return engine
 }
 
 // getTypeColor returns the color for a resource type
@@ -1018,6 +1030,7 @@ func showSearchHelp(app *tview.Application, table *tview.Table, mainFlex *tview.
 [yellow]Actions[-]
   [white]s[-]             SSH to selected instance
   [white]d[-]             Show details for selected result
+  [white]b[-]             Open in Cloud Console (browser)
   [white]o[-]             Open in browser (for buckets)
   [white]/[-]             Filter displayed results
 

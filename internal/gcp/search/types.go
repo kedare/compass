@@ -50,6 +50,10 @@ const (
 	KindFirewallRule ResourceKind = "compute.firewall"
 	// KindSecret represents a Secret Manager secret.
 	KindSecret ResourceKind = "secretmanager.secret"
+	// KindVPNGateway represents an HA VPN gateway.
+	KindVPNGateway ResourceKind = "compute.vpnGateway"
+	// KindVPNTunnel represents a Cloud VPN tunnel.
+	KindVPNTunnel ResourceKind = "compute.vpnTunnel"
 )
 
 // AllResourceKinds returns all available resource kind values for use in validation and completion.
@@ -75,6 +79,8 @@ func AllResourceKinds() []ResourceKind {
 		KindCloudRunService,
 		KindFirewallRule,
 		KindSecret,
+		KindVPNGateway,
+		KindVPNTunnel,
 	}
 }
 

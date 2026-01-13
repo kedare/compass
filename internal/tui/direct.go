@@ -65,7 +65,7 @@ func (r *outputRedirector) OrigStderr() *os.File {
 
 // Status bar message constants
 const (
-	statusDefault             = " [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]v[-] VPN  [yellow]c[-] connectivity  [yellow]Shift+S[-] search  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help"
+	statusDefault             = " [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]v[-] VPN  [yellow]c[-] connectivity  [yellow]Shift+S[-] search  [yellow]Esc[-] quit  [yellow]?[-] help"
 	statusFilterActive        = " [green]Filter active: '%s'[-]  [yellow]Esc[-] clear  [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] edit  [yellow]r[-] refresh  [yellow]v[-] VPN  [yellow]c[-] connectivity"
 	statusFilterMode          = " [yellow]Type to filter, Enter to apply, Esc to cancel[-]"
 	statusFilterCleared       = " [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc[-] quit  [yellow]?[-] help"
@@ -96,7 +96,7 @@ type instanceData struct {
 }
 
 // RunDirect runs a minimal TUI without the full app structure
-func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
+func RunDirect(c *cache.Cache, gcpClient *gcp.Client, parallelism int) error {
 	// Disable logging to prevent log output from corrupting the TUI
 	logger.Log.Disable()
 	defer logger.Log.Restore()
@@ -107,7 +107,6 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 
 	app := tview.NewApplication()
 	ctx := context.Background()
-
 	// Store all instances for filtering
 	var allInstances []instanceData
 	var isRefreshing bool
@@ -852,7 +851,7 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 				status.SetText(" [yellow]Loading search view...[-]")
 
 				go func() {
-					err := RunSearchView(ctx, c, app, outputRedir, func() {
+					err := RunSearchView(ctx, c, app, outputRedir, parallelism, func() {
 						// Callback to return to instance view
 						app.SetInputCapture(mainInputCapture) // Restore main input handler
 						app.SetRoot(flex, true).SetFocus(table)

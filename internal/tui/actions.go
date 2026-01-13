@@ -676,6 +676,12 @@ func GetCloudConsoleURL(resourceType, name, project, location string, details ma
 	case string(search.KindFirewallRule):
 		return buildCloudConsoleURL(path.Join("networking/firewalls/details", name), project)
 
+	case string(search.KindVPNGateway):
+		return buildCloudConsoleURL(path.Join("hybrid/vpn/gateways/details", location, name), project)
+
+	case string(search.KindVPNTunnel):
+		return buildCloudConsoleURL(path.Join("hybrid/vpn/tunnels/details", location, name), project)
+
 	default:
 		return buildCloudConsoleURL("home/dashboard", project)
 	}

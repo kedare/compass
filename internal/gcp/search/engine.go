@@ -22,7 +22,7 @@ type SearchProgress struct {
 // If the callback returns an error, the search will be stopped.
 type ResultCallback func(results []Result, progress SearchProgress) error
 
-const defaultProjectConcurrency = 4
+const defaultProjectConcurrency = 8
 
 var (
 	// ErrNoProjects indicates that no projects were provided for the search.
