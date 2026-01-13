@@ -8,6 +8,19 @@ import (
 	"sync"
 )
 
+// ResultCallback is called when new results are available during streaming search.
+// The callback receives a slice of new results and a progress message.
+// If the callback returns an error, the search will be stopped.
+type ResultCallback func(results []Result, progress string) error
+
+// SearchProgress contains information about the current search progress.
+type SearchProgress struct {
+	CurrentProject string
+	CurrentKind    ResourceKind
+	TotalProjects  int
+	DoneProjects   int
+}
+
 const defaultProjectConcurrency = 4
 
 var (
@@ -181,4 +194,154 @@ func filterProvidersByType(providers []Provider, query Query) []Provider {
 	}
 
 	return filtered
+}
+
+// SearchStreaming executes search and calls the callback as results become available.
+// This allows progressive display of results in the UI.
+// The search can be cancelled via context, and existing results are preserved.
+// Returns all accumulated results and warnings when complete.
+func (e *Engine) SearchStreaming(ctx context.Context, projects []string, query Query, callback ResultCallback) (*SearchOutput, error) {
+	if e == nil {
+		return nil, ErrNoProviders
+	}
+
+	if len(e.providers) == 0 {
+		return nil, ErrNoProviders
+	}
+
+	trimmed := uniqueProjects(projects)
+	if len(trimmed) == 0 {
+		return nil, ErrNoProjects
+	}
+
+	if query.NormalizedTerm() == "" {
+		return nil, ErrEmptyQuery
+	}
+
+	// Filter providers by type if type filter is specified.
+	activeProviders := filterProvidersByType(e.providers, query)
+	if len(activeProviders) == 0 {
+		return &SearchOutput{}, nil
+	}
+
+	limit := e.MaxConcurrentProjects
+	if limit <= 0 {
+		limit = defaultProjectConcurrency
+	}
+
+	sem := make(chan struct{}, limit)
+	var mu sync.Mutex
+	var results []Result
+	var warnings []SearchWarning
+	var doneProjects int
+	totalProjects := len(trimmed)
+
+	var wg sync.WaitGroup
+	for _, project := range trimmed {
+		project := project
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			// Check if context was cancelled
+			if ctx.Err() != nil {
+				return
+			}
+
+			for _, provider := range activeProviders {
+				// Check cancellation before each provider
+				if ctx.Err() != nil {
+					return
+				}
+
+				providerResults, err := provider.Search(ctx, project, query)
+				if err != nil {
+					// Record warning but continue with other providers
+					mu.Lock()
+					warnings = append(warnings, SearchWarning{
+						Project:  project,
+						Provider: provider.Kind(),
+						Err:      err,
+					})
+					mu.Unlock()
+					continue
+				}
+
+				if len(providerResults) == 0 {
+					continue
+				}
+
+				// Call the callback with new results
+				mu.Lock()
+				results = append(results, providerResults...)
+				currentResults := make([]Result, len(providerResults))
+				copy(currentResults, providerResults)
+				currentDone := doneProjects
+				mu.Unlock()
+
+				// Send progress update with new results
+				if callback != nil {
+					progress := formatProgress(project, provider.Kind(), currentDone, totalProjects)
+					if err := callback(currentResults, progress); err != nil {
+						// Callback requested stop - just return
+						return
+					}
+				}
+			}
+
+			mu.Lock()
+			doneProjects++
+			mu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+
+	// Sort results for consistent output
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Project != results[j].Project {
+			return results[i].Project < results[j].Project
+		}
+		if results[i].Type != results[j].Type {
+			return results[i].Type < results[j].Type
+		}
+		if results[i].Name != results[j].Name {
+			return results[i].Name < results[j].Name
+		}
+		return results[i].Location < results[j].Location
+	})
+
+	// Sort warnings for consistent output
+	sort.Slice(warnings, func(i, j int) bool {
+		if warnings[i].Project != warnings[j].Project {
+			return warnings[i].Project < warnings[j].Project
+		}
+		return warnings[i].Provider < warnings[j].Provider
+	})
+
+	return &SearchOutput{
+		Results:  results,
+		Warnings: warnings,
+	}, nil
+}
+
+// formatProgress creates a human-readable progress message.
+func formatProgress(project string, kind ResourceKind, done, total int) string {
+	return "Searching " + project + " (" + string(kind) + ")"
+}
+
+// GetProviderKinds returns all resource kinds supported by the engine's providers.
+func (e *Engine) GetProviderKinds() []ResourceKind {
+	if e == nil {
+		return nil
+	}
+
+	kinds := make([]ResourceKind, len(e.providers))
+	for i, p := range e.providers {
+		kinds[i] = p.Kind()
+	}
+	return kinds
 }

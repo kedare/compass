@@ -16,7 +16,7 @@ import (
 
 // Status bar message constants
 const (
-	statusDefault             = " [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]v[-] VPN  [yellow]c[-] connectivity  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help"
+	statusDefault             = " [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]v[-] VPN  [yellow]c[-] connectivity  [yellow]Shift+S[-] search  [yellow]Esc/Ctrl+C[-] quit  [yellow]?[-] help"
 	statusFilterActive        = " [green]Filter active: '%s'[-]  [yellow]Esc[-] clear  [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] edit  [yellow]r[-] refresh  [yellow]v[-] VPN  [yellow]c[-] connectivity"
 	statusFilterMode          = " [yellow]Type to filter, Enter to apply, Esc to cancel[-]"
 	statusFilterCleared       = " [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc[-] quit  [yellow]?[-] help"
@@ -561,6 +561,8 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 
 [yellow]Views[-]
   [white]v[-]             Switch to VPN view
+  [white]c[-]             Switch to connectivity tests view
+  [white]Shift+S[-]       Switch to global search view
 
 [yellow]Filtering[-]
   [white]/[-]             Enter filter mode
@@ -806,6 +808,32 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 							}
 							app.SetRoot(flex, true).SetFocus(table)
 							status.SetText(fmt.Sprintf(statusErrorConnectivity, err))
+							time.AfterFunc(3*time.Second, func() {
+								app.QueueUpdateDraw(func() {
+									status.SetText(statusDefault)
+								})
+							})
+						}
+					})
+				}()
+				return nil
+			}
+			if event.Rune() == 'S' {
+				// Switch to search view
+				status.SetText(" [yellow]Loading search view...[-]")
+
+				go func() {
+					err := RunSearchView(ctx, c, app, func() {
+						// Callback to return to instance view
+						app.SetInputCapture(mainInputCapture) // Restore main input handler
+						app.SetRoot(flex, true).SetFocus(table)
+						updateTable(currentFilter)
+						status.SetText(statusDefault)
+					})
+					app.QueueUpdateDraw(func() {
+						if err != nil {
+							app.SetRoot(flex, true).SetFocus(table)
+							status.SetText(fmt.Sprintf(" [red]Error loading search view: %v[-]", err))
 							time.AfterFunc(3*time.Second, func() {
 								app.QueueUpdateDraw(func() {
 									status.SetText(statusDefault)
