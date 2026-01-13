@@ -4,15 +4,64 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/kedare/compass/internal/cache"
 	"github.com/kedare/compass/internal/gcp"
+	"github.com/kedare/compass/internal/logger"
 	"github.com/rivo/tview"
 )
+
+// outputRedirector manages stdout/stderr redirection for TUI mode
+type outputRedirector struct {
+	origStdout *os.File
+	origStderr *os.File
+	devNull    *os.File
+}
+
+// newOutputRedirector creates a new output redirector and redirects stdout/stderr to /dev/null
+func newOutputRedirector() *outputRedirector {
+	r := &outputRedirector{
+		origStdout: os.Stdout,
+		origStderr: os.Stderr,
+	}
+
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		return r
+	}
+	r.devNull = devNull
+
+	os.Stdout = devNull
+	os.Stderr = devNull
+
+	return r
+}
+
+// Restore restores the original stdout/stderr
+func (r *outputRedirector) Restore() {
+	if r.origStdout != nil {
+		os.Stdout = r.origStdout
+	}
+	if r.origStderr != nil {
+		os.Stderr = r.origStderr
+	}
+	if r.devNull != nil {
+		r.devNull.Close()
+	}
+}
+
+// OrigStdout returns the original stdout for use during Suspend
+func (r *outputRedirector) OrigStdout() *os.File {
+	return r.origStdout
+}
+
+// OrigStderr returns the original stderr for use during Suspend
+func (r *outputRedirector) OrigStderr() *os.File {
+	return r.origStderr
+}
 
 // Status bar message constants
 const (
@@ -48,6 +97,14 @@ type instanceData struct {
 
 // RunDirect runs a minimal TUI without the full app structure
 func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
+	// Disable logging to prevent log output from corrupting the TUI
+	logger.Log.Disable()
+	defer logger.Log.Restore()
+
+	// Redirect stdout/stderr to prevent any remaining output from corrupting the TUI
+	outputRedir := newOutputRedirector()
+	defer outputRedir.Restore()
+
 	app := tview.NewApplication()
 	ctx := context.Background()
 
@@ -311,45 +368,48 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 				}
 
 				if selectedInst != nil {
-					// Suspend TUI and run SSH
-					app.Suspend(func() {
-						args := []string{
-							"compute",
-							"ssh",
-							selectedInst.Name,
-							"--project=" + selectedInst.Project,
-							"--zone=" + selectedInst.Zone,
-						}
+					// Determine default IAP setting:
+					// - HasLiveData is true AND ExternalIP is empty (no public IP), OR
+					// - CanUseIAP is explicitly set to true
+					defaultUseIAP := (selectedInst.HasLiveData && selectedInst.ExternalIP == "") || selectedInst.CanUseIAP
 
-						// Only use IAP when we have live data confirming it's needed:
-						// - HasLiveData is true AND ExternalIP is empty (no public IP), OR
-						// - CanUseIAP is explicitly set to true
-						// This prevents defaulting to IAP when data is from cache and IP info is unknown
-						if selectedInst.HasLiveData && selectedInst.ExternalIP == "" {
-							args = append(args, "--tunnel-through-iap")
-						} else if selectedInst.CanUseIAP {
-							args = append(args, "--tunnel-through-iap")
-						}
+					// Capture values for callbacks
+					instName := selectedInst.Name
+					instProject := selectedInst.Project
+					instZone := selectedInst.Zone
 
-						cmd := exec.Command("gcloud", args...)
-						cmd.Stdin = os.Stdin
-						cmd.Stdout = os.Stdout
-						cmd.Stderr = os.Stderr
+					// Show SSH options modal
+					modalOpen = true
+					ShowSSHOptionsModal(app, instName, defaultUseIAP,
+						func(opts SSHOptions) {
+							// Restore main view before SSH (needed for proper suspend/resume)
+							app.SetRoot(flex, true)
+							app.SetFocus(table)
+							modalOpen = false
 
-						if err := cmd.Run(); err != nil {
-							// Error is already shown by gcloud, just wait for user
-							fmt.Println("\nPress Enter to return to TUI...")
-							_, _ = fmt.Scanln()
-						}
-					})
+							// Execute SSH using shared function
+							RunSSHSession(app, instName, instProject, instZone, opts, outputRedir)
 
-					// After resume
-					status.SetText(fmt.Sprintf(statusDisconnected, selectedInst.Name))
-					time.AfterFunc(3*time.Second, func() {
-						app.QueueUpdateDraw(func() {
-							status.SetText(statusDefault)
-						})
-					})
+							// After resume
+							status.SetText(fmt.Sprintf(statusDisconnected, instName))
+							time.AfterFunc(3*time.Second, func() {
+								app.QueueUpdateDraw(func() {
+									status.SetText(statusDefault)
+								})
+							})
+						},
+						func() {
+							// Cancel - restore main view
+							app.SetRoot(flex, true)
+							app.SetFocus(table)
+							modalOpen = false
+							if currentFilter != "" {
+								status.SetText(fmt.Sprintf(statusFilterActive, currentFilter))
+							} else {
+								status.SetText(statusDefault)
+							}
+						},
+					)
 				}
 				return nil
 			}
@@ -418,39 +478,8 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 								return
 							}
 
-							// Create fullscreen detail view
-							externalIPDisplay := gcpInst.ExternalIP
-							if externalIPDisplay == "" {
-								externalIPDisplay = "[gray](none)[-]"
-							}
-							internalIPDisplay := gcpInst.InternalIP
-							if internalIPDisplay == "" {
-								internalIPDisplay = "[gray](none)[-]"
-							}
-
-							detailText := fmt.Sprintf(`[yellow::b]Instance Details[-:-:-]
-
-[white::b]Name:[-:-:-]         %s
-[white::b]Project:[-:-:-]      %s
-[white::b]Zone:[-:-:-]         %s
-[white::b]Status:[-:-:-]       %s
-[white::b]Machine Type:[-:-:-] %s
-
-[yellow::b]Network[-:-:-]
-[white::b]External IP:[-:-:-]  %s
-[white::b]Internal IP:[-:-:-]  %s
-[white::b]Can Use IAP:[-:-:-]  %t
-
-[darkgray]Press Esc to go back[-]`,
-								gcpInst.Name,
-								selectedInst.Project,
-								gcpInst.Zone,
-								gcpInst.Status,
-								gcpInst.MachineType,
-								externalIPDisplay,
-								internalIPDisplay,
-								gcpInst.CanUseIAP,
-							)
+							// Create fullscreen detail view using shared formatter
+							detailText := FormatInstanceDetails(gcpInst, selectedInst.Project)
 
 							detailView := tview.NewTextView().
 								SetDynamicColors(true).
@@ -823,7 +852,7 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client) error {
 				status.SetText(" [yellow]Loading search view...[-]")
 
 				go func() {
-					err := RunSearchView(ctx, c, app, func() {
+					err := RunSearchView(ctx, c, app, outputRedir, func() {
 						// Callback to return to instance view
 						app.SetInputCapture(mainInputCapture) // Restore main input handler
 						app.SetRoot(flex, true).SetFocus(table)

@@ -26,7 +26,7 @@ type searchEntry struct {
 }
 
 // RunSearchView shows the search interface with progressive results
-func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, onBack func()) error {
+func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, outputRedir *outputRedirector, onBack func()) error {
 	var allResults []searchEntry
 	var allWarnings []search.SearchWarning
 	var searchError error
@@ -167,9 +167,20 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 	}
 
 	// Shared function to update table with given results
-	var updateTableWithData func(filter string, results []searchEntry)
-	updateTableWithData = func(filter string, results []searchEntry) {
-		// Clear existing rows (keep header)
+	var updateTableWithData func(filter string, results []searchEntry) = func(filter string, results []searchEntry) {
+
+		currentSelectedRow, _ := table.GetSelection()
+		var selectedKey string
+		if currentSelectedRow > 0 && currentSelectedRow < table.GetRowCount() {
+
+			nameCell := table.GetCell(currentSelectedRow, 1)
+			projectCell := table.GetCell(currentSelectedRow, 2)
+			locationCell := table.GetCell(currentSelectedRow, 3)
+			if nameCell != nil && projectCell != nil && locationCell != nil {
+				selectedKey = nameCell.Text + "|" + projectCell.Text + "|" + locationCell.Text
+			}
+		}
+
 		for row := table.GetRowCount() - 1; row > 0; row-- {
 			table.RemoveRow(row)
 		}
@@ -177,9 +188,10 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 		filterLower := strings.ToLower(filter)
 		currentRow := 1
 		matchCount := 0
+		newSelectedRow := -1
 
 		for _, entry := range results {
-			// Apply filter if active
+
 			if filter != "" {
 				if !strings.Contains(strings.ToLower(entry.Name), filterLower) &&
 					!strings.Contains(strings.ToLower(entry.Project), filterLower) &&
@@ -194,20 +206,38 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 			table.SetCell(currentRow, 1, tview.NewTableCell(entry.Name).SetExpansion(1))
 			table.SetCell(currentRow, 2, tview.NewTableCell(entry.Project).SetExpansion(1))
 			table.SetCell(currentRow, 3, tview.NewTableCell(entry.Location).SetExpansion(1))
+
+			if selectedKey != "" && newSelectedRow == -1 {
+				rowKey := entry.Name + "|" + entry.Project + "|" + entry.Location
+				if rowKey == selectedKey {
+					newSelectedRow = currentRow
+				}
+			}
+
 			currentRow++
 			matchCount++
 		}
 
-		// Update title
 		if filter != "" {
 			table.SetTitle(fmt.Sprintf(" Search Results (%d/%d matched) ", matchCount, len(results)))
 		} else {
 			table.SetTitle(fmt.Sprintf(" Search Results (%d) ", len(results)))
 		}
 
-		// Select first data row if available
 		if matchCount > 0 && table.GetRowCount() > 1 {
-			table.Select(1, 0)
+			if newSelectedRow > 0 {
+
+				table.Select(newSelectedRow, 0)
+			} else if currentSelectedRow > 0 && currentSelectedRow < table.GetRowCount() {
+
+				table.Select(currentSelectedRow, 0)
+			} else if currentSelectedRow >= table.GetRowCount() && table.GetRowCount() > 1 {
+
+				table.Select(table.GetRowCount()-1, 0)
+			} else if currentSelectedRow == 0 {
+
+				table.Select(1, 0)
+			}
 		}
 	}
 
@@ -223,6 +253,82 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 
 	// Alias for updateTable - both copy data safely
 	updateTableNoLock := updateTable
+
+	// Helper function to get the currently selected entry
+	getSelectedEntry := func() *searchEntry {
+		row, _ := table.GetSelection()
+		if row <= 0 {
+			return nil
+		}
+
+		resultsMu.Lock()
+		defer resultsMu.Unlock()
+
+		filterLower := strings.ToLower(currentFilter)
+		visibleIdx := 0
+		for i := range allResults {
+			entry := &allResults[i]
+			if currentFilter != "" {
+				if !strings.Contains(strings.ToLower(entry.Name), filterLower) &&
+					!strings.Contains(strings.ToLower(entry.Project), filterLower) &&
+					!strings.Contains(strings.ToLower(entry.Location), filterLower) &&
+					!strings.Contains(strings.ToLower(entry.Type), filterLower) {
+					continue
+				}
+			}
+			visibleIdx++
+			if visibleIdx == row {
+				return entry
+			}
+		}
+		return nil
+	}
+
+	// Helper function to update status bar with context-aware actions
+	updateStatusWithActions := func() {
+		resultsMu.Lock()
+		count := len(allResults)
+		resultsMu.Unlock()
+
+		entry := getSelectedEntry()
+		var actionStr string
+		if entry != nil {
+			actions := GetActionsForResourceType(entry.Type)
+			actionStr = FormatActionsStatusBar(actions)
+		}
+
+		// During search, show search-specific status with context actions
+		if isSearching {
+			if actionStr != "" {
+				status.SetText(fmt.Sprintf(" [yellow]Searching...[-]  %s  [yellow]Esc[-] cancel", actionStr))
+			} else {
+				status.SetText(" [yellow]Searching...[-]  [yellow]Esc[-] cancel")
+			}
+			return
+		}
+
+		if entry == nil {
+			if count > 0 {
+				status.SetText(fmt.Sprintf(" [green]%d results[-]  [yellow]Enter[-] search  [yellow]Esc[-] back  [yellow]/[-] filter  [yellow]?[-] help", count))
+			} else {
+				status.SetText(" [yellow]Enter[-] search  [yellow]Esc[-] back  [yellow]/[-] filter  [yellow]?[-] help")
+			}
+			return
+		}
+
+		if currentFilter != "" {
+			status.SetText(fmt.Sprintf(" [green]Filter: %s[-]  %s  [yellow]/[-] edit  [yellow]Esc[-] clear  [yellow]?[-] help", currentFilter, actionStr))
+		} else {
+			status.SetText(fmt.Sprintf(" %s  [yellow]Enter[-] search  [yellow]Esc[-] back  [yellow]/[-] filter  [yellow]?[-] help", actionStr))
+		}
+	}
+
+	// Update status when selection changes
+	table.SetSelectionChangedFunc(func(row, column int) {
+		if !modalOpen && !filterMode {
+			updateStatusWithActions()
+		}
+	})
 
 	// Function to perform search with streaming results
 	// This function should be called from a goroutine to avoid blocking the event loop
@@ -247,6 +353,10 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 		searchCancel = cancel
 		isSearching = true
 
+		// Track progress
+		var currentProgress search.SearchProgress
+		var progressMu sync.Mutex
+
 		// Clear warnings pane at start
 		app.QueueUpdateDraw(func() {
 			warningsPane.SetText("")
@@ -268,11 +378,18 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 					resultsMu.Lock()
 					count := len(allResults)
 					resultsMu.Unlock()
+					progressMu.Lock()
+					prog := currentProgress
+					progressMu.Unlock()
 					frame := spinnerFrames[spinnerIdx]
 					spinnerIdx = (spinnerIdx + 1) % len(spinnerFrames)
 					app.QueueUpdateDraw(func() {
 						if isSearching {
-							progressText.SetText(fmt.Sprintf("[yellow]%s %d results[-]", frame, count))
+							if prog.TotalRequests > 0 {
+								progressText.SetText(fmt.Sprintf("[yellow]%s %d/%d requests | %d results[-]", frame, prog.CompletedRequests, prog.TotalRequests, count))
+							} else {
+								progressText.SetText(fmt.Sprintf("[yellow]%s Starting...[-]", frame))
+							}
 						}
 					})
 				case <-spinnerDone:
@@ -285,36 +402,43 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 
 		// Update initial status
 		app.QueueUpdateDraw(func() {
-			status.SetText(" [yellow]Searching...[-]  [yellow]Esc[-] cancel search  [yellow]d[-] details")
-			progressText.SetText(fmt.Sprintf("[yellow]Searching %d projects...[-]", len(projects)))
+			updateStatusWithActions()
+			progressText.SetText("[yellow]Starting search...[-]")
 		})
 
 		// Run search
 		searchQuery := search.Query{Term: query}
 
-		callback := func(results []search.Result, progress string) error {
+		callback := func(results []search.Result, progress search.SearchProgress) error {
 			// Check if cancelled
 			if searchCtx.Err() != nil {
 				return searchCtx.Err()
 			}
 
-			// Add new results
-			newEntries := make([]searchEntry, 0, len(results))
-			for _, r := range results {
-				entry := searchEntry{
-					Type:     string(r.Type),
-					Name:     r.Name,
-					Project:  r.Project,
-					Location: r.Location,
-					Details:  r.Details,
-					Result:   &r,
-				}
-				newEntries = append(newEntries, entry)
-			}
+			// Update progress
+			progressMu.Lock()
+			currentProgress = progress
+			progressMu.Unlock()
 
-			resultsMu.Lock()
-			allResults = append(allResults, newEntries...)
-			resultsMu.Unlock()
+			// Add new results (if any)
+			if len(results) > 0 {
+				newEntries := make([]searchEntry, 0, len(results))
+				for _, r := range results {
+					entry := searchEntry{
+						Type:     string(r.Type),
+						Name:     r.Name,
+						Project:  r.Project,
+						Location: r.Location,
+						Details:  r.Details,
+						Result:   &r,
+					}
+					newEntries = append(newEntries, entry)
+				}
+
+				resultsMu.Lock()
+				allResults = append(allResults, newEntries...)
+				resultsMu.Unlock()
+			}
 
 			// Update UI - copy current filter to avoid race
 			filter := currentFilter
@@ -337,7 +461,6 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 
 		// Store warnings and error
 		resultsMu.Lock()
-		count := len(allResults)
 		if err != nil {
 			searchError = err
 		}
@@ -351,23 +474,14 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 		app.QueueUpdateDraw(func() {
 			progressText.SetText("")
 
-			if searchCtx.Err() == context.Canceled {
-				status.SetText(fmt.Sprintf(" [yellow]Search cancelled[-] (%d results)  [yellow]Enter[-] new search  [yellow]Esc[-] back  [yellow]/[-] filter  [yellow]d[-] details", count))
-			} else if err != nil {
-				status.SetText(fmt.Sprintf(" [green]Found %d results[-]  [yellow]Enter[-] new search  [yellow]Esc[-] back  [yellow]/[-] filter  [yellow]d[-] details", count))
-			} else {
-				warningMsg := ""
-				if len(allWarnings) > 0 {
-					warningMsg = fmt.Sprintf(" [yellow](%d warnings)[-]", len(allWarnings))
-				}
-				status.SetText(fmt.Sprintf(" [green]Found %d results[-]%s  [yellow]Enter[-] new search  [yellow]Esc[-] back  [yellow]/[-] filter  [yellow]d[-] details", count, warningMsg))
-			}
-
 			// Update warnings pane and rebuild layout to show/hide it
 			updateWarningsPane()
 			rebuildLayout(false, true)
 			updateTableNoLock(filter)
 			app.SetFocus(table)
+
+			// Update status with context-aware actions for selected item
+			updateStatusWithActions()
 		})
 	}
 
@@ -399,9 +513,7 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 			filterMode = false
 			rebuildLayout(false, true)
 			app.SetFocus(table)
-			if currentFilter != "" {
-				status.SetText(fmt.Sprintf(" [green]Filter: %s[-]  [yellow]Enter[-] search  [yellow]Esc[-] clear filter  [yellow]/[-] edit  [yellow]d[-] details", currentFilter))
-			}
+			updateStatusWithActions()
 		case tcell.KeyEscape:
 			filterInput.SetText(currentFilter)
 			filterMode = false
@@ -439,17 +551,10 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 				currentFilter = ""
 				filterInput.SetText("")
 				updateTable("")
-				status.SetText(" [yellow]Filter cleared[-]  [yellow]Enter[-] search  [yellow]Esc[-] back  [yellow]/[-] filter  [yellow]d[-] details")
+				status.SetText(" [yellow]Filter cleared[-]")
 				time.AfterFunc(2*time.Second, func() {
 					app.QueueUpdateDraw(func() {
-						resultsMu.Lock()
-						count := len(allResults)
-						resultsMu.Unlock()
-						if count > 0 {
-							status.SetText(fmt.Sprintf(" [green]%d results[-]  [yellow]Enter[-] search  [yellow]Esc[-] back  [yellow]/[-] filter  [yellow]d[-] details", count))
-						} else {
-							status.SetText(" [yellow]Enter[-] search  [yellow]Esc[-] back  [yellow]/[-] filter results  [yellow]d[-] details  [yellow]?[-] help")
-						}
+						updateStatusWithActions()
 					})
 				})
 				return nil
@@ -477,50 +582,158 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 				status.SetText(" [yellow]Type to filter results, Enter to apply, Esc to cancel[-]")
 				return nil
 
-			case 'd':
-				// Show details for selected result
-				row, _ := table.GetSelection()
-				if row <= 0 {
+			case 's':
+				// SSH to instance (only for compute.instance type)
+				selectedEntry := getSelectedEntry()
+				if selectedEntry == nil {
 					status.SetText(" [red]No result selected[-]")
 					time.AfterFunc(2*time.Second, func() {
 						app.QueueUpdateDraw(func() {
-							status.SetText(" [yellow]Enter[-] search  [yellow]Esc[-] back  [yellow]/[-] filter  [yellow]d[-] details  [yellow]?[-] help")
+							updateStatusWithActions()
 						})
 					})
 					return nil
 				}
 
-				resultsMu.Lock()
-				// Find the actual entry (accounting for filter)
-				filterLower := strings.ToLower(currentFilter)
-				visibleIdx := 0
-				var selectedEntry *searchEntry
-				for i := range allResults {
-					entry := &allResults[i]
-					if currentFilter != "" {
-						if !strings.Contains(strings.ToLower(entry.Name), filterLower) &&
-							!strings.Contains(strings.ToLower(entry.Project), filterLower) &&
-							!strings.Contains(strings.ToLower(entry.Location), filterLower) &&
-							!strings.Contains(strings.ToLower(entry.Type), filterLower) {
-							continue
-						}
-					}
-					visibleIdx++
-					if visibleIdx == row {
-						selectedEntry = entry
-						break
-					}
+				if selectedEntry.Type != string(search.KindComputeInstance) {
+					status.SetText(" [red]SSH only available for compute instances[-]")
+					time.AfterFunc(2*time.Second, func() {
+						app.QueueUpdateDraw(func() {
+							updateStatusWithActions()
+						})
+					})
+					return nil
 				}
-				resultsMu.Unlock()
 
-				if selectedEntry != nil {
-					showSearchResultDetail(app, table, flex, selectedEntry, &modalOpen, status, currentFilter)
+				// Capture values for callbacks
+				instanceName := selectedEntry.Name
+				instanceProject := selectedEntry.Project
+				instanceZone := selectedEntry.Location
+
+				// Show SSH options modal
+				modalOpen = true
+				ShowSSHOptionsModal(app, instanceName, false,
+					func(opts SSHOptions) {
+						// Restore main view before SSH (needed for proper suspend/resume)
+						app.SetRoot(flex, true)
+						app.SetFocus(table)
+						modalOpen = false
+
+						// Execute SSH using shared function
+						RunSSHSession(app, instanceName, instanceProject, instanceZone, opts, outputRedir)
+
+						// After resume - direct call, not QueueUpdateDraw
+						status.SetText(fmt.Sprintf(" [green]Disconnected from %s[-]", instanceName))
+						time.AfterFunc(3*time.Second, func() {
+							app.QueueUpdateDraw(func() {
+								updateStatusWithActions()
+							})
+						})
+					},
+					func() {
+						// Cancel - restore main view
+						app.SetRoot(flex, true)
+						app.SetFocus(table)
+						modalOpen = false
+						updateStatusWithActions()
+					},
+				)
+				return nil
+
+			case 'd':
+				// Show details for selected result
+				selectedEntry := getSelectedEntry()
+				if selectedEntry == nil {
+					status.SetText(" [red]No result selected[-]")
+					time.AfterFunc(2*time.Second, func() {
+						app.QueueUpdateDraw(func() {
+							updateStatusWithActions()
+						})
+					})
+					return nil
+				}
+
+				// For instances, fetch live details from GCP
+				if selectedEntry.Type == string(search.KindComputeInstance) {
+					// Set status directly (not via QueueUpdateDraw) since we're in input handler
+					status.SetText(" [yellow]Loading instance details...[-]")
+
+					// Capture values for closure
+					entryName := selectedEntry.Name
+
+					executor := NewInstanceActionExecutor(
+						selectedEntry.Name,
+						selectedEntry.Project,
+						selectedEntry.Location,
+						false,
+					)
+
+					actionCtx := &ActionContext{
+						App:         app,
+						Ctx:         ctx,
+						OutputRedir: outputRedir,
+						OnError: func(err error) {
+							app.QueueUpdateDraw(func() {
+								status.SetText(fmt.Sprintf(" [red]Error: %v[-]", err))
+								time.AfterFunc(3*time.Second, func() {
+									app.QueueUpdateDraw(func() {
+										updateStatusWithActions()
+									})
+								})
+							})
+						},
+					}
+
+					executor.ExecuteDetails(actionCtx, func(details string) {
+						showInstanceDetailModal(app, table, flex, entryName, details, &modalOpen, status, currentFilter, updateStatusWithActions)
+					})
+				} else {
+					// For other types, show generic details
+					showSearchResultDetail(app, table, flex, selectedEntry, &modalOpen, status, currentFilter, updateStatusWithActions)
+				}
+				return nil
+
+			case 'o':
+				// Open in browser (for buckets)
+				selectedEntry := getSelectedEntry()
+				if selectedEntry == nil {
+					return nil
+				}
+
+				if selectedEntry.Type == string(search.KindBucket) {
+					executor := NewBucketActionExecutor(selectedEntry.Name, selectedEntry.Project)
+					actionCtx := &ActionContext{
+						App:         app,
+						Ctx:         ctx,
+						OutputRedir: outputRedir,
+						OnStatusUpdate: func(msg string) {
+							app.QueueUpdateDraw(func() {
+								status.SetText(fmt.Sprintf(" [green]%s[-]", msg))
+								time.AfterFunc(2*time.Second, func() {
+									app.QueueUpdateDraw(func() {
+										updateStatusWithActions()
+									})
+								})
+							})
+						},
+						OnError: func(err error) {
+							app.QueueUpdateDraw(func() {
+								status.SetText(fmt.Sprintf(" [red]Error: %v[-]", err))
+								time.AfterFunc(3*time.Second, func() {
+									app.QueueUpdateDraw(func() {
+										updateStatusWithActions()
+									})
+								})
+							})
+						},
+					}
+					executor.ExecuteOpen(actionCtx)
 				}
 				return nil
 
 			case '?':
 				// Show help
-				showSearchHelp(app, table, flex, &modalOpen, currentFilter, status)
+				showSearchHelp(app, table, flex, &modalOpen, currentFilter, status, updateStatusWithActions)
 				return nil
 			}
 		}
@@ -658,7 +871,7 @@ func getTypeColor(resourceType string) string {
 }
 
 // showSearchResultDetail displays details for a search result
-func showSearchResultDetail(app *tview.Application, table *tview.Table, mainFlex *tview.Flex, entry *searchEntry, modalOpen *bool, status *tview.TextView, currentFilter string) {
+func showSearchResultDetail(app *tview.Application, table *tview.Table, mainFlex *tview.Flex, entry *searchEntry, modalOpen *bool, status *tview.TextView, currentFilter string, onRestoreStatus func()) {
 	var detailText strings.Builder
 
 	detailText.WriteString(fmt.Sprintf("[yellow::b]%s[-:-:-]\n\n", entry.Type))
@@ -710,10 +923,46 @@ func showSearchResultDetail(app *tview.Application, table *tview.Table, mainFlex
 			*modalOpen = false
 			app.SetRoot(mainFlex, true)
 			app.SetFocus(table)
-			if currentFilter != "" {
-				status.SetText(fmt.Sprintf(" [green]Filter: %s[-]  [yellow]Enter[-] search  [yellow]Esc[-] back  [yellow]/[-] filter  [yellow]d[-] details", currentFilter))
-			} else {
-				status.SetText(" [yellow]Enter[-] search  [yellow]Esc[-] back  [yellow]/[-] filter  [yellow]d[-] details  [yellow]?[-] help")
+			if onRestoreStatus != nil {
+				onRestoreStatus()
+			}
+			return nil
+		}
+		return event
+	})
+
+	*modalOpen = true
+	app.SetRoot(detailFlex, true).SetFocus(detailView)
+}
+
+// showInstanceDetailModal displays instance details fetched from GCP
+func showInstanceDetailModal(app *tview.Application, table *tview.Table, mainFlex *tview.Flex, name string, details string, modalOpen *bool, status *tview.TextView, currentFilter string, onRestoreStatus func()) {
+	detailView := tview.NewTextView().
+		SetDynamicColors(true).
+		SetText(details).
+		SetScrollable(true).
+		SetWordWrap(true)
+	detailView.SetBorder(true).SetTitle(fmt.Sprintf(" %s ", name))
+
+	// Create status bar for detail view
+	detailStatus := tview.NewTextView().
+		SetDynamicColors(true).
+		SetText(" [yellow]Esc[-] back  [yellow]↑/↓[-] scroll")
+
+	// Create fullscreen detail layout
+	detailFlex := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(detailView, 0, 1, true).
+		AddItem(detailStatus, 1, 0, false)
+
+	// Set up input handler
+	detailView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			*modalOpen = false
+			app.SetRoot(mainFlex, true)
+			app.SetFocus(table)
+			if onRestoreStatus != nil {
+				onRestoreStatus()
 			}
 			return nil
 		}
@@ -725,7 +974,7 @@ func showSearchResultDetail(app *tview.Application, table *tview.Table, mainFlex
 }
 
 // showSearchHelp displays help for the search view
-func showSearchHelp(app *tview.Application, table *tview.Table, mainFlex *tview.Flex, modalOpen *bool, currentFilter string, status *tview.TextView) {
+func showSearchHelp(app *tview.Application, table *tview.Table, mainFlex *tview.Flex, modalOpen *bool, currentFilter string, status *tview.TextView, onRestoreStatus func()) {
 	helpText := `[yellow::b]Search View - Keyboard Shortcuts[-:-:-]
 
 [yellow]Search[-]
@@ -739,7 +988,9 @@ func showSearchHelp(app *tview.Application, table *tview.Table, mainFlex *tview.
   [white]End/G[-]         Jump to last result
 
 [yellow]Actions[-]
+  [white]s[-]             SSH to selected instance
   [white]d[-]             Show details for selected result
+  [white]o[-]             Open in browser (for buckets)
   [white]/[-]             Filter displayed results
 
 [yellow]Search Features[-]
@@ -747,6 +998,7 @@ func showSearchHelp(app *tview.Application, table *tview.Table, mainFlex *tview.
   • Search can be cancelled at any time with Esc
   • Cancelled searches keep existing results
   • Filter (/) narrows displayed results without new search
+  • Context-aware actions based on resource type
 
 [darkgray]Press Esc or ? to close this help[-]`
 
@@ -775,10 +1027,8 @@ func showSearchHelp(app *tview.Application, table *tview.Table, mainFlex *tview.
 			*modalOpen = false
 			app.SetRoot(mainFlex, true)
 			app.SetFocus(table)
-			if currentFilter != "" {
-				status.SetText(fmt.Sprintf(" [green]Filter: %s[-]  [yellow]Enter[-] search  [yellow]Esc[-] back  [yellow]/[-] filter  [yellow]d[-] details", currentFilter))
-			} else {
-				status.SetText(" [yellow]Enter[-] search  [yellow]Esc[-] back  [yellow]/[-] filter  [yellow]d[-] details  [yellow]?[-] help")
+			if onRestoreStatus != nil {
+				onRestoreStatus()
 			}
 			return nil
 		}

@@ -8,18 +8,19 @@ import (
 	"sync"
 )
 
-// ResultCallback is called when new results are available during streaming search.
-// The callback receives a slice of new results and a progress message.
-// If the callback returns an error, the search will be stopped.
-type ResultCallback func(results []Result, progress string) error
-
 // SearchProgress contains information about the current search progress.
 type SearchProgress struct {
-	CurrentProject string
-	CurrentKind    ResourceKind
-	TotalProjects  int
-	DoneProjects   int
+	TotalRequests     int    // Total number of provider requests to make
+	CompletedRequests int    // Number of completed requests
+	PendingRequests   int    // Number of pending requests
+	CurrentProject    string // Current project being searched
+	CurrentProvider   string // Current provider being used
 }
+
+// ResultCallback is called when new results are available during streaming search.
+// The callback receives a slice of new results and progress information.
+// If the callback returns an error, the search will be stopped.
+type ResultCallback func(results []Result, progress SearchProgress) error
 
 const defaultProjectConcurrency = 4
 
@@ -229,12 +230,14 @@ func (e *Engine) SearchStreaming(ctx context.Context, projects []string, query Q
 		limit = defaultProjectConcurrency
 	}
 
+	// Calculate total requests (projects × providers)
+	totalRequests := len(trimmed) * len(activeProviders)
+	var completedRequests int
+
 	sem := make(chan struct{}, limit)
 	var mu sync.Mutex
 	var results []Result
 	var warnings []SearchWarning
-	var doneProjects int
-	totalProjects := len(trimmed)
 
 	var wg sync.WaitGroup
 	for _, project := range trimmed {
@@ -258,6 +261,13 @@ func (e *Engine) SearchStreaming(ctx context.Context, projects []string, query Q
 				}
 
 				providerResults, err := provider.Search(ctx, project, query)
+
+				// Update completed count regardless of result
+				mu.Lock()
+				completedRequests++
+				currentCompleted := completedRequests
+				mu.Unlock()
+
 				if err != nil {
 					// Record warning but continue with other providers
 					mu.Lock()
@@ -267,34 +277,43 @@ func (e *Engine) SearchStreaming(ctx context.Context, projects []string, query Q
 						Err:      err,
 					})
 					mu.Unlock()
+
+					// Still send progress update even on error
+					if callback != nil {
+						progress := SearchProgress{
+							TotalRequests:     totalRequests,
+							CompletedRequests: currentCompleted,
+							PendingRequests:   totalRequests - currentCompleted,
+							CurrentProject:    project,
+							CurrentProvider:   string(provider.Kind()),
+						}
+						_ = callback(nil, progress)
+					}
 					continue
 				}
 
-				if len(providerResults) == 0 {
-					continue
-				}
-
-				// Call the callback with new results
+				// Call the callback with new results and progress
 				mu.Lock()
 				results = append(results, providerResults...)
 				currentResults := make([]Result, len(providerResults))
 				copy(currentResults, providerResults)
-				currentDone := doneProjects
 				mu.Unlock()
 
 				// Send progress update with new results
 				if callback != nil {
-					progress := formatProgress(project, provider.Kind(), currentDone, totalProjects)
+					progress := SearchProgress{
+						TotalRequests:     totalRequests,
+						CompletedRequests: currentCompleted,
+						PendingRequests:   totalRequests - currentCompleted,
+						CurrentProject:    project,
+						CurrentProvider:   string(provider.Kind()),
+					}
 					if err := callback(currentResults, progress); err != nil {
 						// Callback requested stop - just return
 						return
 					}
 				}
 			}
-
-			mu.Lock()
-			doneProjects++
-			mu.Unlock()
 		}()
 	}
 
@@ -326,11 +345,6 @@ func (e *Engine) SearchStreaming(ctx context.Context, projects []string, query Q
 		Results:  results,
 		Warnings: warnings,
 	}, nil
-}
-
-// formatProgress creates a human-readable progress message.
-func formatProgress(project string, kind ResourceKind, done, total int) string {
-	return "Searching " + project + " (" + string(kind) + ")"
 }
 
 // GetProviderKinds returns all resource kinds supported by the engine's providers.

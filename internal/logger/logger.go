@@ -28,11 +28,27 @@ const (
 	LevelError
 	// LevelFatal is for fatal errors that cause program termination.
 	LevelFatal
+	// LevelDisabled disables all logging.
+	LevelDisabled
 )
 
 // Logger provides structured logging with configurable log levels.
 type Logger struct {
-	level LogLevel
+	level         LogLevel
+	previousLevel LogLevel
+}
+
+// Disable temporarily disables all logging. Call Restore() to re-enable.
+func (l *Logger) Disable() {
+	l.previousLevel = l.level
+	l.level = LevelDisabled
+	pterm.DisableOutput()
+}
+
+// Restore re-enables logging after Disable() was called.
+func (l *Logger) Restore() {
+	l.level = l.previousLevel
+	pterm.EnableOutput()
 }
 
 // Tracef logs a formatted message at trace level.
