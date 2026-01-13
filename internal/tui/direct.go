@@ -49,7 +49,7 @@ func (r *outputRedirector) Restore() {
 		os.Stderr = r.origStderr
 	}
 	if r.devNull != nil {
-		r.devNull.Close()
+		_ = r.devNull.Close()
 	}
 }
 

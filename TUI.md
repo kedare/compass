@@ -5,9 +5,9 @@ Implement a k9s-style keyboard-driven TUI interface for compass, accessible via 
 
 ---
 
-## ✅ Current Status: Phase 5 Complete
+## ✅ Current Status: Phase 6 Complete
 
-### What's Working Now (v0.5 - Connectivity Tests)
+### What's Working Now (v0.6 - Global Search)
 - ✅ Basic TUI launches successfully via `compass interactive`
 - ✅ Displays instances from cache in a table format
 - ✅ Keyboard navigation (arrow keys, vim-style j/k)
@@ -35,6 +35,15 @@ Implement a k9s-style keyboard-driven TUI interface for compass, accessible via 
 - ✅ Rerun connectivity tests with 'r' key
 - ✅ Delete connectivity tests with Del key
 - ✅ Refresh test list with Ctrl+R
+- ✅ Global search view with Shift+S key
+- ✅ Search across all cached projects for GCP resources
+- ✅ Supports 22+ resource types (instances, MIGs, VPN, storage, networking, etc.)
+- ✅ Real-time search filtering as you type
+- ✅ Color-coded results by resource type
+- ✅ Detail view for search results with 'd' key
+- ✅ Open resource in Cloud Console with 'b' key
+- ✅ SSH to instances directly from search results with 's' key
+- ✅ Configurable parallelism for multi-project searches
 
 ### Known Issues Fixed
 - ❌ **Complex App architecture caused hang** - The original PageStack/Component lifecycle was causing a deadlock
@@ -220,7 +229,42 @@ cmd/
 
 ---
 
-### Phase 6: IP Lookup 🔎 TODO
+### Phase 6: Global Search ✅ COMPLETED
+**Goal**: Search for GCP resources across all cached projects
+
+**Features Implemented**:
+- [x] Navigate to search view (press `Shift+S`)
+- [x] Search input field with real-time filtering
+- [x] Results table with type, project, location, name, details
+- [x] Supports 22+ resource types:
+  - Compute: instances, MIGs, instance templates, addresses, disks, snapshots
+  - Load Balancing: forwarding rules, backend services, target pools, health checks, URL maps
+  - Storage: Cloud Storage buckets
+  - Database: Cloud SQL instances
+  - Container: GKE clusters, node pools
+  - Networking: VPC networks, subnets, firewall rules
+  - Serverless: Cloud Run services
+  - Security: Secret Manager secrets
+  - VPN: HA VPN gateways, VPN tunnels
+- [x] Color-coded results by resource type
+- [x] Detail modal for search results (press `d`)
+- [x] Open resource in Cloud Console (press `b`)
+- [x] SSH to instances from search results (press `s`)
+- [x] Configurable parallelism for multi-project searches
+- [x] Type filtering with `--type` and `--no-type` flags
+- [x] Context-sensitive help (press `?`)
+- [x] Return to instance view (press `Esc`)
+
+**Implementation Details**:
+- Created `search_view.go` with full search functionality
+- Reuses `search.Engine` with all registered providers
+- Parallel project searching with configurable concurrency
+- Modal overlay for resource details
+- Integrated with Cloud Console URL generation
+
+---
+
+### Phase 7: IP Lookup 🔎 TODO
 **Goal**: Search for IP addresses across projects
 
 **Features to Add**:
@@ -239,7 +283,7 @@ cmd/
 
 ---
 
-### Phase 7: Project Manager 📁 TODO
+### Phase 8: Project Manager 📁 TODO
 **Goal**: Select which projects to include in searches
 
 **Features to Add**:
@@ -257,7 +301,7 @@ cmd/
 
 ---
 
-### Phase 8: Navigation & Multi-View 🧭 TODO
+### Phase 9: Navigation & Multi-View 🧭 TODO
 **Goal**: Navigate between different views
 
 **Features to Add**:
@@ -279,7 +323,7 @@ cmd/
 
 ---
 
-### Phase 9: Advanced Features 🚀 TODO
+### Phase 10: Advanced Features 🚀 TODO
 **Goal**: Polish and additional features
 
 **Features to Add**:
@@ -299,7 +343,7 @@ cmd/
 
 ---
 
-### Phase 10: SSH Integration 🔐 TODO
+### Phase 11: SSH Integration 🔐 TODO
 **Goal**: Seamless SSH from TUI
 
 **Features to Add**:
@@ -378,6 +422,20 @@ cmd/
 | `?` | Show help |
 | `Esc` | Return to instance view |
 
+### Global Search (Current Implementation)
+| Key | Action |
+|-----|--------|
+| `Shift+S` | Open search view (from instance list) |
+| Type | Filter results as you type |
+| `Enter` | Execute search |
+| `d` | View resource details |
+| `b` | Open resource in Cloud Console |
+| `s` | SSH to instance (instances only) |
+| `Tab`/`Shift+Tab` | Navigate between search field and results |
+| `Shift+R` | Refresh search results |
+| `?` | Show help |
+| `Esc` | Return to instance view |
+
 ### Connectivity Tests (Planned)
 | Key | Action |
 |-----|--------|
@@ -397,6 +455,8 @@ cmd/
 - **Connectivity Tests**: `gcp.ConnectivityClient.ListTests()`, `gcp.ConnectivityClient.RunTest()`, `gcp.ConnectivityClient.DeleteTest()`
 - **Instance Details**: `gcp.Client.FindInstance()`
 - **Data Model**: Uses `cache.CachedLocation` type
+- **Global Search**: `search.Engine` with 22+ resource providers (instances, MIGs, templates, addresses, disks, snapshots, buckets, load balancing, Cloud SQL, GKE, VPC, Cloud Run, firewall rules, secrets, VPN)
+- **Cloud Console URLs**: `GetCloudConsoleURL()` for opening resources in browser
 
 ### 📋 What Needs Integration
 - **IP Lookup**: `gcp.Client.LookupIP()`
@@ -444,6 +504,8 @@ internal/tui/
 ├── direct.go              # Main TUI implementation with navigation
 ├── vpn_view.go            # VPN Inspector view
 ├── connectivity_view.go   # Connectivity Tests view
+├── search_view.go         # Global resource search view
+├── actions.go             # Shared actions (SSH, browse, details)
 └── styles.go              # Color schemes (partial use)
 
 cmd/
@@ -734,13 +796,13 @@ Based on simplified architecture:
 
 The TUI implementation is **working at MVP level** using a simplified direct approach. The complex component-based architecture was causing deadlocks and has been abandoned in favor of a straightforward tview implementation.
 
-**Current State**: Multiple views are functional and stable. Instance list, VPN Inspector, and Connectivity Tests views are all working.
+**Current State**: Multiple views are functional and stable. Instance list, VPN Inspector, Connectivity Tests, and Global Search views are all working.
 
-**Next Priority**: Phase 6 (IP Lookup) to add IP address search functionality.
+**Next Priority**: Phase 7 (IP Lookup) to add IP address search functionality.
 
-**Long-term Vision**: Full-featured TUI with multiple views (instances, VPN, connectivity tests, IP lookup, project management) providing a comprehensive GCP management interface, similar to k9s for Kubernetes.
+**Long-term Vision**: Full-featured TUI with multiple views (instances, VPN, connectivity tests, global search, IP lookup, project management) providing a comprehensive GCP management interface, similar to k9s for Kubernetes.
 
 ---
 
-*Last Updated: 2025-11-05*
-*Status: Phase 5 Complete - Connectivity Tests Working*
+*Last Updated: 2025-01-13*
+*Status: Phase 6 Complete - Global Search Working*

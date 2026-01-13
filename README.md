@@ -288,6 +288,8 @@ compute.instance  prod-project  us-central1-b    piou-runner   status=RUNNING, m
 | Cloud Run services | `run.service` | Region, URL, latest revision |
 | Firewall rules | `compute.firewall` | Network, direction, priority |
 | Secret Manager secrets | `secretmanager.secret` | Replication type |
+| HA VPN gateways | `compute.vpnGateway` | Network, interface count, IPs |
+| VPN tunnels | `compute.vpnTunnel` | Status, peer IP, IKE version, gateway |
 
 - Run `compass gcp projects import` first so the search knows which projects to inspect.
 - Use `--project <id>` when you want to bypass the cache and only inspect a single project.

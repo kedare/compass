@@ -64,8 +64,8 @@ type Instance struct {
 	CreationTimestamp string
 	CPUPlatform       string
 	// Network
-	Network    string
-	Subnetwork string
+	Network     string
+	Subnetwork  string
 	NetworkTags []string
 	// Disks
 	Disks []InstanceDisk
@@ -140,25 +140,25 @@ type ManagedInstanceGroup struct {
 	Location   string
 	IsRegional bool
 	// Extended fields
-	Description        string
-	TargetSize         int64
-	CurrentSize        int64
-	InstanceTemplate   string
-	BaseInstanceName   string
+	Description      string
+	TargetSize       int64
+	CurrentSize      int64
+	InstanceTemplate string
+	BaseInstanceName string
 	// Status
-	IsStable           bool
+	IsStable bool
 	// Auto-scaling
 	AutoscalingEnabled bool
 	MinReplicas        int64
 	MaxReplicas        int64
 	// Update policy
-	UpdateType         string
-	MaxSurge           string
-	MaxUnavailable     string
+	UpdateType     string
+	MaxSurge       string
+	MaxUnavailable string
 	// Named ports
-	NamedPorts         map[string]int64
+	NamedPorts map[string]int64
 	// Distribution policy (for regional MIGs)
-	TargetZones        []string
+	TargetZones []string
 }
 
 // InstanceTemplate represents a Compute Engine instance template.
@@ -190,19 +190,19 @@ type InstanceTemplate struct {
 
 // InstanceTemplateDisk represents disk configuration in an instance template.
 type InstanceTemplateDisk struct {
-	Boot       bool
-	AutoDelete bool
-	Mode       string
-	Type       string
-	DiskType   string
-	DiskSizeGb int64
+	Boot        bool
+	AutoDelete  bool
+	Mode        string
+	Type        string
+	DiskType    string
+	DiskSizeGb  int64
 	SourceImage string
 }
 
 // InstanceTemplateNetwork represents network interface in an instance template.
 type InstanceTemplateNetwork struct {
-	Network    string
-	Subnetwork string
+	Network       string
+	Subnetwork    string
 	HasExternalIP bool
 }
 

@@ -29,12 +29,12 @@ type ResourceAction struct {
 
 // ActionContext provides context for executing actions
 type ActionContext struct {
-	App           *tview.Application
-	Ctx           context.Context
-	OutputRedir   *outputRedirector
+	App            *tview.Application
+	Ctx            context.Context
+	OutputRedir    *outputRedirector
 	OnStatusUpdate func(msg string)
-	OnError       func(err error)
-	OnComplete    func()
+	OnError        func(err error)
+	OnComplete     func()
 }
 
 // ResourceActionHandler handles actions for a specific resource
@@ -84,10 +84,10 @@ func FormatActionsStatusBar(actions []ResourceAction) string {
 
 // InstanceActionExecutor handles actions for compute instances
 type InstanceActionExecutor struct {
-	Name     string
-	Project  string
-	Zone     string
-	UseIAP   bool
+	Name    string
+	Project string
+	Zone    string
+	UseIAP  bool
 }
 
 // NewInstanceActionExecutor creates a new instance action executor
@@ -151,7 +151,7 @@ func RunSSHSession(app *tview.Application, name, project, zone string, opts SSHO
 
 		if err := cmd.Run(); err != nil {
 			if outputRedir != nil {
-				fmt.Fprintln(outputRedir.OrigStdout(), "\nPress Enter to return to TUI...")
+				_, _ = fmt.Fprintln(outputRedir.OrigStdout(), "\nPress Enter to return to TUI...")
 			} else {
 				fmt.Println("\nPress Enter to return to TUI...")
 			}

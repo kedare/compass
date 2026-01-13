@@ -167,7 +167,7 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 	}
 
 	// Shared function to update table with given results
-	var updateTableWithData func(filter string, results []searchEntry) = func(filter string, results []searchEntry) {
+	var updateTableWithData = func(filter string, results []searchEntry) {
 
 		currentSelectedRow, _ := table.GetSelection()
 		var selectedKey string
