@@ -59,6 +59,38 @@ type Instance struct {
 	Status      string
 	MachineType string
 	CanUseIAP   bool
+	// Extended fields
+	Description       string
+	CreationTimestamp string
+	CPUPlatform       string
+	// Network
+	Network     string
+	Subnetwork  string
+	NetworkTags []string
+	// Disks
+	Disks []InstanceDisk
+	// Scheduling
+	Preemptible       bool
+	AutomaticRestart  bool
+	OnHostMaintenance string
+	// Service accounts
+	ServiceAccounts []string
+	// Labels
+	Labels map[string]string
+	// Metadata keys (not values for security)
+	MetadataKeys []string
+}
+
+// InstanceDisk represents a disk attached to an instance.
+type InstanceDisk struct {
+	Name       string
+	Boot       bool
+	AutoDelete bool
+	Mode       string
+	Type       string
+	DiskSizeGb int64
+	DiskType   string
+	Source     string
 }
 
 type ManagedInstanceRef struct {
@@ -107,12 +139,77 @@ type ManagedInstanceGroup struct {
 	Name       string
 	Location   string
 	IsRegional bool
+	// Extended fields
+	Description      string
+	TargetSize       int64
+	CurrentSize      int64
+	InstanceTemplate string
+	BaseInstanceName string
+	// Status
+	IsStable bool
+	// Auto-scaling
+	AutoscalingEnabled bool
+	MinReplicas        int64
+	MaxReplicas        int64
+	// Update policy
+	UpdateType     string
+	MaxSurge       string
+	MaxUnavailable string
+	// Named ports
+	NamedPorts map[string]int64
+	// Distribution policy (for regional MIGs)
+	TargetZones []string
 }
 
 // InstanceTemplate represents a Compute Engine instance template.
 type InstanceTemplate struct {
-	Name        string
-	MachineType string
+	Name           string
+	Description    string
+	MachineType    string
+	CanIPForward   bool
+	MinCPUPlatform string
+	// Disk information
+	Disks []InstanceTemplateDisk
+	// Network information
+	NetworkInterfaces []InstanceTemplateNetwork
+	// Service accounts
+	ServiceAccounts []string
+	// Tags (network tags)
+	Tags []string
+	// Labels
+	Labels map[string]string
+	// Scheduling
+	Preemptible       bool
+	AutomaticRestart  bool
+	OnHostMaintenance string
+	// GPU accelerators
+	GPUAccelerators []InstanceTemplateGPU
+	// Metadata keys (not values for security)
+	MetadataKeys []string
+}
+
+// InstanceTemplateDisk represents disk configuration in an instance template.
+type InstanceTemplateDisk struct {
+	Boot        bool
+	AutoDelete  bool
+	Mode        string
+	Type        string
+	DiskType    string
+	DiskSizeGb  int64
+	SourceImage string
+}
+
+// InstanceTemplateNetwork represents network interface in an instance template.
+type InstanceTemplateNetwork struct {
+	Network       string
+	Subnetwork    string
+	HasExternalIP bool
+}
+
+// InstanceTemplateGPU represents GPU accelerator configuration.
+type InstanceTemplateGPU struct {
+	Type  string
+	Count int64
 }
 
 // Address represents an IP address reservation.
@@ -769,11 +866,7 @@ func (c *Client) ListManagedInstanceGroups(ctx context.Context, location string)
 				continue
 			}
 
-			results = append(results, ManagedInstanceGroup{
-				Name:       item.Name,
-				Location:   location,
-				IsRegional: isRegional,
-			})
+			results = append(results, convertManagedInstanceGroup(item, location, isRegional))
 		}
 
 		return results, nil
@@ -813,11 +906,7 @@ func (c *Client) ListManagedInstanceGroups(ctx context.Context, location string)
 					continue
 				}
 
-				results = append(results, ManagedInstanceGroup{
-					Name:       mig.Name,
-					Location:   locationName,
-					IsRegional: isRegional,
-				})
+				results = append(results, convertManagedInstanceGroup(mig, locationName, isRegional))
 			}
 		}
 
@@ -952,15 +1041,95 @@ func (c *Client) ListInstanceTemplates(ctx context.Context) ([]*InstanceTemplate
 			continue
 		}
 
-		var machineType string
-		if item.Properties != nil && item.Properties.MachineType != "" {
-			machineType = item.Properties.MachineType
+		tmpl := &InstanceTemplate{
+			Name:        item.Name,
+			Description: item.Description,
 		}
 
-		results = append(results, &InstanceTemplate{
-			Name:        item.Name,
-			MachineType: machineType,
-		})
+		if item.Properties != nil {
+			props := item.Properties
+			tmpl.MachineType = props.MachineType
+			tmpl.CanIPForward = props.CanIpForward
+			tmpl.MinCPUPlatform = props.MinCpuPlatform
+
+			// Parse disks
+			for _, disk := range props.Disks {
+				if disk == nil {
+					continue
+				}
+				d := InstanceTemplateDisk{
+					Boot:       disk.Boot,
+					AutoDelete: disk.AutoDelete,
+					Mode:       disk.Mode,
+					Type:       disk.Type,
+				}
+				if disk.InitializeParams != nil {
+					d.DiskType = extractResourceName(disk.InitializeParams.DiskType)
+					d.DiskSizeGb = disk.InitializeParams.DiskSizeGb
+					d.SourceImage = extractResourceName(disk.InitializeParams.SourceImage)
+				}
+				tmpl.Disks = append(tmpl.Disks, d)
+			}
+
+			// Parse network interfaces
+			for _, nic := range props.NetworkInterfaces {
+				if nic == nil {
+					continue
+				}
+				n := InstanceTemplateNetwork{
+					Network:       extractResourceName(nic.Network),
+					Subnetwork:    extractResourceName(nic.Subnetwork),
+					HasExternalIP: len(nic.AccessConfigs) > 0,
+				}
+				tmpl.NetworkInterfaces = append(tmpl.NetworkInterfaces, n)
+			}
+
+			// Parse service accounts
+			for _, sa := range props.ServiceAccounts {
+				if sa != nil && sa.Email != "" {
+					tmpl.ServiceAccounts = append(tmpl.ServiceAccounts, sa.Email)
+				}
+			}
+
+			// Parse tags
+			if props.Tags != nil {
+				tmpl.Tags = props.Tags.Items
+			}
+
+			// Parse labels
+			tmpl.Labels = props.Labels
+
+			// Parse scheduling
+			if props.Scheduling != nil {
+				tmpl.Preemptible = props.Scheduling.Preemptible
+				if props.Scheduling.AutomaticRestart != nil {
+					tmpl.AutomaticRestart = *props.Scheduling.AutomaticRestart
+				}
+				tmpl.OnHostMaintenance = props.Scheduling.OnHostMaintenance
+			}
+
+			// Parse GPU accelerators
+			for _, gpu := range props.GuestAccelerators {
+				if gpu == nil {
+					continue
+				}
+				tmpl.GPUAccelerators = append(tmpl.GPUAccelerators, InstanceTemplateGPU{
+					Type:  extractResourceName(gpu.AcceleratorType),
+					Count: gpu.AcceleratorCount,
+				})
+			}
+
+			// Parse metadata keys (not values for security)
+			if props.Metadata != nil {
+				for _, meta := range props.Metadata.Items {
+					if meta != nil {
+						tmpl.MetadataKeys = append(tmpl.MetadataKeys, meta.Key)
+					}
+				}
+			}
+		}
+
+		results = append(results, tmpl)
 	}
 
 	return results, nil
@@ -1799,19 +1968,29 @@ func (c *Client) listManagedInstancesInRegionalMIG(ctx context.Context, migName,
 
 func (c *Client) convertInstance(instance *compute.Instance) *Instance {
 	result := &Instance{
-		Name:        instance.Name,
-		Project:     c.project,
-		Zone:        extractZoneName(instance.Zone),
-		Status:      instance.Status,
-		MachineType: extractMachineType(instance.MachineType),
+		Name:              instance.Name,
+		Project:           c.project,
+		Zone:              extractZoneName(instance.Zone),
+		Status:            instance.Status,
+		MachineType:       extractMachineType(instance.MachineType),
+		Description:       instance.Description,
+		CreationTimestamp: instance.CreationTimestamp,
+		CPUPlatform:       instance.CpuPlatform,
+		Labels:            instance.Labels,
 	}
 
-	// Extract IP addresses
+	// Extract IP addresses and network info
 	hasExternalIP := false
 
 	for _, networkInterface := range instance.NetworkInterfaces {
 		if networkInterface.NetworkIP != "" {
 			result.InternalIP = networkInterface.NetworkIP
+		}
+		if result.Network == "" {
+			result.Network = extractResourceName(networkInterface.Network)
+		}
+		if result.Subnetwork == "" {
+			result.Subnetwork = extractResourceName(networkInterface.Subnetwork)
 		}
 
 		for _, accessConfig := range networkInterface.AccessConfigs {
@@ -1822,8 +2001,120 @@ func (c *Client) convertInstance(instance *compute.Instance) *Instance {
 		}
 	}
 
+	// Network tags
+	if instance.Tags != nil {
+		result.NetworkTags = instance.Tags.Items
+	}
+
+	// Disks
+	for _, disk := range instance.Disks {
+		if disk == nil {
+			continue
+		}
+		d := InstanceDisk{
+			Boot:       disk.Boot,
+			AutoDelete: disk.AutoDelete,
+			Mode:       disk.Mode,
+			Type:       disk.Type,
+			DiskSizeGb: disk.DiskSizeGb,
+			Source:     extractResourceName(disk.Source),
+		}
+		// Extract disk type from source
+		if disk.Source != "" {
+			d.Name = extractResourceName(disk.Source)
+		}
+		result.Disks = append(result.Disks, d)
+	}
+
+	// Scheduling
+	if instance.Scheduling != nil {
+		result.Preemptible = instance.Scheduling.Preemptible
+		if instance.Scheduling.AutomaticRestart != nil {
+			result.AutomaticRestart = *instance.Scheduling.AutomaticRestart
+		}
+		result.OnHostMaintenance = instance.Scheduling.OnHostMaintenance
+	}
+
+	// Service accounts
+	for _, sa := range instance.ServiceAccounts {
+		if sa != nil && sa.Email != "" {
+			result.ServiceAccounts = append(result.ServiceAccounts, sa.Email)
+		}
+	}
+
+	// Metadata keys (not values for security)
+	if instance.Metadata != nil {
+		for _, meta := range instance.Metadata.Items {
+			if meta != nil {
+				result.MetadataKeys = append(result.MetadataKeys, meta.Key)
+			}
+		}
+	}
+
 	// Prefer IAP only when no external IP is available.
 	result.CanUseIAP = !hasExternalIP
+
+	return result
+}
+
+func convertManagedInstanceGroup(mig *compute.InstanceGroupManager, location string, isRegional bool) ManagedInstanceGroup {
+	result := ManagedInstanceGroup{
+		Name:             mig.Name,
+		Location:         location,
+		IsRegional:       isRegional,
+		Description:      mig.Description,
+		TargetSize:       mig.TargetSize,
+		InstanceTemplate: extractResourceName(mig.InstanceTemplate),
+		BaseInstanceName: mig.BaseInstanceName,
+	}
+
+	// Status
+	if mig.Status != nil {
+		result.IsStable = mig.Status.IsStable
+	}
+
+	// Current actions (to calculate current size)
+	if mig.CurrentActions != nil {
+		result.CurrentSize = mig.CurrentActions.None // Instances that are running and stable
+	}
+
+	// Update policy
+	if mig.UpdatePolicy != nil {
+		result.UpdateType = mig.UpdatePolicy.Type
+		if mig.UpdatePolicy.MaxSurge != nil {
+			if mig.UpdatePolicy.MaxSurge.Fixed > 0 {
+				result.MaxSurge = fmt.Sprintf("%d", mig.UpdatePolicy.MaxSurge.Fixed)
+			} else if mig.UpdatePolicy.MaxSurge.Percent > 0 {
+				result.MaxSurge = fmt.Sprintf("%d%%", mig.UpdatePolicy.MaxSurge.Percent)
+			}
+		}
+		if mig.UpdatePolicy.MaxUnavailable != nil {
+			if mig.UpdatePolicy.MaxUnavailable.Fixed > 0 {
+				result.MaxUnavailable = fmt.Sprintf("%d", mig.UpdatePolicy.MaxUnavailable.Fixed)
+			} else if mig.UpdatePolicy.MaxUnavailable.Percent > 0 {
+				result.MaxUnavailable = fmt.Sprintf("%d%%", mig.UpdatePolicy.MaxUnavailable.Percent)
+			}
+		}
+	}
+
+	// Named ports
+	if len(mig.NamedPorts) > 0 {
+		result.NamedPorts = make(map[string]int64)
+		for _, np := range mig.NamedPorts {
+			if np != nil {
+				result.NamedPorts[np.Name] = np.Port
+			}
+		}
+	}
+
+	// Distribution policy (for regional MIGs)
+	if mig.DistributionPolicy != nil && len(mig.DistributionPolicy.Zones) > 0 {
+		for _, zone := range mig.DistributionPolicy.Zones {
+			if zone != nil {
+				result.TargetZones = append(result.TargetZones, extractResourceName(zone.Zone))
+			}
+		}
+	}
 
 	return result
 }

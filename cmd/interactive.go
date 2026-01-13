@@ -10,6 +10,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var interactiveParallelism int
+
 var interactiveCmd = &cobra.Command{
 	Use:     "interactive",
 	Aliases: []string{"i", "tui"},
@@ -28,6 +30,8 @@ Press '?' at any time to see keyboard shortcuts.`,
 }
 
 func init() {
+	interactiveCmd.Flags().IntVarP(&interactiveParallelism, "parallelism", "p", 8,
+		"Number of projects to search in parallel (default 8)")
 	rootCmd.AddCommand(interactiveCmd)
 }
 
@@ -52,7 +56,7 @@ func runInteractive(cmd *cobra.Command, args []string) error {
 
 	// Run the simplified version directly without NewApp
 	logger.Log.Info("Starting TUI (press Ctrl+C to quit)...")
-	if err := tui.RunDirect(c, gcpClient); err != nil {
+	if err := tui.RunDirect(c, gcpClient, interactiveParallelism); err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
 

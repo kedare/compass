@@ -173,8 +173,24 @@ var (
 			},
 		}
 	}
-	searchEngineFactory = func(providers ...search.Provider) resourceSearchEngine {
-		return search.NewEngine(providers...)
+	vpnGatewayProviderFactory = func() search.Provider {
+		return &search.VPNGatewayProvider{
+			NewClient: func(ctx context.Context, project string) (search.VPNGatewayClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	vpnTunnelProviderFactory = func() search.Provider {
+		return &search.VPNTunnelProvider{
+			NewClient: func(ctx context.Context, project string) (search.VPNTunnelClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		}
+	}
+	searchEngineFactory = func(parallelism int, providers ...search.Provider) resourceSearchEngine {
+		engine := search.NewEngine(providers...)
+		engine.MaxConcurrentProjects = parallelism
+		return engine
 	}
 	// useSpinner controls whether to show a spinner during search (disabled in tests to avoid races)
 	useSpinner = true
@@ -182,6 +198,7 @@ var (
 
 var searchTypes []string
 var searchNoTypes []string
+var searchParallelism int
 
 var gcpSearchCmd = &cobra.Command{
 	Use:   "search <name-fragment>",
@@ -191,8 +208,9 @@ contain the provided text. The search covers Compute Engine instances, managed i
 groups, instance templates, IP address reservations, disks, snapshots, Cloud Storage
 buckets, load balancer resources (forwarding rules, backend services, target pools,
 health checks, URL maps), Cloud SQL instances, GKE clusters and node pools, VPC networks
-and subnets, Cloud Run services, firewall rules, and Secret Manager secrets. Returns
-every match along with the project and location.
+and subnets, Cloud Run services, firewall rules, Secret Manager secrets, and Cloud VPN
+resources (HA VPN gateways and tunnels). Returns every match along with the project and
+location.
 
 Use --type to filter results to specific resource types. Multiple types can be specified
 by using the flag multiple times (e.g., --type compute.instance --type compute.disk).
@@ -219,6 +237,7 @@ When both --type and --no-type are used, --no-type is applied to the --type filt
 		}
 
 		engine := searchEngineFactory(
+			searchParallelism,
 			instanceProviderFactory(),
 			migProviderFactory(),
 			instanceTemplateProviderFactory(),
@@ -239,6 +258,8 @@ When both --type and --no-type are used, --no-type is applied to the --type filt
 			cloudRunProviderFactory(),
 			firewallRuleProviderFactory(),
 			secretProviderFactory(),
+			vpnGatewayProviderFactory(),
+			vpnTunnelProviderFactory(),
 		)
 		query := search.Query{Term: args[0], Types: typeFilters}
 
@@ -462,6 +483,9 @@ func init() {
 	gcpSearchCmd.Flags().StringArrayVar(&searchNoTypes, "no-type", nil,
 		"Exclude specific resource types from results (can be specified multiple times)")
 	_ = gcpSearchCmd.RegisterFlagCompletionFunc("no-type", completeSearchTypes)
+
+	gcpSearchCmd.Flags().IntVar(&searchParallelism, "parallelism", 8,
+		"Number of projects to search in parallel (default 8)")
 
 	gcpCmd.AddCommand(gcpSearchCmd)
 }

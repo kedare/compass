@@ -75,7 +75,7 @@ func TestGCPSearchCommandInvokesEngine(t *testing.T) {
 	instanceProviderFactory = func() search.Provider { return nil }
 	cachedProjectsProvider = func() ([]string, bool, error) { return []string{"proj-a"}, true, nil }
 	called := false
-	searchEngineFactory = func(_ ...search.Provider) resourceSearchEngine {
+	searchEngineFactory = func(_ int, _ ...search.Provider) resourceSearchEngine {
 		return searchEngineFunc(func(ctx context.Context, projects []string, query search.Query) ([]search.Result, error) {
 			called = true
 			if query.Term != "piou" {
