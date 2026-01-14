@@ -299,6 +299,11 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client, parallelism int) error {
 	// Setup keyboard - store reference so we can restore it later
 	var mainInputCapture func(event *tcell.EventKey) *tcell.EventKey
 	mainInputCapture = func(event *tcell.EventKey) *tcell.EventKey {
+		// If a modal is open, let it handle all keys (except Ctrl+C)
+		if modalOpen && event.Key() != tcell.KeyCtrlC {
+			return event
+		}
+
 		// If in filter mode, let the input field handle it
 		if filterMode {
 			return event
@@ -315,10 +320,6 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client, parallelism int) error {
 			return nil
 
 		case tcell.KeyEscape:
-			// Don't handle ESC if a modal is open (let the modal handle it)
-			if modalOpen {
-				return event
-			}
 			// Clear filter if active, otherwise quit
 			if currentFilter != "" {
 				currentFilter = ""
