@@ -524,6 +524,11 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 
 	// Setup keyboard handlers
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		// If a modal is open, let it handle all keys (except Ctrl+C)
+		if modalOpen && event.Key() != tcell.KeyCtrlC {
+			return event
+		}
+
 		// If in filter mode, let the input field handle it
 		if filterMode {
 			return event
@@ -531,11 +536,6 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 
 		// If search input is focused, let it handle most keys
 		if app.GetFocus() == searchInput {
-			return event
-		}
-
-		// Don't handle ESC if a modal is open
-		if modalOpen && event.Key() == tcell.KeyEscape {
 			return event
 		}
 
