@@ -133,11 +133,12 @@ Examples:
 				logger.Log.Debug("No cached project for this resource, checking for available projects to search")
 
 				// Try to get projects from cache (only if cache is enabled)
+				// Use GetProjectsByUsage() to search recently used projects first for faster lookups
 				cache, err := gcp.LoadCache()
 				if err == nil && cache != nil {
-					cachedProjects = cache.GetProjects()
+					cachedProjects = cache.GetProjectsByUsage()
 					if len(cachedProjects) > 0 {
-						logger.Log.Debugf("Will search across %d cached projects", len(cachedProjects))
+						logger.Log.Debugf("Will search across %d cached projects (ordered by recent usage)", len(cachedProjects))
 					} else {
 						// No cached projects - fail hard
 						logger.Log.Fatalf("No projects found in cache. Please specify a project with --project, or import projects with 'compass gcp projects import'")
@@ -288,6 +289,12 @@ Examples:
 
 		// Update project from the found instance's project
 		project = instance.Project
+
+		// Mark the instance and project as used for future priority ordering
+		if cacheStore, cacheErr := gcp.LoadCache(); cacheErr == nil && cacheStore != nil {
+			_ = cacheStore.MarkInstanceUsed(instance.Name)
+			_ = cacheStore.MarkProjectUsed(project)
+		}
 
 		logger.Log.Infof("Connecting to instance: %s of project %s in zone: %s", instance.Name, project, instance.Zone)
 

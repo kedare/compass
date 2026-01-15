@@ -114,6 +114,12 @@ func RunSSHSession(app *tview.Application, name, project, zone string, opts SSHO
 		return
 	}
 
+	// Mark the instance and project as used for future priority ordering
+	if cacheStore, err := gcp.LoadCache(); err == nil && cacheStore != nil {
+		_ = cacheStore.MarkInstanceUsed(name)
+		_ = cacheStore.MarkProjectUsed(project)
+	}
+
 	app.Suspend(func() {
 		args := []string{
 			"compute",
@@ -271,6 +277,12 @@ func (e *InstanceActionExecutor) ExecuteDetails(ctx *ActionContext, showDetailFu
 				ctx.OnError(fmt.Errorf("instance not found"))
 			}
 			return
+		}
+
+		// Mark the instance and project as used for future priority ordering
+		if cacheStore, cacheErr := gcp.LoadCache(); cacheErr == nil && cacheStore != nil {
+			_ = cacheStore.MarkInstanceUsed(e.Name)
+			_ = cacheStore.MarkProjectUsed(e.Project)
 		}
 
 		// Format instance details

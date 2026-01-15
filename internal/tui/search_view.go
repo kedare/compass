@@ -37,9 +37,9 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 	var currentFilter string
 	var filterMode bool
 
-	// Get projects from cache
-	projects := c.GetProjects()
-	if len(projects) == 0 {
+	// Get initial projects from cache (will be overridden per-search with affinity data)
+	initialProjects := c.GetProjectsByUsage()
+	if len(initialProjects) == 0 {
 		return fmt.Errorf("no projects in cache")
 	}
 
@@ -353,6 +353,12 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 		searchCancel = cancel
 		isSearching = true
 
+		// Get projects prioritized for this search term using learned affinity
+		searchProjects := c.GetProjectsForSearch(query, nil)
+		if len(searchProjects) == 0 {
+			searchProjects = initialProjects
+		}
+
 		// Track progress
 		var currentProgress search.SearchProgress
 		var progressMu sync.Mutex
@@ -449,7 +455,7 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 			return nil
 		}
 
-		output, err := engine.SearchStreaming(searchCtx, projects, searchQuery, callback)
+		output, err := engine.SearchStreaming(searchCtx, searchProjects, searchQuery, callback)
 
 		// Stop spinner
 		select {
@@ -467,7 +473,22 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 		if output != nil && len(output.Warnings) > 0 {
 			allWarnings = output.Warnings
 		}
+		// Copy results for affinity recording
+		resultsCopy := make([]searchEntry, len(allResults))
+		copy(resultsCopy, allResults)
 		resultsMu.Unlock()
+
+		// Record search affinity for learning (only if we got results)
+		if len(resultsCopy) > 0 {
+			projectResults := make(map[string]int)
+			for _, entry := range resultsCopy {
+				projectResults[entry.Project]++
+			}
+			// Record in background to not block UI
+			go func() {
+				_ = c.RecordSearchAffinity(query, projectResults, "")
+			}()
+		}
 
 		// Final UI update
 		filter := currentFilter

@@ -12,7 +12,7 @@ func TestResolveSearchProjectsPrefersFlag(t *testing.T) {
 	project = "my-project"
 	t.Cleanup(func() { project = prev })
 
-	projects, err := resolveSearchProjects()
+	projects, err := resolveSearchProjects("test", nil)
 	if err != nil {
 		t.Fatalf("resolveSearchProjects failed: %v", err)
 	}
@@ -26,7 +26,7 @@ func TestResolveSearchProjectsUsesCache(t *testing.T) {
 	prevProject := project
 	project = ""
 	prevProvider := cachedProjectsProvider
-	cachedProjectsProvider = func() ([]string, bool, error) {
+	cachedProjectsProvider = func(searchTerm string, resourceTypes []string) ([]string, bool, error) {
 		return []string{"a", "a", ""}, true, nil
 	}
 	t.Cleanup(func() {
@@ -34,7 +34,7 @@ func TestResolveSearchProjectsUsesCache(t *testing.T) {
 		cachedProjectsProvider = prevProvider
 	})
 
-	projects, err := resolveSearchProjects()
+	projects, err := resolveSearchProjects("test", nil)
 	if err != nil {
 		t.Fatalf("resolveSearchProjects failed: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestResolveSearchProjectsErrorsWithoutCache(t *testing.T) {
 	prevProject := project
 	project = ""
 	prevProvider := cachedProjectsProvider
-	cachedProjectsProvider = func() ([]string, bool, error) {
+	cachedProjectsProvider = func(searchTerm string, resourceTypes []string) ([]string, bool, error) {
 		return nil, false, nil
 	}
 	t.Cleanup(func() {
@@ -56,7 +56,7 @@ func TestResolveSearchProjectsErrorsWithoutCache(t *testing.T) {
 		cachedProjectsProvider = prevProvider
 	})
 
-	if _, err := resolveSearchProjects(); err == nil {
+	if _, err := resolveSearchProjects("test", nil); err == nil {
 		t.Fatal("expected error when cache disabled")
 	}
 }
@@ -73,7 +73,9 @@ func TestGCPSearchCommandInvokesEngine(t *testing.T) {
 	prevCacheProvider := cachedProjectsProvider
 	project = ""
 	instanceProviderFactory = func() search.Provider { return nil }
-	cachedProjectsProvider = func() ([]string, bool, error) { return []string{"proj-a"}, true, nil }
+	cachedProjectsProvider = func(searchTerm string, resourceTypes []string) ([]string, bool, error) {
+		return []string{"proj-a"}, true, nil
+	}
 	called := false
 	searchEngineFactory = func(_ int, _ ...search.Provider) resourceSearchEngine {
 		return searchEngineFunc(func(ctx context.Context, projects []string, query search.Query) ([]search.Result, error) {

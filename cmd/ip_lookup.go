@@ -472,7 +472,7 @@ func lookupClients(ctx context.Context, limitProjects []string) []*gcp.Client {
 	if err != nil {
 		logger.Log.Debugf("Failed to load cache for project discovery: %v", err)
 	} else if cache != nil {
-		for _, cachedProject := range enumerateProjects(cache.GetProjects()) {
+		for _, cachedProject := range enumerateProjects(cache.GetProjectsByUsage()) {
 			if ctx != nil && ctx.Err() != nil {
 				break
 			}

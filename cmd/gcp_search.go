@@ -21,7 +21,7 @@ type resourceSearchEngine interface {
 }
 
 var (
-	cachedProjectsProvider = func() ([]string, bool, error) {
+	cachedProjectsProvider = func(searchTerm string, resourceTypes []string) ([]string, bool, error) {
 		cacheStore, err := gcp.LoadCache()
 		if err != nil {
 			return nil, false, err
@@ -31,7 +31,8 @@ var (
 			return nil, false, nil
 		}
 
-		return cacheStore.GetProjects(), true, nil
+		// Use search affinity to prioritize projects likely to have results
+		return cacheStore.GetProjectsForSearch(searchTerm, resourceTypes), true, nil
 	}
 	instanceProviderFactory = func() search.Provider {
 		return &search.InstanceProvider{
@@ -225,13 +226,21 @@ When both --type and --no-type are used, --no-type is applied to the --type filt
 			ctx = context.Background()
 		}
 
-		projects, err := resolveSearchProjects()
+		searchTerm := args[0]
+
+		// Parse and validate type filters
+		typeFilters, err := parseSearchTypes(searchTypes, searchNoTypes)
 		if err != nil {
 			return err
 		}
 
-		// Parse and validate type filters
-		typeFilters, err := parseSearchTypes(searchTypes, searchNoTypes)
+		// Convert type filters to strings for affinity lookup
+		var typeStrings []string
+		for _, t := range typeFilters {
+			typeStrings = append(typeStrings, string(t))
+		}
+
+		projects, err := resolveSearchProjects(searchTerm, typeStrings)
 		if err != nil {
 			return err
 		}
@@ -261,13 +270,13 @@ When both --type and --no-type are used, --no-type is applied to the --type filt
 			vpnGatewayProviderFactory(),
 			vpnTunnelProviderFactory(),
 		)
-		query := search.Query{Term: args[0], Types: typeFilters}
+		query := search.Query{Term: searchTerm, Types: typeFilters}
 
 		var spinner *pterm.SpinnerPrinter
 		if useSpinner {
 			spinner, _ = pterm.DefaultSpinner.Start(fmt.Sprintf("Searching %d project(s)...", len(projects)))
 		}
-		output, searchErr := engine.SearchWithWarnings(ctx, projects, query)
+		searchOutput, searchErr := engine.SearchWithWarnings(ctx, projects, query)
 		if searchErr != nil {
 			if spinner != nil {
 				spinner.Fail("Search failed")
@@ -276,23 +285,47 @@ When both --type and --no-type are used, --no-type is applied to the --type filt
 			return searchErr
 		}
 		if spinner != nil {
-			spinner.Success(fmt.Sprintf("Found %d matching resource(s)", len(output.Results)))
+			spinner.Success(fmt.Sprintf("Found %d matching resource(s)", len(searchOutput.Results)))
 		}
 
-		displaySearchResults(output.Results)
-		displaySearchWarnings(output.Warnings)
+		// Record search affinity for future searches
+		if len(searchOutput.Results) > 0 {
+			go recordSearchAffinity(searchTerm, searchOutput.Results)
+		}
+
+		displaySearchResults(searchOutput.Results)
+		displaySearchWarnings(searchOutput.Warnings)
 
 		return nil
 	},
 }
 
-// resolveSearchProjects returns the list of projects to search.
-func resolveSearchProjects() ([]string, error) {
+// recordSearchAffinity records which projects had results for a search term.
+func recordSearchAffinity(searchTerm string, results []search.Result) {
+	cacheStore, err := gcp.LoadCache()
+	if err != nil || cacheStore == nil {
+		return
+	}
+
+	// Group results by project
+	projectResults := make(map[string]int)
+	for _, result := range results {
+		projectResults[result.Project]++
+	}
+
+	// Record affinity without specific resource type (general search)
+	if err := cacheStore.RecordSearchAffinity(searchTerm, projectResults, ""); err != nil {
+		logger.Log.Debugf("Failed to record search affinity: %v", err)
+	}
+}
+
+// resolveSearchProjects returns the list of projects to search, prioritized by search affinity.
+func resolveSearchProjects(searchTerm string, resourceTypes []string) ([]string, error) {
 	if project != "" {
 		return []string{strings.TrimSpace(project)}, nil
 	}
 
-	projects, cacheAvailable, err := cachedProjectsProvider()
+	projects, cacheAvailable, err := cachedProjectsProvider(searchTerm, resourceTypes)
 	if err != nil {
 		logger.Log.Debugf("Failed to load cache for search: %v", err)
 		return nil, fmt.Errorf("failed to load project cache: %w", err)
