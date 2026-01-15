@@ -1,8 +1,6 @@
 package cache
 
 import (
-	"encoding/json"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,22 +8,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func newTestCache(t *testing.T) *Cache {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_cache.db")
+
+	cache, err := newWithPath(dbPath)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = cache.Close()
+	})
+
+	return cache
+}
+
 func TestNew(t *testing.T) {
 	cache, err := New()
 	require.NoError(t, err)
 	require.NotNil(t, cache)
-	require.NotNil(t, cache.instances)
+	require.NotNil(t, cache.db)
+
+	_ = cache.Close()
 }
 
 func TestSetAndGet(t *testing.T) {
-	// Create temporary cache file
-	tmpDir := t.TempDir()
-	cache := &Cache{
-		filePath:  filepath.Join(tmpDir, "test_cache.json"),
-		instances: make(map[string]*LocationInfo),
-		zones:     make(map[string]*ZoneListing),
-		projects:  make(map[string]*ProjectEntry),
-	}
+	cache := newTestCache(t)
 
 	// Test instance
 	instanceInfo := &LocationInfo{
@@ -46,13 +55,7 @@ func TestSetAndGet(t *testing.T) {
 }
 
 func TestMIGCache(t *testing.T) {
-	tmpDir := t.TempDir()
-	cache := &Cache{
-		filePath:  filepath.Join(tmpDir, "test_cache.json"),
-		instances: make(map[string]*LocationInfo),
-		zones:     make(map[string]*ZoneListing),
-		projects:  make(map[string]*ProjectEntry),
-	}
+	cache := newTestCache(t)
 
 	// Test zonal MIG
 	zonalMIG := &LocationInfo{
@@ -87,47 +90,34 @@ func TestMIGCache(t *testing.T) {
 }
 
 func TestCacheMiss(t *testing.T) {
-	tmpDir := t.TempDir()
-	cache := &Cache{
-		filePath:  filepath.Join(tmpDir, "test_cache.json"),
-		instances: make(map[string]*LocationInfo),
-		zones:     make(map[string]*ZoneListing),
-		projects:  make(map[string]*ProjectEntry),
-	}
+	cache := newTestCache(t)
 
 	_, found := cache.Get("non-existent")
 	require.False(t, found)
 }
 
 func TestCacheExpiry(t *testing.T) {
-	tmpDir := t.TempDir()
-	cache := &Cache{
-		filePath:  filepath.Join(tmpDir, "test_cache.json"),
-		instances: make(map[string]*LocationInfo),
-		zones:     make(map[string]*ZoneListing),
-		projects:  make(map[string]*ProjectEntry),
-	}
+	cache := newTestCache(t)
 
-	// Add entry with expired timestamp
-	cache.instances["expired-instance"] = &LocationInfo{
-		Project:   "test-project",
-		Zone:      "us-central1-a",
-		Type:      ResourceTypeInstance,
-		Timestamp: time.Now().Add(-CacheExpiry - time.Hour), // Expired
-	}
+	// Add an entry
+	err := cache.Set("expired-instance", &LocationInfo{
+		Project: "test-project",
+		Zone:    "us-central1-a",
+		Type:    ResourceTypeInstance,
+	})
+	require.NoError(t, err)
+
+	// Manually set timestamp to expired
+	expiryTime := time.Now().Add(-DefaultCacheExpiry - time.Hour).Unix()
+	_, err = cache.db.Exec(`UPDATE instances SET timestamp = ? WHERE name = ?`, expiryTime, "expired-instance")
+	require.NoError(t, err)
 
 	_, found := cache.Get("expired-instance")
 	require.False(t, found)
 }
 
 func TestDelete(t *testing.T) {
-	tmpDir := t.TempDir()
-	cache := &Cache{
-		filePath:  filepath.Join(tmpDir, "test_cache.json"),
-		instances: make(map[string]*LocationInfo),
-		zones:     make(map[string]*ZoneListing),
-		projects:  make(map[string]*ProjectEntry),
-	}
+	cache := newTestCache(t)
 
 	info := &LocationInfo{
 		Project: "test-project",
@@ -146,13 +136,7 @@ func TestDelete(t *testing.T) {
 }
 
 func TestClear(t *testing.T) {
-	tmpDir := t.TempDir()
-	cache := &Cache{
-		filePath:  filepath.Join(tmpDir, "test_cache.json"),
-		instances: make(map[string]*LocationInfo),
-		zones:     make(map[string]*ZoneListing),
-		projects:  make(map[string]*ProjectEntry),
-	}
+	cache := newTestCache(t)
 
 	// Add multiple entries
 	require.NoError(t, cache.Set("instance1", &LocationInfo{Project: "p1", Zone: "z1", Type: ResourceTypeInstance}))
@@ -161,20 +145,23 @@ func TestClear(t *testing.T) {
 
 	err := cache.Clear()
 	require.NoError(t, err)
-	require.Empty(t, cache.instances)
+
+	// Verify all cleared
+	_, found := cache.Get("instance1")
+	require.False(t, found)
+	_, found = cache.Get("instance2")
+	require.False(t, found)
+	_, found = cache.Get("mig1")
+	require.False(t, found)
 }
 
 func TestPersistence(t *testing.T) {
 	tmpDir := t.TempDir()
-	cacheFile := filepath.Join(tmpDir, "test_cache.json")
+	dbPath := filepath.Join(tmpDir, "test_cache.db")
 
 	// Create first cache instance and add data
-	cache1 := &Cache{
-		filePath:  cacheFile,
-		instances: make(map[string]*LocationInfo),
-		zones:     make(map[string]*ZoneListing),
-		projects:  make(map[string]*ProjectEntry),
-	}
+	cache1, err := newWithPath(dbPath)
+	require.NoError(t, err)
 
 	info := &LocationInfo{
 		Project: "test-project",
@@ -182,98 +169,22 @@ func TestPersistence(t *testing.T) {
 		Type:    ResourceTypeInstance,
 	}
 
-	err := cache1.Set("test-instance", info)
+	err = cache1.Set("test-instance", info)
 	require.NoError(t, err)
+	_ = cache1.Close()
 
-	// Create second cache instance and load from file
-	cache2 := &Cache{
-		filePath:  cacheFile,
-		instances: make(map[string]*LocationInfo),
-		zones:     make(map[string]*ZoneListing),
-		projects:  make(map[string]*ProjectEntry),
-	}
-
-	err = cache2.load()
+	// Create second cache instance and verify data persisted
+	cache2, err := newWithPath(dbPath)
 	require.NoError(t, err)
+	defer func() { _ = cache2.Close() }()
 
 	retrieved, found := cache2.Get("test-instance")
 	require.True(t, found)
 	require.Equal(t, "test-project", retrieved.Project)
 }
 
-func TestLoadNonExistentFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	cache := &Cache{
-		filePath:  filepath.Join(tmpDir, "non_existent.json"),
-		instances: make(map[string]*LocationInfo),
-		zones:     make(map[string]*ZoneListing),
-		projects:  make(map[string]*ProjectEntry),
-	}
-
-	err := cache.load()
-	require.NoError(t, err)
-	require.Empty(t, cache.instances)
-}
-
-func TestLoadEmptyFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	cacheFile := filepath.Join(tmpDir, "empty.json")
-
-	// Create empty file
-	err := os.WriteFile(cacheFile, []byte(""), 0o600)
-	require.NoError(t, err)
-
-	cache := &Cache{
-		filePath:  cacheFile,
-		instances: make(map[string]*LocationInfo),
-		zones:     make(map[string]*ZoneListing),
-		projects:  make(map[string]*ProjectEntry),
-	}
-
-	err = cache.load()
-	require.NoError(t, err)
-	require.Empty(t, cache.instances)
-}
-
-func TestCleanExpired(t *testing.T) {
-	tmpDir := t.TempDir()
-	cache := &Cache{
-		filePath:  filepath.Join(tmpDir, "test_cache.json"),
-		instances: make(map[string]*LocationInfo),
-		zones:     make(map[string]*ZoneListing),
-		projects:  make(map[string]*ProjectEntry),
-	}
-
-	// Add valid and expired entries
-	cache.instances["valid"] = &LocationInfo{
-		Project:   "test-project",
-		Zone:      "us-central1-a",
-		Type:      ResourceTypeInstance,
-		Timestamp: time.Now(),
-	}
-
-	cache.instances["expired"] = &LocationInfo{
-		Project:   "test-project",
-		Zone:      "us-central1-b",
-		Type:      ResourceTypeInstance,
-		Timestamp: time.Now().Add(-CacheExpiry - time.Hour),
-	}
-
-	cache.cleanExpired()
-
-	_, found := cache.instances["valid"]
-	require.True(t, found)
-
-	_, found = cache.instances["expired"]
-	require.False(t, found)
-}
-
 func TestGetRefreshesTimestamp(t *testing.T) {
-	tmpDir := t.TempDir()
-	cache := &Cache{
-		filePath:  filepath.Join(tmpDir, "test_cache.json"),
-		instances: make(map[string]*LocationInfo),
-	}
+	cache := newTestCache(t)
 
 	err := cache.Set("stale-instance", &LocationInfo{
 		Project: "test-project",
@@ -282,78 +193,24 @@ func TestGetRefreshesTimestamp(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	cache.mu.Lock()
-	staleTimestamp := time.Now().Add(-CacheExpiry + time.Hour)
-	cache.instances["stale-instance"].Timestamp = staleTimestamp
-	err = cache.save()
-	cache.mu.Unlock()
+	// Set timestamp to 1 hour ago
+	staleTimestamp := time.Now().Add(-time.Hour).Unix()
+	_, err = cache.db.Exec(`UPDATE instances SET timestamp = ? WHERE name = ?`, staleTimestamp, "stale-instance")
 	require.NoError(t, err)
 
 	retrieved, found := cache.Get("stale-instance")
 	require.True(t, found)
-	require.True(t, retrieved.Timestamp.After(staleTimestamp))
+	require.True(t, retrieved.Timestamp.After(time.Unix(staleTimestamp, 0)))
 
-	data, err := os.ReadFile(cache.filePath)
+	// Verify timestamp was updated in database
+	var newTimestamp int64
+	err = cache.db.QueryRow(`SELECT timestamp FROM instances WHERE name = ?`, "stale-instance").Scan(&newTimestamp)
 	require.NoError(t, err)
-
-	var stored cacheFile
-	err = json.Unmarshal(data, &stored)
-	require.NoError(t, err)
-
-	entry, ok := stored.GCP.Instances["stale-instance"]
-	require.True(t, ok)
-	require.True(t, entry.Timestamp.After(staleTimestamp))
-}
-
-func TestSaveUsesGCPSection(t *testing.T) {
-	tmpDir := t.TempDir()
-	cache := &Cache{
-		filePath:  filepath.Join(tmpDir, "test_cache.json"),
-		instances: make(map[string]*LocationInfo),
-		zones:     make(map[string]*ZoneListing),
-		projects:  make(map[string]*ProjectEntry),
-	}
-
-	err := cache.Set("instance", &LocationInfo{
-		Project: "project",
-		Zone:    "zone",
-		Type:    ResourceTypeInstance,
-	})
-	require.NoError(t, err)
-
-	raw, err := os.ReadFile(cache.filePath)
-	require.NoError(t, err)
-
-	var fileContents map[string]json.RawMessage
-	err = json.Unmarshal(raw, &fileContents)
-	require.NoError(t, err)
-
-	gcpPayload, ok := fileContents["gcp"]
-	require.True(t, ok)
-
-	var gcpSection gcpCacheSection
-	err = json.Unmarshal(gcpPayload, &gcpSection)
-	require.NoError(t, err)
-
-	require.NotNil(t, gcpSection.Instances)
-	require.NotNil(t, gcpSection.Zones)
-	require.NotNil(t, gcpSection.Projects)
-
-	_, ok = gcpSection.Projects["project"]
-	require.True(t, ok)
-
-	_, ok = gcpSection.Instances["instance"]
-	require.True(t, ok)
+	require.Greater(t, newTimestamp, staleTimestamp)
 }
 
 func TestZonesCacheSetAndGet(t *testing.T) {
-	tmpDir := t.TempDir()
-	cache := &Cache{
-		filePath:  filepath.Join(tmpDir, "test_cache.json"),
-		instances: make(map[string]*LocationInfo),
-		zones:     make(map[string]*ZoneListing),
-		projects:  make(map[string]*ProjectEntry),
-	}
+	cache := newTestCache(t)
 
 	zones := []string{"us-central1-a", "us-central1-b"}
 	err := cache.SetZones("project", zones)
@@ -367,6 +224,7 @@ func TestZonesCacheSetAndGet(t *testing.T) {
 		require.Equal(t, zone, retrieved[i])
 	}
 
+	// Test that returned slice is a copy (mutation doesn't affect cache)
 	retrieved[0] = "modified"
 
 	again, ok := cache.GetZones("project")
@@ -375,77 +233,57 @@ func TestZonesCacheSetAndGet(t *testing.T) {
 }
 
 func TestZonesCacheExpiry(t *testing.T) {
-	tmpDir := t.TempDir()
-	cache := &Cache{
-		filePath:  filepath.Join(tmpDir, "test_cache.json"),
-		instances: make(map[string]*LocationInfo),
-		zones: map[string]*ZoneListing{
-			"project": {
-				Timestamp: time.Now().Add(-ZoneCacheTTL - time.Hour),
-				Zones:     []string{"us-central1-a"},
-			},
-		},
-		projects: make(map[string]*ProjectEntry),
-	}
+	cache := newTestCache(t)
+
+	err := cache.SetZones("project", []string{"us-central1-a"})
+	require.NoError(t, err)
+
+	// Set timestamp to expired
+	expiryTime := time.Now().Add(-DefaultCacheExpiry - time.Hour).Unix()
+	_, err = cache.db.Exec(`UPDATE zones SET timestamp = ? WHERE project = ?`, expiryTime, "project")
+	require.NoError(t, err)
 
 	_, ok := cache.GetZones("project")
 	require.False(t, ok)
 }
 
 func TestZonesCacheRefreshTimestamp(t *testing.T) {
-	tmpDir := t.TempDir()
-	cache := &Cache{
-		filePath:  filepath.Join(tmpDir, "test_cache.json"),
-		instances: make(map[string]*LocationInfo),
-		zones:     make(map[string]*ZoneListing),
-		projects:  make(map[string]*ProjectEntry),
-	}
+	cache := newTestCache(t)
 
 	err := cache.SetZones("project", []string{"us-central1-a"})
 	require.NoError(t, err)
 
-	cache.mu.Lock()
-	if listing, ok := cache.zones["project"]; ok {
-		listing.Timestamp = time.Now().Add(-time.Hour)
-	}
-	cache.mu.Unlock()
+	// Set timestamp to 1 hour ago
+	staleTimestamp := time.Now().Add(-time.Hour).Unix()
+	_, err = cache.db.Exec(`UPDATE zones SET timestamp = ? WHERE project = ?`, staleTimestamp, "project")
+	require.NoError(t, err)
 
 	retrieved, ok := cache.GetZones("project")
 	require.True(t, ok)
 	require.Len(t, retrieved, 1)
 	require.Equal(t, "us-central1-a", retrieved[0])
 
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-
-	updated := cache.zones["project"].Timestamp
-
-	require.False(t, updated.Before(time.Now().Add(-time.Minute)), "Expected refreshed timestamp, got %v", updated)
+	// Verify timestamp was refreshed
+	var newTimestamp int64
+	err = cache.db.QueryRow(`SELECT timestamp FROM zones WHERE project = ?`, "project").Scan(&newTimestamp)
+	require.NoError(t, err)
+	require.Greater(t, newTimestamp, staleTimestamp)
 }
 
 func TestZonesPersistAcrossLoad(t *testing.T) {
 	tmpDir := t.TempDir()
-	cacheFile := filepath.Join(tmpDir, "zones_cache.json")
+	dbPath := filepath.Join(tmpDir, "zones_cache.db")
 
-	cache1 := &Cache{
-		filePath:  cacheFile,
-		instances: make(map[string]*LocationInfo),
-		zones:     make(map[string]*ZoneListing),
-		projects:  make(map[string]*ProjectEntry),
-	}
-
-	err := cache1.SetZones("project", []string{"us-central1-a"})
+	cache1, err := newWithPath(dbPath)
 	require.NoError(t, err)
 
-	cache2 := &Cache{
-		filePath:  cacheFile,
-		instances: make(map[string]*LocationInfo),
-		zones:     make(map[string]*ZoneListing),
-		projects:  make(map[string]*ProjectEntry),
-	}
-
-	err = cache2.load()
+	err = cache1.SetZones("project", []string{"us-central1-a"})
 	require.NoError(t, err)
+	_ = cache1.Close()
+
+	cache2, err := newWithPath(dbPath)
+	require.NoError(t, err)
+	defer func() { _ = cache2.Close() }()
 
 	retrieved, ok := cache2.GetZones("project")
 	require.True(t, ok)
@@ -454,59 +292,48 @@ func TestZonesPersistAcrossLoad(t *testing.T) {
 }
 
 func TestProjectsCacheAddAndRetrieve(t *testing.T) {
-	tmpDir := t.TempDir()
-	cache := &Cache{
-		filePath:  filepath.Join(tmpDir, "projects_cache.json"),
-		instances: make(map[string]*LocationInfo),
-		zones:     make(map[string]*ZoneListing),
-		projects:  make(map[string]*ProjectEntry),
-	}
+	cache := newTestCache(t)
 
 	err := cache.AddProject("alpha")
 	require.NoError(t, err)
 
-	time.Sleep(10 * time.Millisecond)
+	// Manually set alpha's timestamp to 1 hour ago to ensure different timestamps
+	alphaTimestamp := time.Now().Add(-time.Hour).Unix()
+	_, err = cache.db.Exec(`UPDATE projects SET timestamp = ? WHERE name = ?`, alphaTimestamp, "alpha")
+	require.NoError(t, err)
 
 	err = cache.AddProject("beta")
 	require.NoError(t, err)
 
 	projects := cache.GetProjects()
 	require.Len(t, projects, 2)
-	require.Equal(t, "beta", projects[0])
+	require.Equal(t, "beta", projects[0]) // Most recent first
 
-	cache.mu.Lock()
-	cache.projects["alpha"].Timestamp = time.Now()
-	cache.mu.Unlock()
+	// Update alpha's timestamp to be newer than beta
+	_, err = cache.db.Exec(`UPDATE projects SET timestamp = ? WHERE name = ?`, time.Now().Unix()+1, "alpha")
+	require.NoError(t, err)
 
 	projects = cache.GetProjects()
 	require.Equal(t, "alpha", projects[0])
 }
 
 func TestProjectsCacheExpiry(t *testing.T) {
-	tmpDir := t.TempDir()
-	cache := &Cache{
-		filePath:  filepath.Join(tmpDir, "projects_cache.json"),
-		instances: make(map[string]*LocationInfo),
-		zones:     make(map[string]*ZoneListing),
-		projects: map[string]*ProjectEntry{
-			"stale": {
-				Timestamp: time.Now().Add(-CacheExpiry - time.Hour),
-			},
-		},
-	}
+	cache := newTestCache(t)
+
+	err := cache.AddProject("stale")
+	require.NoError(t, err)
+
+	// Set timestamp to expired
+	expiryTime := time.Now().Add(-DefaultCacheExpiry - time.Hour).Unix()
+	_, err = cache.db.Exec(`UPDATE projects SET timestamp = ? WHERE name = ?`, expiryTime, "stale")
+	require.NoError(t, err)
 
 	projects := cache.GetProjects()
 	require.Empty(t, projects)
 }
 
 func TestGetLocationsByProject(t *testing.T) {
-	tmpDir := t.TempDir()
-	cache := &Cache{
-		filePath:  filepath.Join(tmpDir, "loc_cache.json"),
-		instances: make(map[string]*LocationInfo),
-		zones:     make(map[string]*ZoneListing),
-		projects:  make(map[string]*ProjectEntry),
-	}
+	cache := newTestCache(t)
 
 	require.NoError(t, cache.Set("inst-1", &LocationInfo{Project: "proj", Zone: "us-central1-a", Type: ResourceTypeInstance}))
 	require.NoError(t, cache.Set("mig-1", &LocationInfo{Project: "proj", Region: "us-central1", Type: ResourceTypeMIG, IsRegional: true}))
@@ -517,13 +344,67 @@ func TestGetLocationsByProject(t *testing.T) {
 	require.Len(t, locations, 2)
 	require.NotEqual(t, locations[0].Name, locations[1].Name)
 
-	// Expire entries and ensure they are purged.
-	cache.mu.Lock()
-	for _, info := range cache.instances {
-		info.Timestamp = time.Now().Add(-CacheExpiry - time.Hour)
-	}
-	cache.mu.Unlock()
+	// Expire entries and ensure they are purged
+	expiryTime := time.Now().Add(-DefaultCacheExpiry - time.Hour).Unix()
+	_, err := cache.db.Exec(`UPDATE instances SET timestamp = ? WHERE project = ?`, expiryTime, "proj")
+	require.NoError(t, err)
 
 	_, ok = cache.GetLocationsByProject("proj")
 	require.False(t, ok)
+}
+
+func TestIAPPreservation(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Set initial info with IAP preference
+	iapTrue := true
+	info := &LocationInfo{
+		Project: "test-project",
+		Zone:    "us-central1-a",
+		Type:    ResourceTypeInstance,
+		IAP:     &iapTrue,
+	}
+
+	err := cache.Set("test-instance", info)
+	require.NoError(t, err)
+
+	// Verify IAP was stored
+	retrieved, found := cache.Get("test-instance")
+	require.True(t, found)
+	require.NotNil(t, retrieved.IAP)
+	require.True(t, *retrieved.IAP)
+
+	// Update without IAP preference - should preserve existing
+	updateInfo := &LocationInfo{
+		Project: "test-project",
+		Zone:    "us-central1-b", // Changed zone
+		Type:    ResourceTypeInstance,
+		IAP:     nil, // Not setting IAP
+	}
+
+	err = cache.Set("test-instance", updateInfo)
+	require.NoError(t, err)
+
+	// Verify IAP was preserved
+	retrieved, found = cache.Get("test-instance")
+	require.True(t, found)
+	require.NotNil(t, retrieved.IAP)
+	require.True(t, *retrieved.IAP)
+	require.Equal(t, "us-central1-b", retrieved.Zone)
+}
+
+func TestSetAddsProjectAutomatically(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Set an instance
+	err := cache.Set("test-instance", &LocationInfo{
+		Project: "auto-added-project",
+		Zone:    "us-central1-a",
+		Type:    ResourceTypeInstance,
+	})
+	require.NoError(t, err)
+
+	// Project should be in the list
+	projects := cache.GetProjects()
+	require.Contains(t, projects, "auto-added-project")
 }

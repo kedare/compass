@@ -621,7 +621,7 @@ compass gcp ssh internal-server \
 
 ## Local Cache
 
-`compass` keeps a small JSON cache on disk so you do not have to repeat the same discovery calls on every run. The cache lives at `~/.compass.cache.json` with `0600` permissions and is refreshed transparently.
+`compass` maintains a local SQLite cache to avoid repeated API discovery calls. The cache lives at `~/.compass.cache.db` with `0600` permissions and is updated transparently.
 
 **What's cached:**
 
@@ -637,18 +637,30 @@ compass gcp ssh internal-server \
 
 **Cache behavior:**
 
-Every cache access updates its timestamp, keeping frequently-used entries fresh. Stale entries are pruned automatically when they exceed 30 days of inactivity.
+Every cache access updates its timestamp, keeping frequently-used entries fresh. Stale entries are pruned automatically when they exceed 30 days of inactivity. The SQLite database uses WAL (Write-Ahead Logging) mode for efficient concurrent access.
+
+**Migration from JSON cache:**
+
+If you're upgrading from a previous version that used JSON-based caching (`~/.compass.cache.json`), your data will be automatically migrated to SQLite on first run. The old JSON file is removed after successful migration.
 
 **Cache management:**
 
 ```bash
 # Reset cache completely
-rm ~/.compass.cache.json
+rm ~/.compass.cache.db
 
 # Disable cache for a single command
 compass --cache=false gcp ip lookup 10.0.0.1
 compass --cache=false gcp ssh my-instance
 ```
+
+**Why SQLite?**
+
+The SQLite cache provides several advantages over the previous JSON-based approach:
+- **Efficient updates**: Individual records are updated without rewriting the entire cache
+- **Better concurrency**: Native transaction support with WAL mode
+- **ACID compliance**: Safe writes with crash recovery
+- **Indexed lookups**: Faster subnet IP matching and project searches
 
 ## Connectivity Tests
 

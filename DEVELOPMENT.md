@@ -59,7 +59,7 @@ compass/
 │   └── README.md       # VSCode usage guide
 ├── cmd/                # Command implementations
 ├── internal/           # Internal packages
-│   ├── cache/         # Caching utilities
+│   ├── cache/         # SQLite-based caching (instances, zones, projects, subnets)
 │   ├── gcp/           # GCP API clients
 │   ├── logger/        # Logging infrastructure
 │   ├── output/        # Output formatting

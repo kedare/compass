@@ -42,7 +42,7 @@ func TestPreferredProjectsForIP_UsesCachedSubnets(t *testing.T) {
 	require.Len(t, projects, 1)
 	require.Equal(t, "test-project", projects[0])
 
-	cacheFile := filepath.Join(home, cache.CacheFileName)
+	cacheFile := filepath.Join(home, cache.CacheDir, cache.CacheFileName)
 	info, err := os.Stat(cacheFile)
 	require.NoError(t, err)
 	require.False(t, info.IsDir(), "expected cache file, found directory: %s", cacheFile)
