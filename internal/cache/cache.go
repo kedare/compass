@@ -130,18 +130,23 @@ type CachedLocation struct {
 
 // preparedStatements holds pre-compiled SQL statements for better performance.
 type preparedStatements struct {
-	getInstance        *sql.Stmt
-	setInstance        *sql.Stmt
-	updateInstanceTime *sql.Stmt
-	getExistingIAP     *sql.Stmt
-	deleteInstance     *sql.Stmt
-	getZones           *sql.Stmt
-	setZones           *sql.Stmt
-	updateZonesTime    *sql.Stmt
-	getProject         *sql.Stmt
-	setProject         *sql.Stmt
-	getSubnetsByIP     *sql.Stmt
-	setSubnet          *sql.Stmt
+	getInstance         *sql.Stmt
+	setInstance         *sql.Stmt
+	updateInstanceTime  *sql.Stmt
+	markInstanceUsed    *sql.Stmt
+	getExistingIAP      *sql.Stmt
+	deleteInstance      *sql.Stmt
+	getZones            *sql.Stmt
+	setZones            *sql.Stmt
+	updateZonesTime     *sql.Stmt
+	getProject          *sql.Stmt
+	setProject          *sql.Stmt
+	markProjectUsed     *sql.Stmt
+	getSubnetsByIP      *sql.Stmt
+	setSubnet           *sql.Stmt
+	markSubnetUsed      *sql.Stmt
+	getProjectsByUsage  *sql.Stmt
+	getInstancesByUsage *sql.Stmt
 }
 
 // Cache manages persistent storage of resource location information using SQLite.
@@ -313,8 +318,8 @@ func (c *Cache) prepareStatements() error {
 	}
 
 	c.stmts.setInstance, err = c.db.Prepare(
-		`INSERT OR REPLACE INTO instances (name, timestamp, project, zone, region, type, is_regional, iap)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+		`INSERT OR REPLACE INTO instances (name, timestamp, project, zone, region, type, is_regional, iap, last_used)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare setInstance: %w", err)
 	}
@@ -323,6 +328,12 @@ func (c *Cache) prepareStatements() error {
 		`UPDATE instances SET timestamp = ? WHERE name = ?`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare updateInstanceTime: %w", err)
+	}
+
+	c.stmts.markInstanceUsed, err = c.db.Prepare(
+		`UPDATE instances SET last_used = ? WHERE name = ?`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare markInstanceUsed: %w", err)
 	}
 
 	c.stmts.getExistingIAP, err = c.db.Prepare(
@@ -362,9 +373,27 @@ func (c *Cache) prepareStatements() error {
 	}
 
 	c.stmts.setProject, err = c.db.Prepare(
-		`INSERT OR REPLACE INTO projects (name, timestamp) VALUES (?, ?)`)
+		`INSERT OR REPLACE INTO projects (name, timestamp, last_used) VALUES (?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare setProject: %w", err)
+	}
+
+	c.stmts.markProjectUsed, err = c.db.Prepare(
+		`UPDATE projects SET last_used = ? WHERE name = ?`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare markProjectUsed: %w", err)
+	}
+
+	c.stmts.getProjectsByUsage, err = c.db.Prepare(
+		`SELECT name FROM projects WHERE timestamp > ? ORDER BY last_used DESC NULLS LAST, timestamp DESC`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare getProjectsByUsage: %w", err)
+	}
+
+	c.stmts.getInstancesByUsage, err = c.db.Prepare(
+		`SELECT DISTINCT project FROM instances WHERE timestamp > ? ORDER BY last_used DESC NULLS LAST`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare getInstancesByUsage: %w", err)
 	}
 
 	c.stmts.getSubnetsByIP, err = c.db.Prepare(
@@ -380,10 +409,16 @@ func (c *Cache) prepareStatements() error {
 	c.stmts.setSubnet, err = c.db.Prepare(
 		`INSERT OR REPLACE INTO subnets
 		 (timestamp, project, network, region, name, self_link, primary_cidr,
-		  secondary_ranges_json, ipv6_cidr, gateway, cidr_start_int, cidr_end_int)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		  secondary_ranges_json, ipv6_cidr, gateway, cidr_start_int, cidr_end_int, last_used)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare setSubnet: %w", err)
+	}
+
+	c.stmts.markSubnetUsed, err = c.db.Prepare(
+		`UPDATE subnets SET last_used = ? WHERE id = ?`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare markSubnetUsed: %w", err)
 	}
 
 	return nil
@@ -399,6 +434,7 @@ func (c *Cache) closeStatements() {
 		c.stmts.getInstance,
 		c.stmts.setInstance,
 		c.stmts.updateInstanceTime,
+		c.stmts.markInstanceUsed,
 		c.stmts.getExistingIAP,
 		c.stmts.deleteInstance,
 		c.stmts.getZones,
@@ -406,8 +442,12 @@ func (c *Cache) closeStatements() {
 		c.stmts.updateZonesTime,
 		c.stmts.getProject,
 		c.stmts.setProject,
+		c.stmts.markProjectUsed,
+		c.stmts.getProjectsByUsage,
+		c.stmts.getInstancesByUsage,
 		c.stmts.getSubnetsByIP,
 		c.stmts.setSubnet,
+		c.stmts.markSubnetUsed,
 	}
 
 	for _, stmt := range stmts {
@@ -537,10 +577,10 @@ func (c *Cache) Set(resourceName string, info *LocationInfo) error {
 		isRegional = 1
 	}
 
-	logSQL("setInstance", resourceName, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap)
+	logSQL("setInstance", resourceName, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix())
 
 	_, err := c.stmts.setInstance.Exec(
-		resourceName, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap,
+		resourceName, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix(),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to cache instance %s: %w", resourceName, err)
@@ -609,9 +649,9 @@ func (c *Cache) SetBatch(entries map[string]*LocationInfo) error {
 			isRegional = 1
 		}
 
-		logSQL("setInstance (batch)", name, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap)
+		logSQL("setInstance (batch)", name, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix())
 
-		_, err = stmt.Exec(name, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap)
+		_, err = stmt.Exec(name, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix())
 		if err != nil {
 			return fmt.Errorf("failed to cache instance %s: %w", name, err)
 		}
@@ -626,9 +666,9 @@ func (c *Cache) SetBatch(entries map[string]*LocationInfo) error {
 	defer func() { _ = projectStmt.Close() }()
 
 	for project := range projects {
-		logSQL("setProject (batch)", project, now.Unix())
+		logSQL("setProject (batch)", project, now.Unix(), now.Unix())
 
-		_, err = projectStmt.Exec(project, now.Unix())
+		_, err = projectStmt.Exec(project, now.Unix(), now.Unix())
 		if err != nil {
 			logger.Log.Warnf("Failed to cache project %s: %v", project, err)
 		}
@@ -789,7 +829,8 @@ func (c *Cache) GetLocationsByProject(project string) ([]CachedLocation, bool) {
 	return results, true
 }
 
-// GetProjects returns cached projects ordered by most recent use.
+// GetProjects returns cached projects ordered alphabetically.
+// This is intended for display purposes. For API call ordering, use GetProjectsByUsage().
 func (c *Cache) GetProjects() []string {
 	if c.isNoOp() {
 		return nil
@@ -804,7 +845,7 @@ func (c *Cache) GetProjects() []string {
 	expiryTime := time.Now().Add(-ttl).Unix()
 
 	rows, err := c.query(
-		`SELECT name FROM projects WHERE timestamp > ? ORDER BY timestamp DESC, name ASC`,
+		`SELECT name FROM projects WHERE timestamp > ? ORDER BY name ASC`,
 		expiryTime,
 	)
 	if err != nil {
@@ -860,14 +901,104 @@ func (c *Cache) addProjectInternal(project string) error {
 		return nil
 	}
 
-	logSQL("setProject", project, time.Now().Unix())
+	now := time.Now().Unix()
 
-	_, err := c.stmts.setProject.Exec(project, time.Now().Unix())
+	logSQL("setProject", project, now, now)
+
+	_, err := c.stmts.setProject.Exec(project, now, now)
 	if err != nil {
 		return fmt.Errorf("failed to cache project %s: %w", project, err)
 	}
 
 	return nil
+}
+
+// MarkInstanceUsed updates the last_used timestamp for an instance.
+// This should be called when an instance is accessed (e.g., SSH, details view).
+func (c *Cache) MarkInstanceUsed(resourceName string) error {
+	if c.isNoOp() || resourceName == "" {
+		return nil
+	}
+
+	now := time.Now().Unix()
+
+	logSQL("markInstanceUsed", now, resourceName)
+
+	_, err := c.stmts.markInstanceUsed.Exec(now, resourceName)
+	if err != nil {
+		return fmt.Errorf("failed to mark instance %s as used: %w", resourceName, err)
+	}
+
+	logger.Log.Debugf("Marked instance as used: %s", resourceName)
+
+	return nil
+}
+
+// MarkProjectUsed updates the last_used timestamp for a project.
+// This should be called when a project is accessed (e.g., via instance, SSH).
+func (c *Cache) MarkProjectUsed(project string) error {
+	if c.isNoOp() || project == "" {
+		return nil
+	}
+
+	now := time.Now().Unix()
+
+	logSQL("markProjectUsed", now, project)
+
+	_, err := c.stmts.markProjectUsed.Exec(now, project)
+	if err != nil {
+		return fmt.Errorf("failed to mark project %s as used: %w", project, err)
+	}
+
+	logger.Log.Debugf("Marked project as used: %s", project)
+
+	return nil
+}
+
+// GetProjectsByUsage returns cached projects ordered by most recently used.
+// This is intended for ordering API calls to search frequently used projects first.
+// For display purposes, use GetProjects() which returns alphabetical order.
+func (c *Cache) GetProjectsByUsage() []string {
+	if c.isNoOp() {
+		return nil
+	}
+
+	start := time.Now()
+	defer func() {
+		c.stats.recordOperation("GetProjectsByUsage", time.Since(start))
+	}()
+
+	ttl := c.getEffectiveTTL(TTLTypeProjects)
+	expiryTime := time.Now().Add(-ttl).Unix()
+
+	logSQL("getProjectsByUsage", expiryTime)
+
+	rows, err := c.stmts.getProjectsByUsage.Query(expiryTime)
+	if err != nil {
+		logger.Log.Warnf("Failed to query projects by usage: %v", err)
+
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	var projects []string
+
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			logger.Log.Warnf("Failed to scan project row: %v", err)
+
+			continue
+		}
+
+		projects = append(projects, name)
+	}
+
+	if err := rows.Err(); err != nil {
+		logger.Log.Warnf("Error iterating project rows: %v", err)
+	}
+
+	return projects
 }
 
 // Delete removes a resource from the cache.
@@ -985,20 +1116,21 @@ func (c *Cache) RememberSubnet(info *SubnetEntry) error {
 
 	// Calculate CIDR bounds for faster lookups
 	cidrStart, cidrEnd := cidrToIntRange(strings.TrimSpace(info.PrimaryCIDR))
+	now := time.Now().Unix()
 
-	logSQL("setSubnet", time.Now().Unix(), project, network, region, name,
+	logSQL("setSubnet", now, project, network, region, name,
 		strings.TrimSpace(info.SelfLink), strings.TrimSpace(info.PrimaryCIDR),
 		string(secondaryJSON), strings.TrimSpace(info.IPv6CIDR), strings.TrimSpace(info.Gateway),
-		cidrStart, cidrEnd)
+		cidrStart, cidrEnd, now)
 
 	_, err = c.stmts.setSubnet.Exec(
-		time.Now().Unix(), project, network, region, name,
+		now, project, network, region, name,
 		strings.TrimSpace(info.SelfLink),
 		strings.TrimSpace(info.PrimaryCIDR),
 		string(secondaryJSON),
 		strings.TrimSpace(info.IPv6CIDR),
 		strings.TrimSpace(info.Gateway),
-		cidrStart, cidrEnd,
+		cidrStart, cidrEnd, now,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to cache subnet %s: %w", name, err)
@@ -1070,7 +1202,7 @@ func (c *Cache) RememberSubnetBatch(entries []*SubnetEntry) error {
 			string(secondaryJSON),
 			strings.TrimSpace(info.IPv6CIDR),
 			strings.TrimSpace(info.Gateway),
-			cidrStart, cidrEnd,
+			cidrStart, cidrEnd, now.Unix(),
 		)
 		if err != nil {
 			logger.Log.Warnf("Failed to cache subnet %s: %v", name, err)
@@ -1086,7 +1218,7 @@ func (c *Cache) RememberSubnetBatch(entries []*SubnetEntry) error {
 	defer func() { _ = projectStmt.Close() }()
 
 	for project := range projects {
-		_, err = projectStmt.Exec(project, now.Unix())
+		_, err = projectStmt.Exec(project, now.Unix(), now.Unix())
 		if err != nil {
 			logger.Log.Warnf("Failed to cache project %s: %v", project, err)
 		}

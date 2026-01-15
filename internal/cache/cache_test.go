@@ -294,27 +294,95 @@ func TestZonesPersistAcrossLoad(t *testing.T) {
 func TestProjectsCacheAddAndRetrieve(t *testing.T) {
 	cache := newTestCache(t)
 
-	err := cache.AddProject("alpha")
+	err := cache.AddProject("beta")
 	require.NoError(t, err)
 
-	// Manually set alpha's timestamp to 1 hour ago to ensure different timestamps
-	alphaTimestamp := time.Now().Add(-time.Hour).Unix()
-	_, err = cache.db.Exec(`UPDATE projects SET timestamp = ? WHERE name = ?`, alphaTimestamp, "alpha")
+	err = cache.AddProject("alpha")
+	require.NoError(t, err)
+
+	// GetProjects() should return alphabetically sorted
+	projects := cache.GetProjects()
+	require.Len(t, projects, 2)
+	require.Equal(t, "alpha", projects[0]) // Alphabetically first
+	require.Equal(t, "beta", projects[1])
+}
+
+func TestProjectsByUsageOrdering(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Add projects with explicit timestamps to control ordering
+	now := time.Now()
+
+	err := cache.AddProject("alpha")
 	require.NoError(t, err)
 
 	err = cache.AddProject("beta")
 	require.NoError(t, err)
 
-	projects := cache.GetProjects()
-	require.Len(t, projects, 2)
-	require.Equal(t, "beta", projects[0]) // Most recent first
-
-	// Update alpha's timestamp to be newer than beta
-	_, err = cache.db.Exec(`UPDATE projects SET timestamp = ? WHERE name = ?`, time.Now().Unix()+1, "alpha")
+	// Set explicit last_used timestamps: beta more recent than alpha
+	_, err = cache.db.Exec(`UPDATE projects SET last_used = ? WHERE name = ?`, now.Add(-time.Hour).Unix(), "alpha")
+	require.NoError(t, err)
+	_, err = cache.db.Exec(`UPDATE projects SET last_used = ? WHERE name = ?`, now.Unix(), "beta")
 	require.NoError(t, err)
 
-	projects = cache.GetProjects()
+	// GetProjectsByUsage() should return by most recent usage
+	projects := cache.GetProjectsByUsage()
+	require.Len(t, projects, 2)
+	require.Equal(t, "beta", projects[0]) // Most recently used first
+	require.Equal(t, "alpha", projects[1])
+
+	// Mark alpha as used - set its last_used to even more recent
+	_, err = cache.db.Exec(`UPDATE projects SET last_used = ? WHERE name = ?`, now.Add(time.Minute).Unix(), "alpha")
+	require.NoError(t, err)
+
+	// Now alpha should be first
+	projects = cache.GetProjectsByUsage()
 	require.Equal(t, "alpha", projects[0])
+	require.Equal(t, "beta", projects[1])
+}
+
+func TestMarkInstanceAndProjectUsed(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Add an instance
+	err := cache.Set("test-instance", &LocationInfo{
+		Project: "test-project",
+		Zone:    "us-central1-a",
+		Type:    ResourceTypeInstance,
+	})
+	require.NoError(t, err)
+
+	// Set old last_used
+	oldTime := time.Now().Add(-time.Hour).Unix()
+	_, err = cache.db.Exec(`UPDATE instances SET last_used = ? WHERE name = ?`, oldTime, "test-instance")
+	require.NoError(t, err)
+	_, err = cache.db.Exec(`UPDATE projects SET last_used = ? WHERE name = ?`, oldTime, "test-project")
+	require.NoError(t, err)
+
+	// Verify old last_used
+	var instanceLastUsed, projectLastUsed int64
+	err = cache.db.QueryRow(`SELECT last_used FROM instances WHERE name = ?`, "test-instance").Scan(&instanceLastUsed)
+	require.NoError(t, err)
+	require.Equal(t, oldTime, instanceLastUsed)
+
+	err = cache.db.QueryRow(`SELECT last_used FROM projects WHERE name = ?`, "test-project").Scan(&projectLastUsed)
+	require.NoError(t, err)
+	require.Equal(t, oldTime, projectLastUsed)
+
+	// Mark as used
+	err = cache.MarkInstanceUsed("test-instance")
+	require.NoError(t, err)
+	err = cache.MarkProjectUsed("test-project")
+	require.NoError(t, err)
+
+	// Verify new last_used is more recent
+	err = cache.db.QueryRow(`SELECT last_used FROM instances WHERE name = ?`, "test-instance").Scan(&instanceLastUsed)
+	require.NoError(t, err)
+	require.Greater(t, instanceLastUsed, oldTime)
+
+	err = cache.db.QueryRow(`SELECT last_used FROM projects WHERE name = ?`, "test-project").Scan(&projectLastUsed)
+	require.NoError(t, err)
+	require.Greater(t, projectLastUsed, oldTime)
 }
 
 func TestProjectsCacheExpiry(t *testing.T) {

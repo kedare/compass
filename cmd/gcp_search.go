@@ -31,7 +31,7 @@ var (
 			return nil, false, nil
 		}
 
-		return cacheStore.GetProjects(), true, nil
+		return cacheStore.GetProjectsByUsage(), true, nil
 	}
 	instanceProviderFactory = func() search.Provider {
 		return &search.InstanceProvider{

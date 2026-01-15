@@ -37,8 +37,8 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 	var currentFilter string
 	var filterMode bool
 
-	// Get projects from cache
-	projects := c.GetProjects()
+	// Get projects from cache, ordered by recent usage for faster searches
+	projects := c.GetProjectsByUsage()
 	if len(projects) == 0 {
 		return fmt.Errorf("no projects in cache")
 	}

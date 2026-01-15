@@ -12,7 +12,7 @@ import (
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 // SQL statements for creating the database schema.
 const (
@@ -86,6 +86,11 @@ const (
 
 	// createSubnetsCIDRIndex is created during migration for v2+ databases
 	createSubnetsCIDRIndex = `CREATE INDEX IF NOT EXISTS idx_subnets_cidr_range ON subnets(cidr_start_int, cidr_end_int)`
+
+	// v3 indexes for last_used columns
+	createInstancesLastUsedIndex = `CREATE INDEX IF NOT EXISTS idx_instances_last_used ON instances(last_used)`
+	createProjectsLastUsedIndex  = `CREATE INDEX IF NOT EXISTS idx_projects_last_used ON projects(last_used)`
+	createSubnetsLastUsedIndex   = `CREATE INDEX IF NOT EXISTS idx_subnets_last_used ON subnets(last_used)`
 )
 
 // initSchema creates all database tables and indexes.
@@ -112,7 +117,7 @@ func initSchema(db *sql.DB) error {
 	}
 
 	// Check if this is a new database (no schema version set)
-	// For new databases, we can add v2 indexes directly
+	// For new databases, we can add all indexes directly
 	version, _ := getSchemaVersion(db)
 	if version == 0 {
 		// New database - add v2 indexes
@@ -120,6 +125,24 @@ func initSchema(db *sql.DB) error {
 
 		if _, err := db.Exec(createSubnetsCIDRIndex); err != nil {
 			logger.Log.Debugf("Failed to create CIDR index (will be added during migration): %v", err)
+		}
+
+		// New database - add v3 columns and indexes
+		v3Statements := []string{
+			`ALTER TABLE instances ADD COLUMN last_used INTEGER`,
+			`ALTER TABLE projects ADD COLUMN last_used INTEGER`,
+			`ALTER TABLE subnets ADD COLUMN last_used INTEGER`,
+			createInstancesLastUsedIndex,
+			createProjectsLastUsedIndex,
+			createSubnetsLastUsedIndex,
+		}
+
+		for _, stmt := range v3Statements {
+			logSQL(stmt)
+
+			if _, err := db.Exec(stmt); err != nil {
+				logger.Log.Debugf("Failed to execute v3 schema statement (will be added during migration): %v", err)
+			}
 		}
 
 		// Set schema version
@@ -224,6 +247,13 @@ func migrateSchema(db *sql.DB, currentVersion int, dbPath string) error {
 		}
 	}
 
+	// Migration from v2 to v3
+	if currentVersion < 3 {
+		if err := migrateV2ToV3(db); err != nil {
+			return fmt.Errorf("failed to migrate from v2 to v3: %w", err)
+		}
+	}
+
 	if err := setSchemaVersion(db, SchemaVersion); err != nil {
 		return err
 	}
@@ -264,6 +294,52 @@ func migrateV1ToV2(db *sql.DB) error {
 	}
 
 	logger.Log.Debug("Migrated schema from v1 to v2")
+
+	return nil
+}
+
+// migrateV2ToV3 adds last_used columns for usage-based ordering.
+func migrateV2ToV3(db *sql.DB) error {
+	migrations := []string{
+		// Add last_used column to instances
+		`ALTER TABLE instances ADD COLUMN last_used INTEGER`,
+		// Add last_used column to projects
+		`ALTER TABLE projects ADD COLUMN last_used INTEGER`,
+		// Add last_used column to subnets
+		`ALTER TABLE subnets ADD COLUMN last_used INTEGER`,
+		// Create indexes for last_used columns
+		createInstancesLastUsedIndex,
+		createProjectsLastUsedIndex,
+		createSubnetsLastUsedIndex,
+	}
+
+	for _, stmt := range migrations {
+		logSQL(stmt)
+
+		if _, err := db.Exec(stmt); err != nil {
+			// Ignore "duplicate column" errors for idempotent migrations
+			if !isColumnExistsError(err) {
+				return fmt.Errorf("failed to execute migration: %w", err)
+			}
+		}
+	}
+
+	// Initialize last_used to timestamp for existing rows
+	initQueries := []string{
+		`UPDATE instances SET last_used = timestamp WHERE last_used IS NULL`,
+		`UPDATE projects SET last_used = timestamp WHERE last_used IS NULL`,
+		`UPDATE subnets SET last_used = timestamp WHERE last_used IS NULL`,
+	}
+
+	for _, query := range initQueries {
+		logSQL(query)
+
+		if _, err := db.Exec(query); err != nil {
+			logger.Log.Warnf("Failed to initialize last_used: %v", err)
+		}
+	}
+
+	logger.Log.Debug("Migrated schema from v2 to v3")
 
 	return nil
 }
