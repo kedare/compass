@@ -316,3 +316,71 @@ func TestGetProjectsForSearchWithResourceTypes(t *testing.T) {
 		t.Error("expected both projects to be returned")
 	}
 }
+
+func TestTouchSearchAffinity(t *testing.T) {
+	c := newTestCache(t)
+
+	// Add project
+	if err := c.AddProject("project-a"); err != nil {
+		t.Fatalf("AddProject failed: %v", err)
+	}
+
+	// Record initial affinity with an old timestamp by directly inserting
+	oldTime := time.Now().Add(-1 * time.Hour).Unix()
+	_, err := c.db.Exec(`INSERT INTO search_affinity (search_term, project, resource_type, hit_count, total_results, last_hit)
+		VALUES (?, ?, ?, 1, 5, ?)`, "myquery", "project-a", "compute.instance", oldTime)
+	if err != nil {
+		t.Fatalf("Failed to insert test data: %v", err)
+	}
+
+	// Touch the affinity (should only update last_hit, not increment hit_count)
+	err = c.TouchSearchAffinity("myquery", "project-a", "compute.instance")
+	if err != nil {
+		t.Fatalf("TouchSearchAffinity failed: %v", err)
+	}
+
+	// Verify last_hit was updated but hit_count remains the same
+	var newLastHit int64
+	var hitCount int
+	row := c.db.QueryRow("SELECT last_hit, hit_count FROM search_affinity WHERE search_term = ? AND project = ? AND resource_type = ?",
+		"myquery", "project-a", "compute.instance")
+	if err := row.Scan(&newLastHit, &hitCount); err != nil {
+		t.Fatalf("Failed to get updated values: %v", err)
+	}
+
+	// Verify last_hit was updated (should be recent, not 1 hour ago)
+	if newLastHit <= oldTime {
+		t.Errorf("expected last_hit to be updated from %d, but got %d", oldTime, newLastHit)
+	}
+
+	// Verify the update happened recently (within last minute)
+	now := time.Now().Unix()
+	if newLastHit < now-60 {
+		t.Errorf("expected last_hit to be recent, but got %d (now is %d)", newLastHit, now)
+	}
+
+	if hitCount != 1 {
+		t.Errorf("expected hit_count to remain 1, got %d", hitCount)
+	}
+}
+
+func TestTouchSearchAffinityNonExistent(t *testing.T) {
+	c := newTestCache(t)
+
+	// Touch non-existent entry should not error (just no-op)
+	err := c.TouchSearchAffinity("nonexistent", "project-x", "compute.instance")
+	if err != nil {
+		t.Fatalf("TouchSearchAffinity should not error for non-existent entry: %v", err)
+	}
+
+	// Verify nothing was created
+	var count int
+	row := c.db.QueryRow("SELECT COUNT(*) FROM search_affinity")
+	if err := row.Scan(&count); err != nil {
+		t.Fatalf("Failed to count entries: %v", err)
+	}
+
+	if count != 0 {
+		t.Errorf("expected 0 entries, got %d", count)
+	}
+}

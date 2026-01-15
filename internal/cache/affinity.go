@@ -86,6 +86,46 @@ func (c *Cache) RecordSearchAffinity(searchTerm string, projectResults map[strin
 	return nil
 }
 
+// TouchSearchAffinity updates only the last_hit timestamp for an existing affinity entry.
+// This is used to reinforce affinity when a user selects or interacts with a search result
+// without incrementing the hit count (which would inflate the frequency score).
+func (c *Cache) TouchSearchAffinity(searchTerm, project, resourceType string) error {
+	if c.isNoOp() {
+		return nil
+	}
+
+	searchTerm = normalizeSearchTerm(searchTerm)
+	if searchTerm == "" || project == "" {
+		return nil
+	}
+
+	start := time.Now()
+	defer func() {
+		c.stats.recordOperation("TouchSearchAffinity", time.Since(start))
+	}()
+
+	now := time.Now().Unix()
+
+	// Only update last_hit if the entry exists
+	query := `UPDATE search_affinity SET last_hit = ? WHERE search_term = ? AND project = ? AND resource_type = ?`
+	logSQL(query, now, searchTerm, project, resourceType)
+
+	_, err := c.db.Exec(query, now, searchTerm, project, resourceType)
+	if err != nil {
+		return err
+	}
+
+	// Also touch the prefix affinity if applicable
+	prefix := extractSearchPrefix(searchTerm)
+	if prefix != "" && prefix != searchTerm {
+		prefixQuery := `UPDATE search_affinity SET last_hit = ? WHERE search_term = ? AND project = ? AND resource_type = ''`
+		logSQL(prefixQuery, now, prefix, project)
+		_, _ = c.db.Exec(prefixQuery, now, prefix, project)
+	}
+
+	return nil
+}
+
 // GetProjectsForSearch returns projects ordered by likelihood of containing results
 // for the given search term. It combines learned affinity data with recent usage.
 // If no affinity data exists, falls back to GetProjectsByUsage().
