@@ -8,13 +8,15 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/kedare/compass/internal/cache/migrations"
 	"github.com/kedare/compass/internal/logger"
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = 3
+// This should match migrations.LatestVersion().
+var SchemaVersion = migrations.LatestVersion()
 
-// SQL statements for creating the database schema.
+// Base schema SQL statements (v1 compatible).
 const (
 	createMetadataTable = `
 		CREATE TABLE IF NOT EXISTS metadata (
@@ -73,8 +75,6 @@ const (
 			secondary_ranges_json TEXT,
 			ipv6_cidr TEXT,
 			gateway TEXT,
-			cidr_start_int INTEGER,
-			cidr_end_int INTEGER,
 			UNIQUE(project, network, name)
 		)`
 
@@ -83,19 +83,10 @@ const (
 		CREATE INDEX IF NOT EXISTS idx_subnets_region ON subnets(region);
 		CREATE INDEX IF NOT EXISTS idx_subnets_self_link ON subnets(self_link);
 		CREATE INDEX IF NOT EXISTS idx_subnets_timestamp ON subnets(timestamp)`
-
-	// createSubnetsCIDRIndex is created during migration for v2+ databases
-	createSubnetsCIDRIndex = `CREATE INDEX IF NOT EXISTS idx_subnets_cidr_range ON subnets(cidr_start_int, cidr_end_int)`
-
-	// v3 indexes for last_used columns
-	createInstancesLastUsedIndex = `CREATE INDEX IF NOT EXISTS idx_instances_last_used ON instances(last_used)`
-	createProjectsLastUsedIndex  = `CREATE INDEX IF NOT EXISTS idx_projects_last_used ON projects(last_used)`
-	createSubnetsLastUsedIndex   = `CREATE INDEX IF NOT EXISTS idx_subnets_last_used ON subnets(last_used)`
 )
 
-// initSchema creates all database tables and indexes.
+// initSchema creates the base database tables and indexes (v1 schema).
 func initSchema(db *sql.DB) error {
-	// Base schema statements (compatible with v1)
 	statements := []string{
 		createMetadataTable,
 		createSettingsTable,
@@ -116,42 +107,7 @@ func initSchema(db *sql.DB) error {
 		}
 	}
 
-	// Check if this is a new database (no schema version set)
-	// For new databases, we can add all indexes directly
-	version, _ := getSchemaVersion(db)
-	if version == 0 {
-		// New database - add v2 indexes
-		logSQL(createSubnetsCIDRIndex)
-
-		if _, err := db.Exec(createSubnetsCIDRIndex); err != nil {
-			logger.Log.Debugf("Failed to create CIDR index (will be added during migration): %v", err)
-		}
-
-		// New database - add v3 columns and indexes
-		v3Statements := []string{
-			`ALTER TABLE instances ADD COLUMN last_used INTEGER`,
-			`ALTER TABLE projects ADD COLUMN last_used INTEGER`,
-			`ALTER TABLE subnets ADD COLUMN last_used INTEGER`,
-			createInstancesLastUsedIndex,
-			createProjectsLastUsedIndex,
-			createSubnetsLastUsedIndex,
-		}
-
-		for _, stmt := range v3Statements {
-			logSQL(stmt)
-
-			if _, err := db.Exec(stmt); err != nil {
-				logger.Log.Debugf("Failed to execute v3 schema statement (will be added during migration): %v", err)
-			}
-		}
-
-		// Set schema version
-		if err := setSchemaVersion(db, SchemaVersion); err != nil {
-			return fmt.Errorf("failed to set schema version: %w", err)
-		}
-	}
-
-	logger.Log.Debug("Database schema initialized")
+	logger.Log.Debug("Base database schema initialized")
 
 	return nil
 }
@@ -226,13 +182,15 @@ func removeBackup(dbPath string) {
 	}
 }
 
-// migrateSchema handles schema migrations between versions.
+// migrateSchema handles schema migrations between versions using the registry.
 func migrateSchema(db *sql.DB, currentVersion int, dbPath string) error {
-	if currentVersion >= SchemaVersion {
+	pending := migrations.GetPending(currentVersion)
+	if len(pending) == 0 {
 		return nil
 	}
 
-	logger.Log.Debugf("Migrating database schema from version %d to %d", currentVersion, SchemaVersion)
+	targetVersion := migrations.LatestVersion()
+	logger.Log.Debugf("Migrating database schema from version %d to %d", currentVersion, targetVersion)
 
 	// Create backup before migration
 	if err := backupDatabase(dbPath); err != nil {
@@ -240,171 +198,42 @@ func migrateSchema(db *sql.DB, currentVersion int, dbPath string) error {
 		// Continue with migration anyway
 	}
 
-	// Migration from v1 to v2
-	if currentVersion < 2 {
-		if err := migrateV1ToV2(db); err != nil {
-			return fmt.Errorf("failed to migrate from v1 to v2: %w", err)
+	// Run each pending migration
+	for _, m := range pending {
+		logger.Log.Debugf("Applying migration v%d: %s", m.Version(), m.Description())
+
+		if err := m.Up(db); err != nil {
+			return fmt.Errorf("migration v%d failed: %w", m.Version(), err)
 		}
+
+		logger.Log.Debugf("Completed migration v%d", m.Version())
 	}
 
-	// Migration from v2 to v3
-	if currentVersion < 3 {
-		if err := migrateV2ToV3(db); err != nil {
-			return fmt.Errorf("failed to migrate from v2 to v3: %w", err)
-		}
-	}
-
-	if err := setSchemaVersion(db, SchemaVersion); err != nil {
+	// Update schema version
+	if err := setSchemaVersion(db, targetVersion); err != nil {
 		return err
 	}
 
 	// Remove backup after successful migration
 	removeBackup(dbPath)
 
-	return nil
-}
-
-// migrateV1ToV2 adds settings table and CIDR bounds columns.
-func migrateV1ToV2(db *sql.DB) error {
-	migrations := []string{
-		// Create settings table
-		createSettingsTable,
-		// Add CIDR bounds columns to subnets
-		`ALTER TABLE subnets ADD COLUMN cidr_start_int INTEGER`,
-		`ALTER TABLE subnets ADD COLUMN cidr_end_int INTEGER`,
-		// Create index for CIDR range queries
-		createSubnetsCIDRIndex,
-	}
-
-	for _, stmt := range migrations {
-		logSQL(stmt)
-
-		if _, err := db.Exec(stmt); err != nil {
-			// Ignore "duplicate column" errors for idempotent migrations
-			if !isColumnExistsError(err) {
-				return fmt.Errorf("failed to execute migration: %w", err)
-			}
-		}
-	}
-
-	// Update existing subnets with CIDR bounds
-	if err := updateExistingSubnetCIDRBounds(db); err != nil {
-		logger.Log.Warnf("Failed to update existing subnet CIDR bounds: %v", err)
-		// Non-fatal, bounds will be updated on next access
-	}
-
-	logger.Log.Debug("Migrated schema from v1 to v2")
+	logger.Log.Debugf("Successfully migrated to schema version %d", targetVersion)
 
 	return nil
 }
 
-// migrateV2ToV3 adds last_used columns for usage-based ordering.
-func migrateV2ToV3(db *sql.DB) error {
-	migrations := []string{
-		// Add last_used column to instances
-		`ALTER TABLE instances ADD COLUMN last_used INTEGER`,
-		// Add last_used column to projects
-		`ALTER TABLE projects ADD COLUMN last_used INTEGER`,
-		// Add last_used column to subnets
-		`ALTER TABLE subnets ADD COLUMN last_used INTEGER`,
-		// Create indexes for last_used columns
-		createInstancesLastUsedIndex,
-		createProjectsLastUsedIndex,
-		createSubnetsLastUsedIndex,
-	}
+// initNewDatabase applies all migrations to a fresh database.
+func initNewDatabase(db *sql.DB) error {
+	allMigrations := migrations.All()
 
-	for _, stmt := range migrations {
-		logSQL(stmt)
-
-		if _, err := db.Exec(stmt); err != nil {
-			// Ignore "duplicate column" errors for idempotent migrations
-			if !isColumnExistsError(err) {
-				return fmt.Errorf("failed to execute migration: %w", err)
-			}
+	for _, m := range allMigrations {
+		if err := m.Up(db); err != nil {
+			logger.Log.Debugf("Migration v%d during init (may be expected): %v", m.Version(), err)
+			// Continue - errors during fresh init are often expected (columns already exist from base schema)
 		}
 	}
 
-	// Initialize last_used to timestamp for existing rows
-	initQueries := []string{
-		`UPDATE instances SET last_used = timestamp WHERE last_used IS NULL`,
-		`UPDATE projects SET last_used = timestamp WHERE last_used IS NULL`,
-		`UPDATE subnets SET last_used = timestamp WHERE last_used IS NULL`,
-	}
-
-	for _, query := range initQueries {
-		logSQL(query)
-
-		if _, err := db.Exec(query); err != nil {
-			logger.Log.Warnf("Failed to initialize last_used: %v", err)
-		}
-	}
-
-	logger.Log.Debug("Migrated schema from v2 to v3")
-
-	return nil
-}
-
-// isColumnExistsError checks if the error is about a duplicate column.
-func isColumnExistsError(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	errStr := err.Error()
-
-	return contains(errStr, "duplicate column") || contains(errStr, "already exists")
-}
-
-// contains checks if s contains substr (case-insensitive would need strings package).
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && findSubstring(s, substr)))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-
-	return false
-}
-
-// updateExistingSubnetCIDRBounds updates CIDR bounds for existing subnets.
-func updateExistingSubnetCIDRBounds(db *sql.DB) error {
-	query := `SELECT id, primary_cidr FROM subnets WHERE cidr_start_int IS NULL AND primary_cidr IS NOT NULL AND primary_cidr != ''`
-	logSQL(query)
-
-	rows, err := db.Query(query)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = rows.Close() }()
-
-	updateQuery := `UPDATE subnets SET cidr_start_int = ?, cidr_end_int = ? WHERE id = ?`
-
-	for rows.Next() {
-		var id int64
-		var cidr string
-
-		if err := rows.Scan(&id, &cidr); err != nil {
-			continue
-		}
-
-		start, end := cidrToIntRange(cidr)
-		if start == 0 && end == 0 {
-			continue
-		}
-
-		logSQL(updateQuery, start, end, id)
-
-		if _, err := db.Exec(updateQuery, start, end, id); err != nil {
-			logger.Log.Debugf("Failed to update CIDR bounds for subnet %d: %v", id, err)
-		}
-	}
-
-	return rows.Err()
+	return setSchemaVersion(db, migrations.LatestVersion())
 }
 
 // ensureCacheDir creates the cache directory with proper permissions.

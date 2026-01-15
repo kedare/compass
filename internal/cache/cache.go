@@ -270,7 +270,15 @@ func newWithPath(dbPath string) (*Cache, error) {
 		return nil, fmt.Errorf("failed to get schema version: %w", err)
 	}
 
-	if version < SchemaVersion {
+	if version == 0 {
+		// New database - apply all migrations silently
+		if err := initNewDatabase(db); err != nil {
+			_ = db.Close()
+
+			return nil, fmt.Errorf("failed to initialize new database: %w", err)
+		}
+	} else if version < SchemaVersion {
+		// Existing database - run incremental migrations
 		if err := migrateSchema(db, version, dbPath); err != nil {
 			_ = db.Close()
 

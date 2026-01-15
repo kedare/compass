@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sync"
 
 	"github.com/kedare/compass/internal/gcp"
@@ -10,6 +11,8 @@ import (
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
 )
+
+var regexFilter string
 
 var gcpProjectsCmd = &cobra.Command{
 	Use:   "projects",
@@ -28,25 +31,35 @@ After selecting projects, this command will scan and cache:
   - All subnets (for faster IP lookups)
 
 This pre-populates the cache so subsequent commands run faster.
-Compass will search across these cached projects when looking for instances/MIGs without a --project flag.`,
+Compass will search across these cached projects when looking for instances/MIGs without a --project flag.
+
+Examples:
+  # Interactive selection
+  compass gcp projects import
+
+  # Import all projects matching a regex pattern
+  compass gcp projects import --regex "^prod-.*"
+  compass gcp projects import -r "dev|staging"`,
 	Run: func(cmd *cobra.Command, args []string) {
 		ctx := cmd.Context()
 		if ctx == nil {
 			ctx = context.Background()
 		}
 
-		runProjectsImport(ctx)
+		runProjectsImport(ctx, regexFilter)
 	},
 }
 
 func init() {
 	gcpCmd.AddCommand(gcpProjectsCmd)
 	gcpProjectsCmd.AddCommand(gcpProjectsImportCmd)
+	gcpProjectsImportCmd.Flags().StringVarP(&regexFilter, "regex", "r", "", "Regex pattern to filter projects (bypasses interactive selection)")
 }
 
 // runProjectsImport discovers all accessible GCP projects and prompts the user to select
-// which projects to cache for future use.
-func runProjectsImport(ctx context.Context) {
+// which projects to cache for future use. If regexPattern is provided, projects matching
+// the pattern are automatically selected without interactive prompting.
+func runProjectsImport(ctx context.Context, regexPattern string) {
 	// Discover all projects
 	logger.Log.Info("Discovering all accessible GCP projects...")
 	projects, err := gcp.ListAllProjects(ctx)
@@ -61,23 +74,41 @@ func runProjectsImport(ctx context.Context) {
 
 	logger.Log.Infof("Found %d projects", len(projects))
 
-	// Use pterm interactive multiselect
-	selectedProjects, err := pterm.DefaultInteractiveMultiselect.
-		WithOptions(projects).
-		WithDefaultText("Select projects to cache (use arrow keys, space to select, enter to confirm):").
-		WithMaxHeight(15).
-		Show()
+	var selectedProjects []string
 
-	if err != nil {
-		logger.Log.Fatalf("Failed to show project selector: %v", err)
+	if regexPattern != "" {
+		// Filter projects by regex pattern
+		var err error
+		selectedProjects, err = filterProjectsByRegex(projects, regexPattern)
+		if err != nil {
+			logger.Log.Fatalf("Invalid regex pattern: %v", err)
+		}
+
+		if len(selectedProjects) == 0 {
+			logger.Log.Infof("No projects matched the pattern '%s'", regexPattern)
+			return
+		}
+
+		logger.Log.Infof("Found %d projects matching pattern '%s'", len(selectedProjects), regexPattern)
+	} else {
+		// Use pterm interactive multiselect
+		selectedProjects, err = pterm.DefaultInteractiveMultiselect.
+			WithOptions(projects).
+			WithDefaultText("Select projects to cache (use arrow keys, space to select, enter to confirm):").
+			WithMaxHeight(15).
+			Show()
+
+		if err != nil {
+			logger.Log.Fatalf("Failed to show project selector: %v", err)
+		}
+
+		if len(selectedProjects) == 0 {
+			logger.Log.Info("No projects selected. Cache unchanged.")
+			return
+		}
+
+		logger.Log.Infof("Selected %d projects", len(selectedProjects))
 	}
-
-	if len(selectedProjects) == 0 {
-		logger.Log.Info("No projects selected. Cache unchanged.")
-		return
-	}
-
-	logger.Log.Infof("Selected %d projects", len(selectedProjects))
 
 	// Load or create cache
 	cache, err := gcp.LoadCache()
@@ -185,4 +216,22 @@ func scanProjectResources(ctx context.Context, projects []string) {
 	// Summary
 	logger.Log.Infof("Total cached: %d zones, %d instances, %d subnets across %d projects",
 		totalStats.Zones, totalStats.Instances, totalStats.Subnets, len(projects))
+}
+
+// filterProjectsByRegex filters a list of projects by a regex pattern.
+// Returns the matching projects or an error if the pattern is invalid.
+func filterProjectsByRegex(projects []string, pattern string) ([]string, error) {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+
+	var matched []string
+	for _, project := range projects {
+		if re.MatchString(project) {
+			matched = append(matched, project)
+		}
+	}
+
+	return matched, nil
 }

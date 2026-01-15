@@ -60,6 +60,7 @@ compass/
 ├── cmd/                # Command implementations
 ├── internal/           # Internal packages
 │   ├── cache/         # SQLite-based caching (instances, zones, projects, subnets)
+│   │   └── migrations/ # Database schema migrations (v2-v4)
 │   ├── gcp/           # GCP API clients
 │   ├── logger/        # Logging infrastructure
 │   ├── output/        # Output formatting

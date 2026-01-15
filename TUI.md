@@ -252,6 +252,7 @@ cmd/
 - [x] SSH to instances from search results (press `s`)
 - [x] Configurable parallelism for multi-project searches
 - [x] Type filtering with `--type` and `--no-type` flags
+- [x] Smart search affinity learning (prioritizes projects based on search history)
 - [x] Context-sensitive help (press `?`)
 - [x] Return to instance view (press `Esc`)
 
@@ -261,6 +262,8 @@ cmd/
 - Parallel project searching with configurable concurrency
 - Modal overlay for resource details
 - Integrated with Cloud Console URL generation
+- Uses `cache.GetProjectsForSearch()` for affinity-based project prioritization
+- Records search results via `cache.RecordSearchAffinity()` to learn patterns
 
 ---
 
@@ -447,7 +450,8 @@ cmd/
 ## Integration with Existing Code
 
 ### ✅ What's Currently Integrated
-- **Cache System**: `cache.Cache.GetProjects()`, `cache.Cache.GetLocationsByProject()`
+- **Cache System**: `cache.Cache.GetProjects()`, `cache.Cache.GetLocationsByProject()`, `cache.Cache.GetProjectsByUsage()`
+- **Search Affinity**: `cache.Cache.GetProjectsForSearch()`, `cache.Cache.RecordSearchAffinity()` for smart project prioritization
 - **CLI Framework**: Cobra subcommand `compass interactive`
 - **GCP Client**: `gcp.Client` for instance operations
 - **SSH Execution**: Via gcloud command with IAP auto-detection
@@ -804,5 +808,5 @@ The TUI implementation is **working at MVP level** using a simplified direct app
 
 ---
 
-*Last Updated: 2025-01-13*
-*Status: Phase 6 Complete - Global Search Working*
+*Last Updated: 2025-01-15*
+*Status: Phase 6 Complete - Global Search Working with Smart Affinity Learning*

@@ -27,6 +27,8 @@
   - [IP Address Lookup](#ip-address-lookup)
   - [SSH Tunneling Recipes](#ssh-tunneling-recipes)
 - [Local Cache](#local-cache)
+  - [Cache Management Commands](#cache-management-commands)
+  - [Smart Search Learning](#smart-search-learning)
 - [Connectivity Tests](#connectivity-tests)
 - [VPN Inspection](#vpn-inspection)
 - [Development](#development)
@@ -50,7 +52,8 @@
 - 🔍 IP address lookup across projects with subnet caching for fast resolution
 - 🌐 Network connectivity tests powered by Google Cloud Connectivity Tests API
 - 🔭 Cloud VPN inventory across gateways, tunnels, and BGP peers
-- 💾 Intelligent local cache for instant connections to known resources
+- 💾 Intelligent local cache with smart search learning for instant connections
+- 🧠 Search affinity system that learns your patterns and prioritizes relevant projects
 - 📊 Structured logging with configurable verbosity and clean spinner-based progress
 - ⚡ Zero configuration—relies on existing `gcloud` authentication
 - 🔁 In-place upgrades via `compass update` to pull the latest GitHub release
@@ -167,8 +170,11 @@ compass gcp ssh my-instance --project my-gcp-project
 # Look up which resources use a specific IP address
 compass gcp ip lookup 192.168.0.208
 
-# Import projects for multi-project operations
+# Import projects for multi-project operations (interactive)
 compass gcp projects import
+
+# Import projects matching a regex pattern (non-interactive)
+compass gcp projects import --regex "^prod-"
 
 # Search cached projects for instances with matching names
 compass gcp search piou
@@ -550,6 +556,23 @@ INFO  Successfully cached 2 projects
 ✓ Projects imported successfully! You can now use 'compass gcp ssh' without --project flag.
 ```
 
+**Regex filtering (non-interactive):**
+
+Use `--regex` / `-r` to import projects matching a pattern without interactive selection:
+
+```bash
+# Import all projects starting with "prod-"
+compass gcp projects import --regex "^prod-"
+
+# Import projects containing "dev" or "staging"
+compass gcp projects import -r "dev|staging"
+
+# Case-insensitive matching
+compass gcp projects import -r "(?i)^PROD-"
+```
+
+This is useful for automation, CI/CD pipelines, or when you want to quickly import a known set of projects.
+
 ### IP Address Lookup
 
 Identify which resources are assigned to a specific IP address:
@@ -621,7 +644,7 @@ compass gcp ssh internal-server \
 
 ## Local Cache
 
-`compass` maintains a local SQLite cache to avoid repeated API discovery calls. The cache lives at `~/.compass.cache.db` with `0600` permissions and is updated transparently.
+`compass` maintains a local SQLite cache to avoid repeated API discovery calls. The cache lives at `~/.cache/compass/cache.db` with `0600` permissions and is updated transparently.
 
 **What's cached:**
 
@@ -635,24 +658,53 @@ compass gcp ssh internal-server \
 
 - **Subnet metadata**: As `compass gcp ip lookup` crawls projects, it records subnets (primary/secondary CIDRs, IPv6 range, gateway, network, and region). Future IP lookups check these cached subnet ranges first to identify which projects likely contain the IP, dramatically reducing the number of projects that need to be scanned.
 
+- **Search affinity**: The cache learns which search terms find results in which projects. This data is used to prioritize projects during future searches, making repeat searches significantly faster.
+
 **Cache behavior:**
 
-Every cache access updates its timestamp, keeping frequently-used entries fresh. Stale entries are pruned automatically when they exceed 30 days of inactivity. The SQLite database uses WAL (Write-Ahead Logging) mode for efficient concurrent access.
+Every cache access updates its `last_used` timestamp, keeping frequently-used entries fresh. Resources and projects are ordered by most recently used, so your commonly accessed items appear first. Stale entries are pruned automatically when they exceed 30 days of inactivity. The SQLite database uses WAL (Write-Ahead Logging) mode for efficient concurrent access.
 
 **Migration from JSON cache:**
 
-If you're upgrading from a previous version that used JSON-based caching (`~/.compass.cache.json`), your data will be automatically migrated to SQLite on first run. The old JSON file is removed after successful migration.
+If you're upgrading from a previous version that used JSON-based caching (`~/.compass.cache.json`), your data will be automatically migrated to SQLite on first run. The old JSON file is renamed to `.compass.cache.json.migrated` after successful migration.
 
-**Cache management:**
+### Cache Management Commands
 
 ```bash
-# Reset cache completely
-rm ~/.compass.cache.db
+# View cache information (size, entry counts, TTL settings)
+compass cache info
+
+# Configure TTL settings per resource type
+compass cache ttl get                    # Show all TTL settings
+compass cache ttl get instances          # Show specific TTL
+compass cache ttl set instances 168h     # Set instance TTL to 7 days
+compass cache ttl clear instances        # Reset to default
+
+# Run database optimization (VACUUM and ANALYZE)
+compass cache optimize
+
+# Clear all cached entries (preserves TTL settings)
+compass cache clear
+
+# Execute custom SQL queries on the cache
+compass cache sql "SELECT * FROM instances LIMIT 10"
+compass cache sql -f query.sql
 
 # Disable cache for a single command
 compass --cache=false gcp ip lookup 10.0.0.1
 compass --cache=false gcp ssh my-instance
 ```
+
+### Smart Search Learning
+
+The cache learns from your search patterns to prioritize projects more intelligently:
+
+1. **Search affinity tracking**: When you search for "netmgt-dt40" and find results in "project-network", this association is recorded
+2. **Prefix learning**: The prefix "netmgt" is also associated with "project-network"
+3. **Smart prioritization**: Future searches for anything starting with "netmgt" will search "project-network" first
+4. **Scoring algorithm**: Combines frequency (how often), recency (how recent), and volume (how many results) to rank projects
+
+This means the more you use compass, the faster your searches become as it learns your patterns.
 
 **Why SQLite?**
 
@@ -661,6 +713,7 @@ The SQLite cache provides several advantages over the previous JSON-based approa
 - **Better concurrency**: Native transaction support with WAL mode
 - **ACID compliance**: Safe writes with crash recovery
 - **Indexed lookups**: Faster subnet IP matching and project searches
+- **Smart learning**: Search affinity data enables intelligent project prioritization
 
 ## Connectivity Tests
 
@@ -792,7 +845,6 @@ GitHub Actions run `task check` (fmt, vet, lint, test) and `task test-race` on p
 - [ ] Connectivity test templates and presets
 - [ ] Bulk connectivity test operations
 - [ ] Export connectivity results to additional formats
-- [ ] Cache management commands (list, remove specific entries)
 - [ ] Interactive MIG instance selection improvements
 
 ## License
