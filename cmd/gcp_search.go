@@ -307,15 +307,36 @@ func recordSearchAffinity(searchTerm string, results []search.Result) {
 		return
 	}
 
-	// Group results by project
+	// Group results by project (for general affinity)
 	projectResults := make(map[string]int)
+	// Group results by project and resource type (for specific affinity)
+	projectTypeResults := make(map[string]map[string]int)
+
 	for _, result := range results {
 		projectResults[result.Project]++
+
+		// Track per-resource-type counts
+		resourceType := string(result.Type)
+		if resourceType != "" {
+			if projectTypeResults[result.Project] == nil {
+				projectTypeResults[result.Project] = make(map[string]int)
+			}
+			projectTypeResults[result.Project][resourceType]++
+		}
 	}
 
-	// Record affinity without specific resource type (general search)
+	// Record general affinity (empty resource_type) for overall search patterns
 	if err := cacheStore.RecordSearchAffinity(searchTerm, projectResults, ""); err != nil {
-		logger.Log.Debugf("Failed to record search affinity: %v", err)
+		logger.Log.Debugf("Failed to record general search affinity: %v", err)
+	}
+
+	// Record per-resource-type affinities for more specific learning
+	for project, typeCounts := range projectTypeResults {
+		for resourceType, count := range typeCounts {
+			if err := cacheStore.RecordSearchAffinity(searchTerm, map[string]int{project: count}, resourceType); err != nil {
+				logger.Log.Debugf("Failed to record search affinity for %s: %v", resourceType, err)
+			}
+		}
 	}
 }
 

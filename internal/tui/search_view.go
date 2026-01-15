@@ -36,6 +36,8 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 	var modalOpen bool
 	var currentFilter string
 	var filterMode bool
+	var currentSearchTerm string                     // Track current search term for affinity reinforcement
+	var recordedAffinity = make(map[string]struct{}) // Track what's been recorded this search session
 
 	// Get initial projects from cache (will be overridden per-search with affinity data)
 	initialProjects := c.GetProjectsByUsage()
@@ -353,6 +355,10 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 		searchCancel = cancel
 		isSearching = true
 
+		// Track this search term for affinity reinforcement and reset recorded tracking
+		currentSearchTerm = query
+		recordedAffinity = make(map[string]struct{})
+
 		// Get projects prioritized for this search term using learned affinity
 		searchProjects := c.GetProjectsForSearch(query, nil)
 		if len(searchProjects) == 0 {
@@ -429,6 +435,10 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 			// Add new results (if any)
 			if len(results) > 0 {
 				newEntries := make([]searchEntry, 0, len(results))
+				// Track new affinities to record
+				newProjectResults := make(map[string]int)
+				newProjectTypeResults := make(map[string]map[string]int)
+
 				for _, r := range results {
 					entry := searchEntry{
 						Type:     string(r.Type),
@@ -439,11 +449,38 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 						Result:   &r,
 					}
 					newEntries = append(newEntries, entry)
+
+					// Track for real-time affinity recording (only new project+type combos)
+					affinityKey := r.Project + "|" + string(r.Type)
+					if _, exists := recordedAffinity[affinityKey]; !exists {
+						recordedAffinity[affinityKey] = struct{}{}
+						newProjectResults[r.Project]++
+						if string(r.Type) != "" {
+							if newProjectTypeResults[r.Project] == nil {
+								newProjectTypeResults[r.Project] = make(map[string]int)
+							}
+							newProjectTypeResults[r.Project][string(r.Type)]++
+						}
+					}
 				}
 
 				resultsMu.Lock()
 				allResults = append(allResults, newEntries...)
 				resultsMu.Unlock()
+
+				// Record affinity in real-time (in background to not block)
+				if len(newProjectResults) > 0 {
+					go func(term string, projResults map[string]int, projTypeResults map[string]map[string]int) {
+						// Record general affinity
+						_ = c.RecordSearchAffinity(term, projResults, "")
+						// Record per-resource-type affinities
+						for proj, typeCounts := range projTypeResults {
+							for resType, count := range typeCounts {
+								_ = c.RecordSearchAffinity(term, map[string]int{proj: count}, resType)
+							}
+						}
+					}(query, newProjectResults, newProjectTypeResults)
+				}
 			}
 
 			// Update UI - copy current filter to avoid race
@@ -473,22 +510,9 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 		if output != nil && len(output.Warnings) > 0 {
 			allWarnings = output.Warnings
 		}
-		// Copy results for affinity recording
-		resultsCopy := make([]searchEntry, len(allResults))
-		copy(resultsCopy, allResults)
 		resultsMu.Unlock()
 
-		// Record search affinity for learning (only if we got results)
-		if len(resultsCopy) > 0 {
-			projectResults := make(map[string]int)
-			for _, entry := range resultsCopy {
-				projectResults[entry.Project]++
-			}
-			// Record in background to not block UI
-			go func() {
-				_ = c.RecordSearchAffinity(query, projectResults, "")
-			}()
-		}
+		// Note: Search affinity is now recorded in real-time during the search callback
 
 		// Final UI update
 		filter := currentFilter
@@ -626,6 +650,14 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 					return nil
 				}
 
+				// Reinforce search affinity when user SSHs to an instance
+				if currentSearchTerm != "" {
+					go func(term, proj, resType string) {
+						_ = c.TouchSearchAffinity(term, proj, resType)
+						_ = c.TouchSearchAffinity(term, proj, "") // Also touch general affinity
+					}(currentSearchTerm, selectedEntry.Project, selectedEntry.Type)
+				}
+
 				// Capture values for callbacks
 				instanceName := selectedEntry.Name
 				instanceProject := selectedEntry.Project
@@ -672,6 +704,14 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 						})
 					})
 					return nil
+				}
+
+				// Reinforce search affinity when user views details
+				if currentSearchTerm != "" {
+					go func(term, proj, resType string) {
+						_ = c.TouchSearchAffinity(term, proj, resType)
+						_ = c.TouchSearchAffinity(term, proj, "") // Also touch general affinity
+					}(currentSearchTerm, selectedEntry.Project, selectedEntry.Type)
 				}
 
 				// For instances, fetch live details from GCP
