@@ -137,85 +137,125 @@ func runProjectsImport(ctx context.Context, regexPattern string) {
 
 // scanProjectResources scans zones, instances, and subnets for each project and caches them.
 func scanProjectResources(ctx context.Context, projects []string) {
-	// Create a multi-progress display
-	multi := pterm.DefaultMultiPrinter
+	// 3 API operations per project: zones, instances, subnets
+	totalAPICalls := len(projects) * 3
+	var completedAPICalls int
+	var apiCallsMu sync.Mutex
 
-	// Start the multi printer
-	_, _ = multi.Start()
+	// Track totals
+	var totalStats gcp.ScanStats
+	var statsMu sync.Mutex
 
-	// Track results
-	type scanResult struct {
-		project string
-		stats   *gcp.ScanStats
-		err     error
+	// Track errors
+	var errors []string
+	var errorsMu sync.Mutex
+
+	// Create progress bar - title will be updated with current status
+	progressBar, _ := pterm.DefaultProgressbar.
+		WithTotal(totalAPICalls).
+		WithTitle("Starting scan...").
+		WithRemoveWhenDone(true).
+		WithShowPercentage(true).
+		WithShowCount(true).
+		Start()
+
+	// Function to update progress bar title with current stats
+	updateTitle := func(currentProject, currentOp string) {
+		statsMu.Lock()
+		zones := totalStats.Zones
+		instances := totalStats.Instances
+		subnets := totalStats.Subnets
+		statsMu.Unlock()
+
+		progressBar.UpdateTitle(fmt.Sprintf("%s (%s) | %d zones, %d instances, %d subnets",
+			currentProject, currentOp, zones, instances, subnets))
 	}
 
-	results := make(chan scanResult, len(projects))
-
-	// Create spinners for each project
-	spinners := make(map[string]*pterm.SpinnerPrinter)
-	var spinnerMu sync.Mutex
-
-	for _, project := range projects {
-		spinner, _ := pterm.DefaultSpinner.WithWriter(multi.NewWriter()).Start(fmt.Sprintf("Scanning %s...", project))
-		spinners[project] = spinner
-	}
-
-	// Scan each project concurrently
+	// Scan each project concurrently with limited parallelism
+	semaphore := make(chan struct{}, 10) // Limit to 10 concurrent scans
 	var wg sync.WaitGroup
+
 	for _, project := range projects {
 		wg.Add(1)
 		go func(proj string) {
 			defer wg.Done()
 
+			semaphore <- struct{}{}        // Acquire
+			defer func() { <-semaphore }() // Release
+
 			client, err := gcp.NewClient(ctx, proj)
 			if err != nil {
-				results <- scanResult{project: proj, err: err}
+				errorsMu.Lock()
+				errors = append(errors, fmt.Sprintf("%s: %v", proj, err))
+				errorsMu.Unlock()
+
+				// Count all 3 operations as done (failed)
+				apiCallsMu.Lock()
+				completedAPICalls += 3
+				progressBar.Add(3)
+				apiCallsMu.Unlock()
 				return
 			}
 
-			stats, err := client.ScanProjectResources(ctx, func(resource string, count int) {
-				spinnerMu.Lock()
-				if spinner, ok := spinners[proj]; ok {
-					spinner.UpdateText(fmt.Sprintf("Scanning %s: %d %s found...", proj, count, resource))
+			_, err = client.ScanProjectResources(ctx, func(resource string, count int) {
+				// Update totals based on resource type
+				statsMu.Lock()
+				switch resource {
+				case "zones":
+					totalStats.Zones += count
+				case "instances":
+					totalStats.Instances += count
+				case "subnets":
+					totalStats.Subnets += count
 				}
-				spinnerMu.Unlock()
+				statsMu.Unlock()
+
+				// Increment progress for this operation
+				apiCallsMu.Lock()
+				completedAPICalls++
+				progressBar.Increment()
+				apiCallsMu.Unlock()
+
+				updateTitle(proj, resource)
 			})
 
-			results <- scanResult{project: proj, stats: stats, err: err}
+			if err != nil {
+				errorsMu.Lock()
+				errors = append(errors, fmt.Sprintf("%s: %v", proj, err))
+				errorsMu.Unlock()
+			}
 		}(project)
 	}
 
 	// Wait for all scans to complete
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
+	wg.Wait()
 
-	// Collect and display results
-	totalStats := &gcp.ScanStats{}
-	for result := range results {
-		spinnerMu.Lock()
-		spinner := spinners[result.project]
-		spinnerMu.Unlock()
+	// Ensure progress bar completes
+	apiCallsMu.Lock()
+	remaining := totalAPICalls - completedAPICalls
+	if remaining > 0 {
+		progressBar.Add(remaining)
+	}
+	apiCallsMu.Unlock()
 
-		if result.err != nil {
-			spinner.Fail(fmt.Sprintf("%s: failed (%v)", result.project, result.err))
-		} else if result.stats != nil {
-			totalStats.Zones += result.stats.Zones
-			totalStats.Instances += result.stats.Instances
-			totalStats.Subnets += result.stats.Subnets
-			spinner.Success(fmt.Sprintf("%s: %d zones, %d instances, %d subnets",
-				result.project, result.stats.Zones, result.stats.Instances, result.stats.Subnets))
+	// Stop removes the progress bar, then we print summary
+	_, _ = progressBar.Stop()
+
+	// Print summary
+	statsMu.Lock()
+	pterm.Success.Printfln("Cached: %d zones, %d instances, %d subnets across %d projects",
+		totalStats.Zones, totalStats.Instances, totalStats.Subnets, len(projects))
+	statsMu.Unlock()
+
+	// Print errors if any
+	errorsMu.Lock()
+	if len(errors) > 0 {
+		pterm.Warning.Printfln("%d project(s) had errors:", len(errors))
+		for _, e := range errors {
+			pterm.Warning.Printfln("  - %s", e)
 		}
 	}
-
-	// Stop the multi printer
-	_, _ = multi.Stop()
-
-	// Summary
-	logger.Log.Infof("Total cached: %d zones, %d instances, %d subnets across %d projects",
-		totalStats.Zones, totalStats.Instances, totalStats.Subnets, len(projects))
+	errorsMu.Unlock()
 }
 
 // filterProjectsByRegex filters a list of projects by a regex pattern.
