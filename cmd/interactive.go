@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/kedare/compass/internal/cache"
-	"github.com/kedare/compass/internal/gcp"
 	"github.com/kedare/compass/internal/logger"
 	"github.com/kedare/compass/internal/tui"
 	"github.com/spf13/cobra"
@@ -46,17 +45,11 @@ func runInteractive(cmd *cobra.Command, args []string) error {
 	}
 	logger.Log.Debugf("Cache initialized with %d projects", len(c.GetProjects()))
 
-	// Create GCP client (empty project string means use default)
-	logger.Log.Debug("Creating GCP client...")
-	gcpClient, err := gcp.NewClient(cmd.Context(), "")
-	if err != nil {
-		return fmt.Errorf("failed to create GCP client: %w", err)
-	}
-	logger.Log.Debug("GCP client created")
-
 	// Run the simplified version directly without NewApp
+	// Note: GCP client is no longer required at startup - it will be created on-demand
+	// for project-scoped views (VPN, Connectivity) via project selector
 	logger.Log.Info("Starting TUI (press Ctrl+C to quit)...")
-	if err := tui.RunDirect(c, gcpClient, interactiveParallelism); err != nil {
+	if err := tui.RunDirect(c, interactiveParallelism); err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
 

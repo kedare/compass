@@ -31,8 +31,8 @@ func showLoadingScreen(app *tview.Application, title, initialMessage string, onC
 		AddItem(nil, 0, 1, false).
 		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
 			AddItem(nil, 0, 1, false).
-			AddItem(loadingText, 7, 0, true).
-			AddItem(nil, 0, 1, false), 60, 0, true).
+			AddItem(loadingText, 10, 0, true).
+			AddItem(nil, 0, 1, false), 70, 0, true).
 		AddItem(nil, 0, 1, false)
 
 	// Set up cancel handler
@@ -47,6 +47,10 @@ func showLoadingScreen(app *tview.Application, title, initialMessage string, onC
 	})
 
 	app.SetRoot(loadingFlex, true).SetFocus(loadingText)
+
+	// Force an immediate draw so the loading screen is visible right away
+	// This is important when called from within a callback (like project selector)
+	app.ForceDraw()
 
 	// Start spinner animation
 	spinnerDone := make(chan bool, 2)

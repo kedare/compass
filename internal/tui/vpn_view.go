@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/kedare/compass/internal/cache"
 	"github.com/kedare/compass/internal/gcp"
 	"github.com/rivo/tview"
 )
@@ -29,131 +30,231 @@ type vpnEntry struct {
 }
 
 // RunVPNView shows the VPN overview
-func RunVPNView(ctx context.Context, gcpClient *gcp.Client, app *tview.Application, onBack func()) error {
-	return RunVPNViewWithProgress(ctx, gcpClient, app, nil, onBack)
+func RunVPNView(ctx context.Context, c *cache.Cache, app *tview.Application, onBack func()) error {
+	return RunVPNViewWithProgress(ctx, c, app, nil, onBack)
 }
 
 // RunVPNViewWithProgress shows the VPN overview with optional progress callback
-func RunVPNViewWithProgress(ctx context.Context, gcpClient *gcp.Client, app *tview.Application, progress func(string), onBack func()) error {
-	var vpnData *gcp.VPNOverview
-	var allEntries []vpnEntry
-	var isRefreshing bool
-	var modalOpen bool
-	var filterMode bool
-	var currentFilter string
-
-	// Function to load VPN data
-	loadVPNData := func(progressCallback func(string)) {
-		isRefreshing = true
-		allEntries = []vpnEntry{}
-
-		overview, err := gcpClient.ListVPNOverview(ctx, progressCallback)
-		if err != nil {
-			// Show error
-			allEntries = append(allEntries, vpnEntry{
-				Type:   "error",
-				Name:   "Failed to load VPN data",
-				Status: err.Error(),
-			})
-			isRefreshing = false
+// It first prompts the user to select a project, then loads VPN data for that project
+func RunVPNViewWithProgress(ctx context.Context, c *cache.Cache, app *tview.Application, progress func(string), onBack func()) error {
+	// Show project selector first
+	ShowProjectSelector(app, c, " Select Project for VPN View ", func(result ProjectSelectorResult) {
+		if result.Cancelled {
+			onBack()
 			return
 		}
 
-		vpnData = overview
+		selectedProject := result.Project
 
-		// Add gateways and their tunnels/BGP sessions
-		for _, gw := range overview.Gateways {
-			// Gateway entry
-			tunnelCount := len(gw.Tunnels)
-			bgpCount := 0
-			for _, t := range gw.Tunnels {
-				bgpCount += len(t.BgpSessions)
-			}
+		// Show loading screen immediately after project selection
+		loadingCtx, cancelLoading := context.WithCancel(ctx)
 
-			gwEntry := vpnEntry{
-				Type:    "gateway",
-				Name:    gw.Name,
-				Status:  fmt.Sprintf("%d tunnels, %d BGP", tunnelCount, bgpCount),
-				Region:  gw.Region,
-				Network: extractNetworkName(gw.Network),
-				Level:   0,
-				Gateway: gw,
-			}
-			allEntries = append(allEntries, gwEntry)
+		updateMsg, spinnerDone := showLoadingScreen(app, fmt.Sprintf(" Loading VPN Data [%s] ", selectedProject), "Creating GCP client...", func() {
+			cancelLoading()
+			onBack()
+		})
 
-			// Tunnel entries
-			for _, tunnel := range gw.Tunnels {
-				tunnelEntry := vpnEntry{
-					Type:        "tunnel",
-					Name:        tunnel.Name,
-					Status:      formatTunnelStatus(tunnel.Status),
-					Region:      tunnel.Region,
-					Parent:      gw.Name,
-					DetailedMsg: tunnel.DetailedStatus,
-					Level:       1,
-					Tunnel:      tunnel,
+		// Load everything in background
+		go func() {
+			var vpnData *gcp.VPNOverview
+			var allEntries []vpnEntry
+			var gcpClient *gcp.Client
+
+			// Create GCP client
+			client, err := gcp.NewClient(loadingCtx, selectedProject)
+			if err != nil {
+				// Signal spinner to stop
+				select {
+				case spinnerDone <- true:
+				default:
 				}
-				allEntries = append(allEntries, tunnelEntry)
 
-				// BGP entries
-				for _, bgp := range tunnel.BgpSessions {
-					bgpEntry := vpnEntry{
-						Type:   "bgp",
-						Name:   bgp.Name,
-						Status: formatBGPStatus(bgp.SessionState),
-						Region: bgp.Region,
-						Parent: tunnel.Name,
-						Level:  2,
-						BGP:    bgp,
-					}
-					allEntries = append(allEntries, bgpEntry)
+				if loadingCtx.Err() == context.Canceled {
+					return
+				}
+
+				app.QueueUpdateDraw(func() {
+					modal := tview.NewModal().
+						SetText(fmt.Sprintf("Failed to create GCP client for project '%s':\n\n%v", selectedProject, err)).
+						AddButtons([]string{"OK"}).
+						SetDoneFunc(func(buttonIndex int, buttonLabel string) {
+							onBack()
+						})
+					app.SetRoot(modal, true).SetFocus(modal)
+				})
+				return
+			}
+			gcpClient = client
+
+			// Progress callback
+			progressCallback := func(msg string) {
+				updateMsg(msg)
+				if progress != nil {
+					progress(msg)
 				}
 			}
+
+			updateMsg("Loading VPN gateways and tunnels...")
+
+			overview, err := gcpClient.ListVPNOverview(loadingCtx, progressCallback)
+			if err != nil {
+				allEntries = []vpnEntry{{
+					Type:   "error",
+					Name:   "Failed to load VPN data",
+					Status: err.Error(),
+				}}
+			} else {
+				vpnData = overview
+				allEntries = buildVPNEntries(overview)
+			}
+
+			// Signal spinner to stop
+			select {
+			case spinnerDone <- true:
+			default:
+			}
+
+			// Check if cancelled
+			if loadingCtx.Err() == context.Canceled {
+				return
+			}
+
+			app.QueueUpdateDraw(func() {
+				// Now show the actual VPN view
+				showVPNViewUI(ctx, gcpClient, selectedProject, app, vpnData, allEntries, onBack)
+			})
+		}()
+	})
+
+	return nil
+}
+
+// buildVPNEntries converts VPN overview data to display entries
+func buildVPNEntries(overview *gcp.VPNOverview) []vpnEntry {
+	var allEntries []vpnEntry
+
+	// Add gateways and their tunnels/BGP sessions
+	for _, gw := range overview.Gateways {
+		// Gateway entry
+		tunnelCount := len(gw.Tunnels)
+		bgpCount := 0
+		for _, t := range gw.Tunnels {
+			bgpCount += len(t.BgpSessions)
 		}
 
-		// Add orphan tunnels
-		if len(overview.OrphanTunnels) > 0 {
-			allEntries = append(allEntries, vpnEntry{
-				Type:   "section",
-				Name:   "⚠️  Orphan Tunnels (Classic VPN)",
-				Status: fmt.Sprintf("%d tunnels", len(overview.OrphanTunnels)),
-				Level:  0,
-			})
-			for _, tunnel := range overview.OrphanTunnels {
-				tunnelEntry := vpnEntry{
-					Type:        "orphan-tunnel",
-					Name:        tunnel.Name,
-					Status:      formatTunnelStatus(tunnel.Status),
-					Region:      tunnel.Region,
-					DetailedMsg: tunnel.DetailedStatus,
-					Level:       1,
-					Tunnel:      tunnel,
-				}
-				allEntries = append(allEntries, tunnelEntry)
-			}
+		gwEntry := vpnEntry{
+			Type:    "gateway",
+			Name:    gw.Name,
+			Status:  fmt.Sprintf("%d tunnels, %d BGP", tunnelCount, bgpCount),
+			Region:  gw.Region,
+			Network: extractNetworkName(gw.Network),
+			Level:   0,
+			Gateway: gw,
 		}
+		allEntries = append(allEntries, gwEntry)
 
-		// Add orphan BGP sessions
-		if len(overview.OrphanSessions) > 0 {
-			allEntries = append(allEntries, vpnEntry{
-				Type:   "section",
-				Name:   "⚠️  Orphan BGP Sessions",
-				Status: fmt.Sprintf("%d sessions", len(overview.OrphanSessions)),
-				Level:  0,
-			})
-			for _, bgp := range overview.OrphanSessions {
+		// Tunnel entries
+		for _, tunnel := range gw.Tunnels {
+			tunnelEntry := vpnEntry{
+				Type:        "tunnel",
+				Name:        tunnel.Name,
+				Status:      formatTunnelStatus(tunnel.Status),
+				Region:      tunnel.Region,
+				Parent:      gw.Name,
+				DetailedMsg: tunnel.DetailedStatus,
+				Level:       1,
+				Tunnel:      tunnel,
+			}
+			allEntries = append(allEntries, tunnelEntry)
+
+			// BGP entries
+			for _, bgp := range tunnel.BgpSessions {
 				bgpEntry := vpnEntry{
-					Type:   "orphan-bgp",
+					Type:   "bgp",
 					Name:   bgp.Name,
 					Status: formatBGPStatus(bgp.SessionState),
 					Region: bgp.Region,
-					Level:  1,
+					Parent: tunnel.Name,
+					Level:  2,
 					BGP:    bgp,
 				}
 				allEntries = append(allEntries, bgpEntry)
 			}
 		}
+	}
 
+	// Add orphan tunnels
+	if len(overview.OrphanTunnels) > 0 {
+		allEntries = append(allEntries, vpnEntry{
+			Type:   "section",
+			Name:   "Orphan Tunnels (Classic VPN)",
+			Status: fmt.Sprintf("%d tunnels", len(overview.OrphanTunnels)),
+			Level:  0,
+		})
+		for _, tunnel := range overview.OrphanTunnels {
+			tunnelEntry := vpnEntry{
+				Type:        "orphan-tunnel",
+				Name:        tunnel.Name,
+				Status:      formatTunnelStatus(tunnel.Status),
+				Region:      tunnel.Region,
+				DetailedMsg: tunnel.DetailedStatus,
+				Level:       1,
+				Tunnel:      tunnel,
+			}
+			allEntries = append(allEntries, tunnelEntry)
+		}
+	}
+
+	// Add orphan BGP sessions
+	if len(overview.OrphanSessions) > 0 {
+		allEntries = append(allEntries, vpnEntry{
+			Type:   "section",
+			Name:   "Orphan BGP Sessions",
+			Status: fmt.Sprintf("%d sessions", len(overview.OrphanSessions)),
+			Level:  0,
+		})
+		for _, bgp := range overview.OrphanSessions {
+			bgpEntry := vpnEntry{
+				Type:   "orphan-bgp",
+				Name:   bgp.Name,
+				Status: formatBGPStatus(bgp.SessionState),
+				Region: bgp.Region,
+				Level:  1,
+				BGP:    bgp,
+			}
+			allEntries = append(allEntries, bgpEntry)
+		}
+	}
+
+	return allEntries
+}
+
+// showVPNViewUI displays the VPN view UI after data is loaded
+func showVPNViewUI(ctx context.Context, gcpClient *gcp.Client, selectedProject string, app *tview.Application, vpnData *gcp.VPNOverview, initialEntries []vpnEntry, onBack func()) {
+	var allEntries = initialEntries
+	var isRefreshing bool
+	var modalOpen bool
+	var filterMode bool
+	var currentFilter string
+
+	// Function to load VPN data (for refresh)
+	loadVPNData := func(progressCallback func(string)) {
+		isRefreshing = true
+
+		overview, err := gcpClient.ListVPNOverview(ctx, progressCallback)
+		if err != nil {
+			// Show error
+			allEntries = []vpnEntry{{
+				Type:   "error",
+				Name:   "Failed to load VPN data",
+				Status: err.Error(),
+			}}
+			isRefreshing = false
+			return
+		}
+
+		vpnData = overview
+		allEntries = buildVPNEntries(overview)
 		isRefreshing = false
 	}
 
@@ -163,7 +264,7 @@ func RunVPNViewWithProgress(ctx context.Context, gcpClient *gcp.Client, app *tvi
 		SetSelectable(true, false).
 		SetFixed(1, 0)
 
-	table.SetBorder(true).SetTitle(" VPN Overview ")
+	table.SetBorder(true).SetTitle(fmt.Sprintf(" VPN Overview [yellow][%s][-] ", selectedProject))
 
 	// Add header
 	headers := []string{"Name", "Status", "Region", "Network"}
@@ -220,7 +321,7 @@ func RunVPNViewWithProgress(ctx context.Context, gcpClient *gcp.Client, app *tvi
 			currentRow++
 		}
 
-		// Update title
+		// Update title with project and counts
 		gwCount := 0
 		tunnelCount := 0
 		bgpCount := 0
@@ -238,9 +339,9 @@ func RunVPNViewWithProgress(ctx context.Context, gcpClient *gcp.Client, app *tvi
 
 		titleSuffix := ""
 		if filter != "" {
-			titleSuffix = fmt.Sprintf(" [filtered: %d/%d] ", len(filteredEntries), len(allEntries))
+			titleSuffix = fmt.Sprintf(" [filtered: %d/%d]", len(filteredEntries), len(allEntries))
 		}
-		table.SetTitle(fmt.Sprintf(" VPN Overview (%d gateways, %d tunnels, %d BGP)%s ", gwCount, tunnelCount, bgpCount, titleSuffix))
+		table.SetTitle(fmt.Sprintf(" VPN Overview [yellow][%s][-] (%d gateways, %d tunnels, %d BGP)%s ", selectedProject, gwCount, tunnelCount, bgpCount, titleSuffix))
 
 		// Select first data row if available
 		if len(filteredEntries) > 0 {
@@ -294,8 +395,7 @@ func RunVPNViewWithProgress(ctx context.Context, gcpClient *gcp.Client, app *tvi
 		}
 	})
 
-	// Initial load
-	loadVPNData(progress)
+	// Initial table population (data is already loaded)
 	updateTable("")
 
 	// Setup keyboard
@@ -428,7 +528,6 @@ func RunVPNViewWithProgress(ctx context.Context, gcpClient *gcp.Client, app *tvi
 	})
 
 	app.SetRoot(flex, true).EnableMouse(true).SetFocus(table)
-	return nil
 }
 
 func showVPNDetail(app *tview.Application, table *tview.Table, mainFlex *tview.Flex, entry vpnEntry, modalOpen *bool, status *tview.TextView, currentFilter string) {
@@ -452,14 +551,14 @@ func showVPNDetail(app *tview.Application, table *tview.Table, mainFlex *tview.F
 			if len(gw.Interfaces) > 0 {
 				detailText.WriteString("\n[yellow::b]Interfaces:[-:-:-]\n")
 				for _, iface := range gw.Interfaces {
-					detailText.WriteString(fmt.Sprintf("  • Interface #%d: %s\n", iface.Id, iface.IpAddress))
+					detailText.WriteString(fmt.Sprintf("  Interface #%d: %s\n", iface.Id, iface.IpAddress))
 				}
 			}
 
 			if len(gw.Labels) > 0 {
 				detailText.WriteString("\n[yellow::b]Labels:[-:-:-]\n")
 				for k, v := range gw.Labels {
-					detailText.WriteString(fmt.Sprintf("  • %s: %s\n", k, v))
+					detailText.WriteString(fmt.Sprintf("  %s: %s\n", k, v))
 				}
 			}
 		}
@@ -499,7 +598,7 @@ func showVPNDetail(app *tview.Application, table *tview.Table, mainFlex *tview.F
 			if len(tunnel.BgpSessions) > 0 {
 				detailText.WriteString("\n[yellow::b]BGP Sessions:[-:-:-]\n")
 				for _, bgp := range tunnel.BgpSessions {
-					detailText.WriteString(fmt.Sprintf("\n  [white::b]• %s[-:-:-]\n", bgp.Name))
+					detailText.WriteString(fmt.Sprintf("\n  [white::b]%s[-:-:-]\n", bgp.Name))
 					detailText.WriteString(fmt.Sprintf("    Status:      %s / %s\n", bgp.SessionStatus, bgp.SessionState))
 					detailText.WriteString(fmt.Sprintf("    Local:       %s (AS%d)\n", bgp.LocalIP, bgp.LocalASN))
 					detailText.WriteString(fmt.Sprintf("    Peer:        %s (AS%d)\n", bgp.PeerIP, bgp.PeerASN))
@@ -509,7 +608,7 @@ func showVPNDetail(app *tview.Application, table *tview.Table, mainFlex *tview.F
 					if len(bgp.AdvertisedPrefixes) > 0 {
 						detailText.WriteString(fmt.Sprintf("    [green]Advertised:[-]  %d prefixes\n", len(bgp.AdvertisedPrefixes)))
 						for _, prefix := range bgp.AdvertisedPrefixes {
-							detailText.WriteString(fmt.Sprintf("      • %s\n", prefix))
+							detailText.WriteString(fmt.Sprintf("      %s\n", prefix))
 						}
 					} else {
 						detailText.WriteString("    [gray]Advertised:  0 prefixes[-]\n")
@@ -518,7 +617,7 @@ func showVPNDetail(app *tview.Application, table *tview.Table, mainFlex *tview.F
 					if len(bgp.LearnedPrefixes) > 0 {
 						detailText.WriteString(fmt.Sprintf("    [green]Learned:[-]     %d prefixes\n", len(bgp.LearnedPrefixes)))
 						for _, prefix := range bgp.LearnedPrefixes {
-							detailText.WriteString(fmt.Sprintf("      • %s\n", prefix))
+							detailText.WriteString(fmt.Sprintf("      %s\n", prefix))
 						}
 					} else {
 						detailText.WriteString("    [gray]Learned:     0 prefixes[-]\n")
@@ -555,7 +654,7 @@ func showVPNDetail(app *tview.Application, table *tview.Table, mainFlex *tview.F
 			if len(bgp.AdvertisedPrefixes) > 0 {
 				detailText.WriteString(fmt.Sprintf("\n[green::b]Advertised Prefixes (%d):[-:-:-]\n", len(bgp.AdvertisedPrefixes)))
 				for _, prefix := range bgp.AdvertisedPrefixes {
-					detailText.WriteString(fmt.Sprintf("  • %s\n", prefix))
+					detailText.WriteString(fmt.Sprintf("  %s\n", prefix))
 				}
 			} else {
 				detailText.WriteString("\n[gray]No advertised prefixes[-]\n")
@@ -564,7 +663,7 @@ func showVPNDetail(app *tview.Application, table *tview.Table, mainFlex *tview.F
 			if len(bgp.LearnedPrefixes) > 0 {
 				detailText.WriteString(fmt.Sprintf("\n[green::b]Learned Prefixes (%d):[-:-:-]\n", len(bgp.LearnedPrefixes)))
 				for _, prefix := range bgp.LearnedPrefixes {
-					detailText.WriteString(fmt.Sprintf("  • %s\n", prefix))
+					detailText.WriteString(fmt.Sprintf("  %s\n", prefix))
 				}
 			} else {
 				detailText.WriteString("\n[gray]No learned prefixes[-]\n")
@@ -573,7 +672,7 @@ func showVPNDetail(app *tview.Application, table *tview.Table, mainFlex *tview.F
 			if len(bgp.BestRoutePrefixes) > 0 {
 				detailText.WriteString(fmt.Sprintf("\n[yellow::b]Best Routes (%d):[-:-:-]\n", len(bgp.BestRoutePrefixes)))
 				for _, prefix := range bgp.BestRoutePrefixes {
-					detailText.WriteString(fmt.Sprintf("  • %s\n", prefix))
+					detailText.WriteString(fmt.Sprintf("  %s\n", prefix))
 				}
 			}
 		}
@@ -594,7 +693,7 @@ func showVPNDetail(app *tview.Application, table *tview.Table, mainFlex *tview.F
 	// Create status bar for detail view
 	detailStatus := tview.NewTextView().
 		SetDynamicColors(true).
-		SetText(" [yellow]Esc[-] back  [yellow]↑/↓[-] scroll")
+		SetText(" [yellow]Esc[-] back  [yellow]up/down[-] scroll")
 
 	// Create fullscreen detail layout
 	detailFlex := tview.NewFlex().
@@ -626,8 +725,8 @@ func showVPNHelp(app *tview.Application, table *tview.Table, mainFlex *tview.Fle
 	helpText := `[yellow::b]VPN View - Keyboard Shortcuts[-:-:-]
 
 [yellow]Navigation[-]
-  [white]↑/k[-]           Move selection up
-  [white]↓/j[-]           Move selection down
+  [white]up/k[-]          Move selection up
+  [white]down/j[-]        Move selection down
   [white]Home/g[-]        Jump to first item
   [white]End/G[-]         Jump to last item
 

@@ -16,10 +16,24 @@ var versionCmd = &cobra.Command{
 
 		fmt.Printf("Version:      %s\n", info.Version)
 		fmt.Printf("Commit:       %s\n", info.Commit)
-		fmt.Printf("Built:        %s\n", info.BuildDate)
+
+		// Display build date with relative time if available
+		if relTime := info.RelativeTime(); relTime != "" {
+			fmt.Printf("Built:        %s (%s)\n", info.BuildDate, relTime)
+		} else {
+			fmt.Printf("Built:        %s\n", info.BuildDate)
+		}
+
 		fmt.Printf("Built By:     %s@%s\n", info.BuildUser, info.BuildHost)
 		fmt.Printf("Architecture: %s\n", info.BuildArch)
 		fmt.Printf("Go Version:   %s\n", info.GoVersion)
+
+		// Check for updates
+		if latestVersion, url, err := version.CheckForUpdate(); err == nil && latestVersion != "" {
+			fmt.Printf("\nNew version available: %s\n", latestVersion)
+			fmt.Printf("Download: %s\n", url)
+			fmt.Println("Or use `compass update`")
+		}
 	},
 }
 
