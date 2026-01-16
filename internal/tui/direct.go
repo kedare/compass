@@ -96,7 +96,7 @@ type instanceData struct {
 }
 
 // RunDirect runs a minimal TUI without the full app structure
-func RunDirect(c *cache.Cache, gcpClient *gcp.Client, parallelism int) error {
+func RunDirect(c *cache.Cache, parallelism int) error {
 	// Disable logging to prevent log output from corrupting the TUI
 	logger.Log.Disable()
 	defer logger.Log.Restore()
@@ -647,205 +647,41 @@ func RunDirect(c *cache.Cache, gcpClient *gcp.Client, parallelism int) error {
 				return nil
 			}
 			if event.Rune() == 'v' {
-				// Switch to VPN view with cancellable loading
-				loadingCtx, cancelLoading := context.WithCancel(ctx)
-
-				// Create loading screen with progress
-				loadingText := tview.NewTextView().
-					SetDynamicColors(true).
-					SetTextAlign(tview.AlignCenter)
-				loadingText.SetBorder(true).SetTitle(" Loading VPN View ")
-
-				spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-				spinnerIdx := 0
-				currentMessage := "Initializing..."
-
-				updateLoadingText := func() {
-					loadingText.SetText(fmt.Sprintf("\n\n[yellow]%s[-] %s\n\n[gray]Press Ctrl+C or Esc to cancel[-]",
-						spinnerFrames[spinnerIdx], currentMessage))
-					spinnerIdx = (spinnerIdx + 1) % len(spinnerFrames)
-				}
-				updateLoadingText()
-
-				loadingFlex := tview.NewFlex().
-					AddItem(nil, 0, 1, false).
-					AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-						AddItem(nil, 0, 1, false).
-						AddItem(loadingText, 7, 0, true).
-						AddItem(nil, 0, 1, false), 60, 0, true).
-					AddItem(nil, 0, 1, false)
-
-				// Set up cancel handler
-				loadingText.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-					if event.Key() == tcell.KeyEscape || event.Key() == tcell.KeyCtrlC {
-						cancelLoading()
-						app.SetRoot(flex, true).SetFocus(table)
-						status.SetText(" [yellow]Loading cancelled[-]")
-						time.AfterFunc(2*time.Second, func() {
-							app.QueueUpdateDraw(func() {
-								status.SetText(statusDefault)
-							})
-						})
-						return nil
-					}
-					return event
+				// Switch to VPN view - shows project selector first
+				err := RunVPNView(ctx, c, app, func() {
+					// Callback to return to instance view
+					app.SetInputCapture(mainInputCapture) // Restore main input handler
+					app.SetRoot(flex, true).SetFocus(table)
+					updateTable(currentFilter)
+					status.SetText(statusDefault)
 				})
-
-				app.SetRoot(loadingFlex, true).SetFocus(loadingText)
-
-				// Start spinner animation
-				spinnerDone := make(chan bool, 2) // Buffered to prevent blocking
-				go func() {
-					ticker := time.NewTicker(100 * time.Millisecond)
-					defer ticker.Stop()
-					for {
-						select {
-						case <-ticker.C:
-							app.QueueUpdateDraw(updateLoadingText)
-						case <-spinnerDone:
-							return
-						case <-loadingCtx.Done():
-							return
-						}
-					}
-				}()
-
-				// Progress callback for VPN loading
-				progressCallback := func(msg string) {
-					currentMessage = msg
-					app.QueueUpdateDraw(updateLoadingText)
+				if err != nil {
+					status.SetText(fmt.Sprintf(statusErrorVPN, err))
+					time.AfterFunc(3*time.Second, func() {
+						app.QueueUpdateDraw(func() {
+							status.SetText(statusDefault)
+						})
+					})
 				}
-
-				go func() {
-					err := RunVPNViewWithProgress(loadingCtx, gcpClient, app, progressCallback, func() {
-						// Callback to return to instance view
-						select {
-						case spinnerDone <- true:
-						default:
-						}
-						app.SetInputCapture(mainInputCapture) // Restore main input handler
-						app.SetRoot(flex, true).SetFocus(table)
-						updateTable(currentFilter)
-						status.SetText(statusDefault)
-					})
-					app.QueueUpdateDraw(func() {
-						select {
-						case spinnerDone <- true:
-						default:
-						}
-						if err != nil {
-							if loadingCtx.Err() == context.Canceled {
-								// User cancelled, already handled
-								return
-							}
-							app.SetRoot(flex, true).SetFocus(table)
-							status.SetText(fmt.Sprintf(statusErrorVPN, err))
-							time.AfterFunc(3*time.Second, func() {
-								app.QueueUpdateDraw(func() {
-									status.SetText(statusDefault)
-								})
-							})
-						}
-					})
-				}()
 				return nil
 			}
 			if event.Rune() == 'c' {
-				// Switch to connectivity tests view with cancellable loading
-				loadingCtx, cancelLoading := context.WithCancel(ctx)
-
-				// Create loading screen with progress
-				loadingText := tview.NewTextView().
-					SetDynamicColors(true).
-					SetTextAlign(tview.AlignCenter)
-				loadingText.SetBorder(true).SetTitle(" Loading Connectivity Tests ")
-
-				spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-				spinnerIdx := 0
-				currentMessage := "Loading connectivity tests..."
-
-				updateLoadingText := func() {
-					loadingText.SetText(fmt.Sprintf("\n\n[yellow]%s[-] %s\n\n[gray]Press Ctrl+C or Esc to cancel[-]",
-						spinnerFrames[spinnerIdx], currentMessage))
-					spinnerIdx = (spinnerIdx + 1) % len(spinnerFrames)
-				}
-				updateLoadingText()
-
-				loadingFlex := tview.NewFlex().
-					AddItem(nil, 0, 1, false).
-					AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-						AddItem(nil, 0, 1, false).
-						AddItem(loadingText, 7, 0, true).
-						AddItem(nil, 0, 1, false), 60, 0, true).
-					AddItem(nil, 0, 1, false)
-
-				// Set up cancel handler
-				loadingText.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-					if event.Key() == tcell.KeyEscape || event.Key() == tcell.KeyCtrlC {
-						cancelLoading()
-						app.SetRoot(flex, true).SetFocus(table)
-						status.SetText(" [yellow]Loading cancelled[-]")
-						time.AfterFunc(2*time.Second, func() {
-							app.QueueUpdateDraw(func() {
-								status.SetText(statusDefault)
-							})
-						})
-						return nil
-					}
-					return event
+				// Switch to connectivity tests view - shows project selector first
+				err := RunConnectivityView(ctx, c, app, func() {
+					// Callback to return to instance view
+					app.SetInputCapture(mainInputCapture) // Restore main input handler
+					app.SetRoot(flex, true).SetFocus(table)
+					updateTable(currentFilter)
+					status.SetText(statusDefault)
 				})
-
-				app.SetRoot(loadingFlex, true).SetFocus(loadingText)
-
-				// Start spinner animation
-				spinnerDone := make(chan bool, 2) // Buffered to prevent blocking
-				go func() {
-					ticker := time.NewTicker(100 * time.Millisecond)
-					defer ticker.Stop()
-					for {
-						select {
-						case <-ticker.C:
-							app.QueueUpdateDraw(updateLoadingText)
-						case <-spinnerDone:
-							return
-						case <-loadingCtx.Done():
-							return
-						}
-					}
-				}()
-
-				go func() {
-					err := RunConnectivityView(loadingCtx, gcpClient, app, func() {
-						// Callback to return to instance view
-						select {
-						case spinnerDone <- true:
-						default:
-						}
-						app.SetInputCapture(mainInputCapture) // Restore main input handler
-						app.SetRoot(flex, true).SetFocus(table)
-						updateTable(currentFilter)
-						status.SetText(statusDefault)
+				if err != nil {
+					status.SetText(fmt.Sprintf(statusErrorConnectivity, err))
+					time.AfterFunc(3*time.Second, func() {
+						app.QueueUpdateDraw(func() {
+							status.SetText(statusDefault)
+						})
 					})
-					app.QueueUpdateDraw(func() {
-						select {
-						case spinnerDone <- true:
-						default:
-						}
-						if err != nil {
-							if loadingCtx.Err() == context.Canceled {
-								// User cancelled, already handled
-								return
-							}
-							app.SetRoot(flex, true).SetFocus(table)
-							status.SetText(fmt.Sprintf(statusErrorConnectivity, err))
-							time.AfterFunc(3*time.Second, func() {
-								app.QueueUpdateDraw(func() {
-									status.SetText(statusDefault)
-								})
-							})
-						}
-					})
-				}()
+				}
 				return nil
 			}
 			if event.Rune() == 'S' {

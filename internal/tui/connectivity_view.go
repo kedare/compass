@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/kedare/compass/internal/cache"
 	"github.com/kedare/compass/internal/gcp"
 	"github.com/kedare/compass/internal/output"
 	"github.com/rivo/tview"
@@ -28,69 +29,156 @@ type connectivityEntry struct {
 }
 
 // RunConnectivityView shows the connectivity tests view
-func RunConnectivityView(ctx context.Context, gcpClient *gcp.Client, app *tview.Application, onBack func()) error {
-	var allEntries []connectivityEntry
-	var modalOpen bool
-	var filterMode bool
-	var currentFilter string
-	var connClient *gcp.ConnectivityClient
+// It first prompts the user to select a project, then loads connectivity tests for that project
+func RunConnectivityView(ctx context.Context, c *cache.Cache, app *tview.Application, onBack func()) error {
+	// Show project selector first
+	ShowProjectSelector(app, c, " Select Project for Connectivity Tests ", func(result ProjectSelectorResult) {
+		if result.Cancelled {
+			onBack()
+			return
+		}
 
-	// Create connectivity client
-	var err error
-	connClient, err = gcp.NewConnectivityClient(ctx, gcpClient.ProjectID())
-	if err != nil {
-		return fmt.Errorf("failed to create connectivity client: %w", err)
-	}
+		selectedProject := result.Project
 
-	// Function to load connectivity tests
-	loadTests := func() {
-		allEntries = []connectivityEntry{}
+		// Now run the actual connectivity view with the selected project
+		runConnectivityViewInternal(ctx, selectedProject, app, onBack)
+	})
 
-		tests, err := connClient.ListTests(ctx, "")
-		if err != nil {
-			// Show error
-			allEntries = append(allEntries, connectivityEntry{
-				Name:        "error",
-				DisplayName: "Failed to load connectivity tests",
-				Result:      err.Error(),
+	return nil
+}
+
+// runConnectivityViewInternal runs the connectivity view after a project has been selected
+func runConnectivityViewInternal(ctx context.Context, selectedProject string, app *tview.Application, onBack func()) {
+	// Show loading screen first
+	loadingCtx, cancelLoading := context.WithCancel(ctx)
+
+	updateMsg, spinnerDone := showLoadingScreen(app, fmt.Sprintf(" Loading Connectivity Tests [%s] ", selectedProject), "Initializing...", func() {
+		cancelLoading()
+		onBack()
+	})
+
+	// Load data in background
+	go func() {
+		var allEntries []connectivityEntry
+		var connClient *gcp.ConnectivityClient
+		var loadError error
+
+		updateMsg("Creating connectivity client...")
+
+		// Create connectivity client
+		connClient, loadError = gcp.NewConnectivityClient(loadingCtx, selectedProject)
+		if loadError != nil {
+			// Signal spinner to stop
+			select {
+			case spinnerDone <- true:
+			default:
+			}
+
+			if loadingCtx.Err() == context.Canceled {
+				return
+			}
+
+			app.QueueUpdateDraw(func() {
+				// Input capture is already cleared by project selector
+				modal := tview.NewModal().
+					SetText(fmt.Sprintf("Failed to create connectivity client for project '%s':\n\n%v", selectedProject, loadError)).
+					AddButtons([]string{"OK"}).
+					SetDoneFunc(func(buttonIndex int, buttonLabel string) {
+						onBack()
+					})
+				app.SetRoot(modal, true).SetFocus(modal)
 			})
 			return
 		}
 
-		// Convert tests to entries
-		for _, test := range tests {
-			entry := connectivityEntry{
-				Name:        test.Name,
-				DisplayName: test.DisplayName,
-				Protocol:    test.Protocol,
-				State:       formatTestState(test),
-				UpdateTime:  test.UpdateTime,
-				Test:        test,
-			}
+		updateMsg("Loading connectivity tests...")
 
-			// Format source
-			if test.Source != nil {
-				entry.Source = formatEndpoint(test.Source)
-			}
-
-			// Format destination
-			if test.Destination != nil {
-				entry.Destination = formatEndpoint(test.Destination)
-			}
-
-			// Format result
-			if test.ReachabilityDetails != nil {
-				entry.Result = formatTestResult(test.ReachabilityDetails.Result)
-			} else {
-				entry.Result = "[gray]PENDING[-]"
-			}
-
-			allEntries = append(allEntries, entry)
+		tests, err := connClient.ListTests(loadingCtx, "")
+		if err != nil {
+			allEntries = []connectivityEntry{{
+				Name:        "error",
+				DisplayName: "Failed to load connectivity tests",
+				Result:      err.Error(),
+			}}
+		} else {
+			allEntries = buildConnectivityEntries(tests)
 		}
+
+		// Signal spinner to stop
+		select {
+		case spinnerDone <- true:
+		default:
+		}
+
+		// Check if cancelled
+		if loadingCtx.Err() == context.Canceled {
+			return
+		}
+
+		app.QueueUpdateDraw(func() {
+			// Now show the actual connectivity view
+			showConnectivityViewUI(ctx, connClient, selectedProject, app, allEntries, onBack)
+		})
+	}()
+}
+
+// buildConnectivityEntries converts test results to display entries
+func buildConnectivityEntries(tests []*gcp.ConnectivityTestResult) []connectivityEntry {
+	var allEntries []connectivityEntry
+
+	for _, test := range tests {
+		entry := connectivityEntry{
+			Name:        test.Name,
+			DisplayName: test.DisplayName,
+			Protocol:    test.Protocol,
+			State:       formatTestState(test),
+			UpdateTime:  test.UpdateTime,
+			Test:        test,
+		}
+
+		// Format source
+		if test.Source != nil {
+			entry.Source = formatEndpoint(test.Source)
+		}
+
+		// Format destination
+		if test.Destination != nil {
+			entry.Destination = formatEndpoint(test.Destination)
+		}
+
+		// Format result
+		if test.ReachabilityDetails != nil {
+			entry.Result = formatTestResult(test.ReachabilityDetails.Result)
+		} else {
+			entry.Result = "[gray]PENDING[-]"
+		}
+
+		allEntries = append(allEntries, entry)
 	}
 
-	// Initial load
-	loadTests()
+	return allEntries
+}
+
+// showConnectivityViewUI displays the connectivity view UI after data is loaded
+func showConnectivityViewUI(ctx context.Context, connClient *gcp.ConnectivityClient, selectedProject string, app *tview.Application, initialEntries []connectivityEntry, onBack func()) {
+	var allEntries = initialEntries
+	var modalOpen bool
+	var filterMode bool
+	var currentFilter string
+
+	// Function to load connectivity tests (for refresh)
+	loadTests := func() {
+		tests, err := connClient.ListTests(ctx, "")
+		if err != nil {
+			allEntries = []connectivityEntry{{
+				Name:        "error",
+				DisplayName: "Failed to load connectivity tests",
+				Result:      err.Error(),
+			}}
+			return
+		}
+		allEntries = buildConnectivityEntries(tests)
+	}
 
 	// Create table
 	table := tview.NewTable().
@@ -98,7 +186,7 @@ func RunConnectivityView(ctx context.Context, gcpClient *gcp.Client, app *tview.
 		SetSelectable(true, false).
 		SetFixed(1, 0)
 
-	table.SetBorder(true).SetTitle(fmt.Sprintf(" Connectivity Tests (%d) ", len(allEntries)))
+	table.SetBorder(true).SetTitle(fmt.Sprintf(" Connectivity Tests [yellow][%s][-] (%d) ", selectedProject, len(allEntries)))
 
 	// Add header
 	headers := []string{"Name", "Source", "Destination", "Protocol", "Result"}
@@ -157,9 +245,9 @@ func RunConnectivityView(ctx context.Context, gcpClient *gcp.Client, app *tview.
 		// Update title
 		titleSuffix := ""
 		if filter != "" {
-			titleSuffix = fmt.Sprintf(" [filtered: %d/%d] ", len(filteredEntries), len(allEntries))
+			titleSuffix = fmt.Sprintf(" [filtered: %d/%d]", len(filteredEntries), len(allEntries))
 		}
-		table.SetTitle(fmt.Sprintf(" Connectivity Tests (%d)%s ", len(allEntries), titleSuffix))
+		table.SetTitle(fmt.Sprintf(" Connectivity Tests [yellow][%s][-] (%d)%s ", selectedProject, len(allEntries), titleSuffix))
 
 		// Select first data row if available
 		if len(filteredEntries) > 0 {
@@ -271,7 +359,7 @@ func RunConnectivityView(ctx context.Context, gcpClient *gcp.Client, app *tview.
 		// Create status bar for detail view
 		detailStatus := tview.NewTextView().
 			SetDynamicColors(true).
-			SetText(" [yellow]Esc[-] back  [yellow]↑/↓[-] scroll")
+			SetText(" [yellow]Esc[-] back  [yellow]up/down[-] scroll")
 
 		// Create fullscreen detail layout
 		detailFlex := tview.NewFlex().
@@ -304,7 +392,7 @@ func RunConnectivityView(ctx context.Context, gcpClient *gcp.Client, app *tview.
 		helpText := `[yellow::b]Connectivity Tests - Keyboard Shortcuts[-:-:-]
 
 [yellow]Navigation:[-]
-  ↑/↓, j/k     Navigate list
+  up/down, j/k     Navigate list
 
 [yellow]Test Actions:[-]
   d            Show test details
@@ -563,8 +651,6 @@ func RunConnectivityView(ctx context.Context, gcpClient *gcp.Client, app *tview.
 
 	// Set up the application
 	app.SetRoot(pages, true).SetFocus(table)
-
-	return nil
 }
 
 // formatEndpoint formats an endpoint for display
