@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -119,7 +120,7 @@ func CheckForUpdate() (latestVersion string, url string, err error) {
 	if err != nil {
 		return "", "", fmt.Errorf("failed to check for updates: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", "", fmt.Errorf("failed to check for updates: HTTP %d", resp.StatusCode)
@@ -159,9 +160,8 @@ func isNewerVersion(latest, current string) bool {
 	}
 
 	for i := 0; i < maxLen; i++ {
-		var latestNum, currentNum int
-		fmt.Sscanf(latestParts[i], "%d", &latestNum)
-		fmt.Sscanf(currentParts[i], "%d", &currentNum)
+		latestNum, _ := strconv.Atoi(latestParts[i])
+		currentNum, _ := strconv.Atoi(currentParts[i])
 
 		if latestNum > currentNum {
 			return true
