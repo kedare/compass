@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/kedare/compass/internal/cache"
 	"github.com/kedare/compass/internal/gcp"
 	"github.com/kedare/compass/internal/gcp/search"
 	"github.com/rivo/tview"
@@ -51,6 +52,12 @@ func GetActionsForResourceType(resourceType string) []ResourceAction {
 	case string(search.KindComputeInstance):
 		return []ResourceAction{
 			{Key: 's', Name: "SSH", Description: "SSH to instance"},
+			{Key: 'd', Name: "Details", Description: "Show details"},
+			{Key: 'b', Name: "Browser", Description: "Open in Cloud Console"},
+		}
+	case string(search.KindManagedInstanceGroup):
+		return []ResourceAction{
+			{Key: 's', Name: "SSH", Description: "SSH to MIG instance"},
 			{Key: 'd', Name: "Details", Description: "Show details"},
 			{Key: 'b', Name: "Browser", Description: "Open in Cloud Console"},
 		}
@@ -120,6 +127,11 @@ func RunSSHSession(app *tview.Application, name, project, zone string, opts SSHO
 		_ = cacheStore.MarkProjectUsed(project)
 	}
 
+	// Save the IAP preference if explicitly set (not Auto)
+	if opts.UseIAP != nil {
+		SaveIAPPreference(name, project, zone, *opts.UseIAP)
+	}
+
 	app.Suspend(func() {
 		args := []string{
 			"compute",
@@ -166,16 +178,76 @@ func RunSSHSession(app *tview.Application, name, project, zone string, opts SSHO
 	})
 }
 
+// LoadIAPPreference loads the cached IAP preference for an instance.
+// Returns nil if no preference is stored.
+func LoadIAPPreference(instanceName string) *bool {
+	cacheStore, err := gcp.LoadCache()
+	if err != nil || cacheStore == nil || instanceName == "" {
+		return nil
+	}
+
+	info, found := cacheStore.Get(instanceName)
+	if !found || info == nil || info.IAP == nil {
+		return nil
+	}
+
+	// Return a copy of the value
+	val := *info.IAP
+	return &val
+}
+
+// SaveIAPPreference saves the IAP preference for an instance.
+func SaveIAPPreference(instanceName, project, zone string, useIAP bool) {
+	if instanceName == "" {
+		return
+	}
+
+	cacheStore, err := gcp.LoadCache()
+	if err != nil || cacheStore == nil {
+		return
+	}
+
+	// Get existing info or create new
+	info, found := cacheStore.Get(instanceName)
+	if !found || info == nil {
+		info = &cache.LocationInfo{
+			Project: project,
+			Zone:    zone,
+			Type:    cache.ResourceTypeInstance,
+		}
+	} else {
+		// Update project/zone if they were empty
+		if info.Project == "" {
+			info.Project = project
+		}
+		if info.Zone == "" {
+			info.Zone = zone
+		}
+	}
+
+	info.IAP = &useIAP
+	_ = cacheStore.Set(instanceName, info)
+}
+
 // ShowSSHOptionsModal displays a modal to configure SSH options before connecting.
 // It calls onConnect with the selected options when the user confirms, or onCancel when cancelled.
-func ShowSSHOptionsModal(app *tview.Application, instanceName string, defaultUseIAP bool, onConnect func(opts SSHOptions), onCancel func()) {
+// cachedIAP is the previously stored IAP preference for this instance (nil = no preference).
+// defaultUseIAP is the suggested default based on instance properties (e.g., no external IP).
+func ShowSSHOptionsModal(app *tview.Application, instanceName string, defaultUseIAP bool, cachedIAP *bool, onConnect func(opts SSHOptions), onCancel func()) {
 	// Create form
 	form := tview.NewForm()
 
 	// IAP dropdown options
 	iapOptions := []string{"Auto", "Yes", "No"}
 	iapIndex := 0 // Default to Auto
-	if defaultUseIAP {
+	// Use cached IAP preference first if available, otherwise fall back to default
+	if cachedIAP != nil {
+		if *cachedIAP {
+			iapIndex = 1 // Yes
+		} else {
+			iapIndex = 2 // No
+		}
+	} else if defaultUseIAP {
 		iapIndex = 1 // Default to Yes if instance suggests IAP
 	}
 

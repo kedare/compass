@@ -93,6 +93,7 @@ type instanceData struct {
 	SearchText  string // Combined text for fuzzy search
 	CanUseIAP   bool
 	HasLiveData bool // Whether this instance has been loaded with live data from GCP
+	IsMIG       bool // Whether this is a MIG (Managed Instance Group) rather than a single instance
 }
 
 // RunDirect runs a minimal TUI without the full app structure
@@ -131,6 +132,7 @@ func RunDirect(c *cache.Cache, parallelism int) error {
 						Project: project,
 						Zone:    location.Location,
 						Status:  "[gray]LOADING...[-]",
+						IsMIG:   location.Type == "mig",
 					}
 
 					// If live data requested, fetch from GCP
@@ -368,48 +370,121 @@ func RunDirect(c *cache.Cache, parallelism int) error {
 				}
 
 				if selectedInst != nil {
-					// Determine default IAP setting:
-					// - HasLiveData is true AND ExternalIP is empty (no public IP), OR
-					// - CanUseIAP is explicitly set to true
-					defaultUseIAP := (selectedInst.HasLiveData && selectedInst.ExternalIP == "") || selectedInst.CanUseIAP
-
 					// Capture values for callbacks
 					instName := selectedInst.Name
 					instProject := selectedInst.Project
 					instZone := selectedInst.Zone
+					isMIG := selectedInst.IsMIG
 
-					// Show SSH options modal
-					modalOpen = true
-					ShowSSHOptionsModal(app, instName, defaultUseIAP,
-						func(opts SSHOptions) {
-							// Restore main view before SSH (needed for proper suspend/resume)
-							app.SetRoot(flex, true)
-							app.SetFocus(table)
-							modalOpen = false
-
-							// Execute SSH using shared function
-							RunSSHSession(app, instName, instProject, instZone, opts, outputRedir)
-
-							// After resume
-							status.SetText(fmt.Sprintf(statusDisconnected, instName))
-							time.AfterFunc(3*time.Second, func() {
+					// For MIG, we need to resolve to an actual instance first
+					if isMIG {
+						status.SetText(fmt.Sprintf(" [yellow]Resolving MIG %s...[-]", instName))
+						go func() {
+							projectClient, err := gcp.NewClient(ctx, instProject)
+							if err != nil {
 								app.QueueUpdateDraw(func() {
-									status.SetText(statusDefault)
+									status.SetText(fmt.Sprintf(" [red]Error creating client: %v[-]", err))
+									time.AfterFunc(3*time.Second, func() {
+										app.QueueUpdateDraw(func() {
+											status.SetText(statusDefault)
+										})
+									})
 								})
-							})
-						},
-						func() {
-							// Cancel - restore main view
-							app.SetRoot(flex, true)
-							app.SetFocus(table)
-							modalOpen = false
-							if currentFilter != "" {
-								status.SetText(fmt.Sprintf(statusFilterActive, currentFilter))
-							} else {
-								status.SetText(statusDefault)
+								return
 							}
-						},
-					)
+
+							// Resolve MIG to an instance
+							instance, err := projectClient.FindInstanceInMIG(ctx, instName, instZone)
+							if err != nil {
+								app.QueueUpdateDraw(func() {
+									status.SetText(fmt.Sprintf(" [red]Error resolving MIG: %v[-]", err))
+									time.AfterFunc(3*time.Second, func() {
+										app.QueueUpdateDraw(func() {
+											status.SetText(statusDefault)
+										})
+									})
+								})
+								return
+							}
+
+							// Now show the SSH modal with the resolved instance
+							app.QueueUpdateDraw(func() {
+								// Load cached IAP preference for the resolved instance
+								cachedIAP := LoadIAPPreference(instance.Name)
+								defaultUseIAP := instance.CanUseIAP
+
+								modalOpen = true
+								ShowSSHOptionsModal(app, instance.Name, defaultUseIAP, cachedIAP,
+									func(opts SSHOptions) {
+										app.SetRoot(flex, true)
+										app.SetFocus(table)
+										modalOpen = false
+
+										RunSSHSession(app, instance.Name, instProject, instance.Zone, opts, outputRedir)
+
+										status.SetText(fmt.Sprintf(statusDisconnected, instance.Name))
+										time.AfterFunc(3*time.Second, func() {
+											app.QueueUpdateDraw(func() {
+												status.SetText(statusDefault)
+											})
+										})
+									},
+									func() {
+										app.SetRoot(flex, true)
+										app.SetFocus(table)
+										modalOpen = false
+										if currentFilter != "" {
+											status.SetText(fmt.Sprintf(statusFilterActive, currentFilter))
+										} else {
+											status.SetText(statusDefault)
+										}
+									},
+								)
+							})
+						}()
+					} else {
+						// Regular instance - show SSH modal directly
+						// Determine default IAP setting:
+						// - HasLiveData is true AND ExternalIP is empty (no public IP), OR
+						// - CanUseIAP is explicitly set to true
+						defaultUseIAP := (selectedInst.HasLiveData && selectedInst.ExternalIP == "") || selectedInst.CanUseIAP
+
+						// Load cached IAP preference for this instance
+						cachedIAP := LoadIAPPreference(instName)
+
+						// Show SSH options modal
+						modalOpen = true
+						ShowSSHOptionsModal(app, instName, defaultUseIAP, cachedIAP,
+							func(opts SSHOptions) {
+								// Restore main view before SSH (needed for proper suspend/resume)
+								app.SetRoot(flex, true)
+								app.SetFocus(table)
+								modalOpen = false
+
+								// Execute SSH using shared function
+								RunSSHSession(app, instName, instProject, instZone, opts, outputRedir)
+
+								// After resume
+								status.SetText(fmt.Sprintf(statusDisconnected, instName))
+								time.AfterFunc(3*time.Second, func() {
+									app.QueueUpdateDraw(func() {
+										status.SetText(statusDefault)
+									})
+								})
+							},
+							func() {
+								// Cancel - restore main view
+								app.SetRoot(flex, true)
+								app.SetFocus(table)
+								modalOpen = false
+								if currentFilter != "" {
+									status.SetText(fmt.Sprintf(statusFilterActive, currentFilter))
+								} else {
+									status.SetText(statusDefault)
+								}
+							},
+						)
+					}
 				}
 				return nil
 			}
