@@ -25,6 +25,10 @@ func newTestCache(t *testing.T) *Cache {
 }
 
 func TestNew(t *testing.T) {
+	// Use a temporary directory as HOME to avoid polluting the real cache
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
 	cache, err := New()
 	require.NoError(t, err)
 	require.NotNil(t, cache)
