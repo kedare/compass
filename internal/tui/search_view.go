@@ -628,7 +628,7 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 				return nil
 
 			case 's':
-				// SSH to instance (only for compute.instance type)
+				// SSH to instance or MIG
 				selectedEntry := getSelectedEntry()
 				if selectedEntry == nil {
 					status.SetText(" [red]No result selected[-]")
@@ -640,8 +640,11 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 					return nil
 				}
 
-				if selectedEntry.Type != string(search.KindComputeInstance) {
-					status.SetText(" [red]SSH only available for compute instances[-]")
+				isInstance := selectedEntry.Type == string(search.KindComputeInstance)
+				isMIG := selectedEntry.Type == string(search.KindManagedInstanceGroup)
+
+				if !isInstance && !isMIG {
+					status.SetText(" [red]SSH only available for compute instances and MIGs[-]")
 					time.AfterFunc(2*time.Second, func() {
 						app.QueueUpdateDraw(func() {
 							updateStatusWithActions()
@@ -659,38 +662,99 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 				}
 
 				// Capture values for callbacks
-				instanceName := selectedEntry.Name
-				instanceProject := selectedEntry.Project
-				instanceZone := selectedEntry.Location
+				resourceName := selectedEntry.Name
+				resourceProject := selectedEntry.Project
+				resourceLocation := selectedEntry.Location
 
-				// Show SSH options modal
-				modalOpen = true
-				ShowSSHOptionsModal(app, instanceName, false,
-					func(opts SSHOptions) {
-						// Restore main view before SSH (needed for proper suspend/resume)
-						app.SetRoot(flex, true)
-						app.SetFocus(table)
-						modalOpen = false
-
-						// Execute SSH using shared function
-						RunSSHSession(app, instanceName, instanceProject, instanceZone, opts, outputRedir)
-
-						// After resume - direct call, not QueueUpdateDraw
-						status.SetText(fmt.Sprintf(" [green]Disconnected from %s[-]", instanceName))
-						time.AfterFunc(3*time.Second, func() {
+				// For MIG, resolve to an actual instance first
+				if isMIG {
+					status.SetText(fmt.Sprintf(" [yellow]Resolving MIG %s...[-]", resourceName))
+					go func() {
+						projectClient, err := gcp.NewClient(ctx, resourceProject)
+						if err != nil {
 							app.QueueUpdateDraw(func() {
-								updateStatusWithActions()
+								status.SetText(fmt.Sprintf(" [red]Error creating client: %v[-]", err))
+								time.AfterFunc(3*time.Second, func() {
+									app.QueueUpdateDraw(func() {
+										updateStatusWithActions()
+									})
+								})
 							})
+							return
+						}
+
+						// Resolve MIG to an instance
+						instance, err := projectClient.FindInstanceInMIG(ctx, resourceName, resourceLocation)
+						if err != nil {
+							app.QueueUpdateDraw(func() {
+								status.SetText(fmt.Sprintf(" [red]Error resolving MIG: %v[-]", err))
+								time.AfterFunc(3*time.Second, func() {
+									app.QueueUpdateDraw(func() {
+										updateStatusWithActions()
+									})
+								})
+							})
+							return
+						}
+
+						// Now show the SSH modal with the resolved instance
+						app.QueueUpdateDraw(func() {
+							cachedIAP := LoadIAPPreference(instance.Name)
+							defaultUseIAP := instance.CanUseIAP
+
+							modalOpen = true
+							ShowSSHOptionsModal(app, instance.Name, defaultUseIAP, cachedIAP,
+								func(opts SSHOptions) {
+									app.SetRoot(flex, true)
+									app.SetFocus(table)
+									modalOpen = false
+
+									RunSSHSession(app, instance.Name, resourceProject, instance.Zone, opts, outputRedir)
+
+									status.SetText(fmt.Sprintf(" [green]Disconnected from %s[-]", instance.Name))
+									time.AfterFunc(3*time.Second, func() {
+										app.QueueUpdateDraw(func() {
+											updateStatusWithActions()
+										})
+									})
+								},
+								func() {
+									app.SetRoot(flex, true)
+									app.SetFocus(table)
+									modalOpen = false
+									updateStatusWithActions()
+								},
+							)
 						})
-					},
-					func() {
-						// Cancel - restore main view
-						app.SetRoot(flex, true)
-						app.SetFocus(table)
-						modalOpen = false
-						updateStatusWithActions()
-					},
-				)
+					}()
+				} else {
+					// Regular instance - show SSH modal directly
+					cachedIAP := LoadIAPPreference(resourceName)
+
+					modalOpen = true
+					ShowSSHOptionsModal(app, resourceName, false, cachedIAP,
+						func(opts SSHOptions) {
+							app.SetRoot(flex, true)
+							app.SetFocus(table)
+							modalOpen = false
+
+							RunSSHSession(app, resourceName, resourceProject, resourceLocation, opts, outputRedir)
+
+							status.SetText(fmt.Sprintf(" [green]Disconnected from %s[-]", resourceName))
+							time.AfterFunc(3*time.Second, func() {
+								app.QueueUpdateDraw(func() {
+									updateStatusWithActions()
+								})
+							})
+						},
+						func() {
+							app.SetRoot(flex, true)
+							app.SetFocus(table)
+							modalOpen = false
+							updateStatusWithActions()
+						},
+					)
+				}
 				return nil
 
 			case 'd':
