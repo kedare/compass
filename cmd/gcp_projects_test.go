@@ -3,6 +3,7 @@ package cmd
 import (
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 )
 
@@ -243,4 +244,118 @@ func TestGcpProjectsImportHelp(t *testing.T) {
 
 	err := rootCmd.Execute()
 	require.NoError(t, err)
+}
+
+func TestGcpProjectsRemoveCommand(t *testing.T) {
+	require.NotNil(t, gcpProjectsRemoveCmd)
+	require.Equal(t, "remove <project-name>", gcpProjectsRemoveCmd.Use)
+	require.NotEmpty(t, gcpProjectsRemoveCmd.Short)
+	require.NotEmpty(t, gcpProjectsRemoveCmd.Long)
+	require.NotNil(t, gcpProjectsRemoveCmd.Run)
+	require.NotNil(t, gcpProjectsRemoveCmd.ValidArgsFunction)
+}
+
+func TestGcpProjectsRemoveCommandStructure(t *testing.T) {
+	// Check remove command is under projects
+	foundRemove := false
+	for _, cmd := range gcpProjectsCmd.Commands() {
+		if cmd.Name() == "remove" {
+			foundRemove = true
+			break
+		}
+	}
+	require.True(t, foundRemove, "remove command not found under projects command")
+}
+
+func TestGcpProjectsRemoveHelp(t *testing.T) {
+	rootCmd.SetArgs([]string{"gcp", "projects", "remove", "--help"})
+	defer rootCmd.SetArgs([]string{})
+
+	err := rootCmd.Execute()
+	require.NoError(t, err)
+}
+
+func TestGcpProjectsRemoveRequiresArg(t *testing.T) {
+	// Remove command should require exactly 1 argument
+	require.NotNil(t, gcpProjectsRemoveCmd.Args)
+
+	// Test that Args is set to ExactArgs(1)
+	err := gcpProjectsRemoveCmd.Args(gcpProjectsRemoveCmd, []string{})
+	require.Error(t, err, "remove command should require an argument")
+
+	err = gcpProjectsRemoveCmd.Args(gcpProjectsRemoveCmd, []string{"project-name"})
+	require.NoError(t, err, "remove command should accept one argument")
+
+	err = gcpProjectsRemoveCmd.Args(gcpProjectsRemoveCmd, []string{"project1", "project2"})
+	require.Error(t, err, "remove command should not accept multiple arguments")
+}
+
+func TestGcpProjectsRefreshCommand(t *testing.T) {
+	require.NotNil(t, gcpProjectsRefreshCmd)
+	require.Equal(t, "refresh <project-name>", gcpProjectsRefreshCmd.Use)
+	require.NotEmpty(t, gcpProjectsRefreshCmd.Short)
+	require.NotEmpty(t, gcpProjectsRefreshCmd.Long)
+	require.NotNil(t, gcpProjectsRefreshCmd.Run)
+	require.NotNil(t, gcpProjectsRefreshCmd.ValidArgsFunction)
+}
+
+func TestGcpProjectsRefreshCommandStructure(t *testing.T) {
+	// Check refresh command is under projects
+	foundRefresh := false
+	for _, cmd := range gcpProjectsCmd.Commands() {
+		if cmd.Name() == "refresh" {
+			foundRefresh = true
+			break
+		}
+	}
+	require.True(t, foundRefresh, "refresh command not found under projects command")
+}
+
+func TestGcpProjectsRefreshHelp(t *testing.T) {
+	rootCmd.SetArgs([]string{"gcp", "projects", "refresh", "--help"})
+	defer rootCmd.SetArgs([]string{})
+
+	err := rootCmd.Execute()
+	require.NoError(t, err)
+}
+
+func TestGcpProjectsRefreshRequiresArg(t *testing.T) {
+	// Refresh command should require exactly 1 argument
+	require.NotNil(t, gcpProjectsRefreshCmd.Args)
+
+	// Test that Args is set to ExactArgs(1)
+	err := gcpProjectsRefreshCmd.Args(gcpProjectsRefreshCmd, []string{})
+	require.Error(t, err, "refresh command should require an argument")
+
+	err = gcpProjectsRefreshCmd.Args(gcpProjectsRefreshCmd, []string{"project-name"})
+	require.NoError(t, err, "refresh command should accept one argument")
+
+	err = gcpProjectsRefreshCmd.Args(gcpProjectsRefreshCmd, []string{"project1", "project2"})
+	require.Error(t, err, "refresh command should not accept multiple arguments")
+}
+
+func TestGcpProjectsCommandHasAllSubcommands(t *testing.T) {
+	expectedCommands := []string{"import", "remove", "refresh"}
+
+	for _, expected := range expectedCommands {
+		found := false
+		for _, cmd := range gcpProjectsCmd.Commands() {
+			if cmd.Name() == expected {
+				found = true
+				break
+			}
+		}
+		require.True(t, found, "%s command not found under projects command", expected)
+	}
+}
+
+func TestProjectNameCompletion(t *testing.T) {
+	// Test that completion function exists and returns no file completion
+	require.NotNil(t, gcpProjectsRemoveCmd.ValidArgsFunction)
+	require.NotNil(t, gcpProjectsRefreshCmd.ValidArgsFunction)
+
+	// Test that completion doesn't return suggestions when args already provided
+	suggestions, directive := gcpProjectsRemoveCmd.ValidArgsFunction(gcpProjectsRemoveCmd, []string{"existing-arg"}, "")
+	require.Nil(t, suggestions)
+	require.Equal(t, cobra.ShellCompDirectiveNoFileComp, directive)
 }

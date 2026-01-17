@@ -32,6 +32,7 @@ type App struct {
 	crumbs     *tview.TextView
 	statusBar  *tview.TextView
 	flash      *tview.TextView
+	mainFlex   *tview.Flex
 	globalKeys KeyActions
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -86,6 +87,11 @@ func (a *App) setupGlobalKeys() {
 		Action: func(evt *tcell.EventKey) *tcell.EventKey {
 			if evt.Rune() == '?' {
 				a.ShowHelp()
+				return nil
+			}
+			// Shift+R: Refresh Projects
+			if evt.Rune() == 'R' {
+				a.ShowProjectRefresh()
 				return nil
 			}
 			return evt
@@ -154,7 +160,7 @@ func (a *App) buildUI() {
 	a.flash.SetBackgroundColor(a.styles.BgColor)
 
 	// Main layout
-	mainFlex := tview.NewFlex().
+	a.mainFlex = tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(a.header, 1, 0, false).
 		AddItem(a.crumbs, 1, 0, false).
@@ -163,7 +169,7 @@ func (a *App) buildUI() {
 		AddItem(a.flash, 1, 0, false)
 
 	// Set root and capture input
-	a.SetRoot(mainFlex, true)
+	a.SetRoot(a.mainFlex, true)
 	a.SetInputCapture(a.handleGlobalKeys)
 }
 
@@ -242,7 +248,7 @@ func (a *App) updateStatusBar() {
 	}
 
 	// Add global hints
-	hints = append(hints, "<Esc> Back", "<^C> Quit", "<?> Help")
+	hints = append(hints, "<Esc> Back", "<Shift+R> Refresh Projects", "<^C> Quit", "<?> Help")
 
 	// Add cache info
 	projects := a.config.Cache.GetProjects()
@@ -296,6 +302,23 @@ func (a *App) ShowHelp() {
 	if err := a.pageStack.Push(helpView); err != nil {
 		a.Flash("Failed to show help", true)
 	}
+}
+
+// ShowProjectRefresh displays the project refresh popup
+func (a *App) ShowProjectRefresh() {
+	ShowProjectRefreshPopup(a, func() {
+		// Restore original UI and refresh current view
+		a.SetRoot(a.mainFlex, true)
+		a.SetInputCapture(a.handleGlobalKeys)
+
+		// Refresh the current component to show updated data
+		if comp := a.pageStack.Top(); comp != nil {
+			comp.Stop()
+			comp.Start(a.ctx)
+		}
+
+		a.updateStatusBar()
+	})
 }
 
 // GetConfig returns the app configuration

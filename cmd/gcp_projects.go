@@ -50,10 +50,110 @@ Examples:
 	},
 }
 
+var gcpProjectsRemoveCmd = &cobra.Command{
+	Use:   "remove <project-name>",
+	Short: "Remove a GCP project from cache",
+	Long: `Remove a GCP project and all its associated cached resources.
+
+This removes the project from the cache along with all related data:
+  - The project entry itself
+  - All cached instances for this project
+  - All cached zones for this project
+  - All cached subnets for this project
+
+Examples:
+  compass gcp projects remove my-project`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		runProjectsRemove(args[0])
+	},
+	ValidArgsFunction: projectNameCompletion,
+}
+
+var gcpProjectsRefreshCmd = &cobra.Command{
+	Use:   "refresh <project-name>",
+	Short: "Refresh cached resources for a GCP project",
+	Long: `Re-scan and update cached resources for a specific GCP project.
+
+This will refresh the cache with current data from GCP:
+  - Zones available in the project
+  - All compute instances
+  - All subnets
+
+The project must already be in the cache. Use 'compass gcp projects import' to add new projects.
+
+Examples:
+  compass gcp projects refresh my-project`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		ctx := cmd.Context()
+		if ctx == nil {
+			ctx = context.Background()
+		}
+
+		runProjectsRefresh(ctx, args[0])
+	},
+	ValidArgsFunction: projectNameCompletion,
+}
+
 func init() {
 	gcpCmd.AddCommand(gcpProjectsCmd)
 	gcpProjectsCmd.AddCommand(gcpProjectsImportCmd)
+	gcpProjectsCmd.AddCommand(gcpProjectsRemoveCmd)
+	gcpProjectsCmd.AddCommand(gcpProjectsRefreshCmd)
 	gcpProjectsImportCmd.Flags().StringVarP(&regexFilter, "regex", "r", "", "Regex pattern to filter projects (bypasses interactive selection)")
+}
+
+// projectNameCompletion provides shell completion for cached project names.
+func projectNameCompletion(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if len(args) != 0 {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+
+	cache, err := gcp.LoadCache()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+
+	projects := cache.GetProjects()
+
+	return projects, cobra.ShellCompDirectiveNoFileComp
+}
+
+// runProjectsRemove removes a project and all its cached resources.
+func runProjectsRemove(projectName string) {
+	cache, err := gcp.LoadCache()
+	if err != nil {
+		logger.Log.Fatalf("Failed to load cache: %v", err)
+	}
+
+	if !cache.HasProject(projectName) {
+		logger.Log.Fatalf("Project '%s' is not in the cache", projectName)
+	}
+
+	if err := cache.DeleteProject(projectName); err != nil {
+		logger.Log.Fatalf("Failed to remove project: %v", err)
+	}
+
+	pterm.Success.Printfln("Project '%s' removed from cache", projectName)
+}
+
+// runProjectsRefresh rescans and updates cached resources for a specific project.
+func runProjectsRefresh(ctx context.Context, projectName string) {
+	cache, err := gcp.LoadCache()
+	if err != nil {
+		logger.Log.Fatalf("Failed to load cache: %v", err)
+	}
+
+	if !cache.HasProject(projectName) {
+		logger.Log.Fatalf("Project '%s' is not in the cache. Use 'compass gcp projects import' to add it first.", projectName)
+	}
+
+	logger.Log.Infof("Refreshing cached resources for project: %s", projectName)
+
+	scanProjectResources(ctx, []string{projectName})
+
+	pterm.Success.Printfln("Project '%s' cache refreshed!", projectName)
 }
 
 // runProjectsImport discovers all accessible GCP projects and prompts the user to select
