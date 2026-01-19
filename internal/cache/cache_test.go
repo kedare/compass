@@ -480,3 +480,191 @@ func TestSetAddsProjectAutomatically(t *testing.T) {
 	projects := cache.GetProjects()
 	require.Contains(t, projects, "auto-added-project")
 }
+
+func TestHasProject(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Project doesn't exist yet
+	require.False(t, cache.HasProject("test-project"))
+
+	// Add project
+	err := cache.AddProject("test-project")
+	require.NoError(t, err)
+
+	// Now it exists
+	require.True(t, cache.HasProject("test-project"))
+
+	// Non-existent project
+	require.False(t, cache.HasProject("non-existent"))
+}
+
+func TestHasProject_EmptyName(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Empty name should return false
+	require.False(t, cache.HasProject(""))
+}
+
+func TestHasProject_NoOpCache(t *testing.T) {
+	cache := newNoOpCache()
+
+	// No-op cache always returns false
+	require.False(t, cache.HasProject("any-project"))
+}
+
+func TestDeleteProject(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Setup: Add a project with instances, zones, and subnets
+	err := cache.AddProject("test-project")
+	require.NoError(t, err)
+
+	// Add instances
+	err = cache.Set("instance-1", &LocationInfo{
+		Project: "test-project",
+		Zone:    "us-central1-a",
+		Type:    ResourceTypeInstance,
+	})
+	require.NoError(t, err)
+
+	err = cache.Set("instance-2", &LocationInfo{
+		Project: "test-project",
+		Zone:    "us-central1-b",
+		Type:    ResourceTypeInstance,
+	})
+	require.NoError(t, err)
+
+	// Add zones
+	err = cache.SetZones("test-project", []string{"us-central1-a", "us-central1-b"})
+	require.NoError(t, err)
+
+	// Add subnets
+	err = cache.RememberSubnet(&SubnetEntry{
+		Project:     "test-project",
+		Network:     "default",
+		Region:      "us-central1",
+		Name:        "subnet-1",
+		PrimaryCIDR: "10.0.0.0/24",
+	})
+	require.NoError(t, err)
+
+	// Verify everything exists
+	require.True(t, cache.HasProject("test-project"))
+	_, found := cache.Get("instance-1")
+	require.True(t, found)
+	_, found = cache.Get("instance-2")
+	require.True(t, found)
+	zones, ok := cache.GetZones("test-project")
+	require.True(t, ok)
+	require.Len(t, zones, 2)
+
+	// Delete the project
+	err = cache.DeleteProject("test-project")
+	require.NoError(t, err)
+
+	// Verify everything is gone
+	require.False(t, cache.HasProject("test-project"))
+	_, found = cache.Get("instance-1")
+	require.False(t, found)
+	_, found = cache.Get("instance-2")
+	require.False(t, found)
+	_, ok = cache.GetZones("test-project")
+	require.False(t, ok)
+
+	// Verify subnets are deleted (check via direct DB query)
+	var subnetCount int
+	err = cache.db.QueryRow(`SELECT COUNT(*) FROM subnets WHERE project = ?`, "test-project").Scan(&subnetCount)
+	require.NoError(t, err)
+	require.Equal(t, 0, subnetCount)
+}
+
+func TestDeleteProject_NonExistent(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Deleting a non-existent project should not error
+	err := cache.DeleteProject("non-existent-project")
+	require.NoError(t, err)
+}
+
+func TestDeleteProject_EmptyName(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Empty name should be a no-op
+	err := cache.DeleteProject("")
+	require.NoError(t, err)
+}
+
+func TestDeleteProject_NoOpCache(t *testing.T) {
+	cache := newNoOpCache()
+
+	// No-op cache should not error
+	err := cache.DeleteProject("any-project")
+	require.NoError(t, err)
+}
+
+func TestDeleteProject_PreservesOtherProjects(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Setup: Add two projects with instances
+	err := cache.AddProject("project-a")
+	require.NoError(t, err)
+	err = cache.AddProject("project-b")
+	require.NoError(t, err)
+
+	err = cache.Set("instance-a", &LocationInfo{
+		Project: "project-a",
+		Zone:    "us-central1-a",
+		Type:    ResourceTypeInstance,
+	})
+	require.NoError(t, err)
+
+	err = cache.Set("instance-b", &LocationInfo{
+		Project: "project-b",
+		Zone:    "us-east1-b",
+		Type:    ResourceTypeInstance,
+	})
+	require.NoError(t, err)
+
+	err = cache.SetZones("project-a", []string{"us-central1-a"})
+	require.NoError(t, err)
+	err = cache.SetZones("project-b", []string{"us-east1-b"})
+	require.NoError(t, err)
+
+	// Delete project-a
+	err = cache.DeleteProject("project-a")
+	require.NoError(t, err)
+
+	// project-a should be gone
+	require.False(t, cache.HasProject("project-a"))
+	_, found := cache.Get("instance-a")
+	require.False(t, found)
+	_, ok := cache.GetZones("project-a")
+	require.False(t, ok)
+
+	// project-b should still exist
+	require.True(t, cache.HasProject("project-b"))
+	_, found = cache.Get("instance-b")
+	require.True(t, found)
+	zones, ok := cache.GetZones("project-b")
+	require.True(t, ok)
+	require.Len(t, zones, 1)
+}
+
+func TestDeleteProject_ThenAddAgain(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Add project
+	err := cache.AddProject("test-project")
+	require.NoError(t, err)
+	require.True(t, cache.HasProject("test-project"))
+
+	// Delete project
+	err = cache.DeleteProject("test-project")
+	require.NoError(t, err)
+	require.False(t, cache.HasProject("test-project"))
+
+	// Add project again
+	err = cache.AddProject("test-project")
+	require.NoError(t, err)
+	require.True(t, cache.HasProject("test-project"))
+}

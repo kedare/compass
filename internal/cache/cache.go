@@ -1032,6 +1032,81 @@ func (c *Cache) Delete(resourceName string) error {
 	return nil
 }
 
+// DeleteProject removes a project and all its associated resources from the cache.
+// This includes entries from the projects, instances, zones, and subnets tables.
+func (c *Cache) DeleteProject(projectName string) error {
+	if c.isNoOp() {
+		return nil
+	}
+
+	if projectName == "" {
+		return nil
+	}
+
+	start := time.Now()
+	defer func() {
+		c.stats.recordOperation("DeleteProject", time.Since(start))
+	}()
+
+	tx, err := c.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	tables := []struct {
+		name   string
+		column string
+	}{
+		{"instances", "project"},
+		{"zones", "project"},
+		{"subnets", "project"},
+		{"projects", "name"},
+	}
+
+	for _, table := range tables {
+		query := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", table.name, table.column)
+		logSQL(query, projectName)
+
+		result, err := tx.Exec(query, projectName)
+		if err != nil {
+			return fmt.Errorf("failed to delete from %s: %w", table.name, err)
+		}
+
+		count, _ := result.RowsAffected()
+		if count > 0 {
+			logger.Log.Debugf("Deleted %d entries from %s for project %s", count, table.name, projectName)
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	logger.Log.Debugf("Deleted project from cache: %s", projectName)
+
+	return nil
+}
+
+// HasProject checks if a project exists in the cache.
+func (c *Cache) HasProject(projectName string) bool {
+	if c.isNoOp() || projectName == "" {
+		return false
+	}
+
+	var timestamp int64
+	logSQL("getProject", projectName)
+
+	err := c.stmts.getProject.QueryRow(projectName).Scan(&timestamp)
+
+	return err == nil
+}
+
 // Clear removes all entries from the cache.
 func (c *Cache) Clear() error {
 	if c.isNoOp() {
