@@ -25,18 +25,19 @@ type Config struct {
 // App is the main TUI application
 type App struct {
 	*tview.Application
-	config     *Config
-	styles     *Styles
-	pageStack  *PageStack
-	header     *tview.TextView
-	crumbs     *tview.TextView
-	statusBar  *tview.TextView
-	flash      *tview.TextView
-	mainFlex   *tview.Flex
-	globalKeys KeyActions
-	ctx        context.Context
-	cancel     context.CancelFunc
-	flashMx    sync.Mutex
+	config      *Config
+	styles      *Styles
+	pageStack   *PageStack
+	header      *tview.TextView
+	crumbs      *tview.TextView
+	statusBar   *tview.TextView
+	flash       *tview.TextView
+	mainFlex    *tview.Flex
+	globalKeys  KeyActions
+	ctx         context.Context
+	cancel      context.CancelFunc
+	flashMx     sync.Mutex
+	popupActive bool // Tracks if a popup is currently shown
 }
 
 // NewApp creates a new TUI application
@@ -175,6 +176,11 @@ func (a *App) buildUI() {
 
 // handleGlobalKeys handles global keyboard events
 func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
+	// When a popup is active, pass all events through to let the popup handle them
+	if a.popupActive {
+		return event
+	}
+
 	// Try global keys first
 	if event.Key() == tcell.KeyRune {
 		if action, ok := a.globalKeys.Get(tcell.KeyRune); ok {
@@ -306,15 +312,22 @@ func (a *App) ShowHelp() {
 
 // ShowProjectRefresh displays the project refresh popup
 func (a *App) ShowProjectRefresh() {
+	// Mark popup as active so handleGlobalKeys passes events through
+	a.popupActive = true
+
 	ShowProjectRefreshPopup(a, func() {
-		// Restore original UI and refresh current view
+		// Mark popup as inactive
+		a.popupActive = false
+
+		// Restore original UI
 		a.SetRoot(a.mainFlex, true)
-		a.SetInputCapture(a.handleGlobalKeys)
 
 		// Refresh the current component to show updated data
 		if comp := a.pageStack.Top(); comp != nil {
 			comp.Stop()
 			comp.Start(a.ctx)
+			// Restore focus to the component's primitive
+			a.SetFocus(comp.Primitive())
 		}
 
 		a.updateStatusBar()

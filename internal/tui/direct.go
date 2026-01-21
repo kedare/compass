@@ -65,22 +65,598 @@ func (r *outputRedirector) OrigStderr() *os.File {
 
 // Status bar message constants
 const (
-	statusDefault             = " [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]v[-] VPN  [yellow]c[-] connectivity  [yellow]Shift+S[-] search  [yellow]i[-] IP lookup  [yellow]Esc[-] quit  [yellow]?[-] help"
-	statusFilterActive        = " [green]Filter active: '%s'[-]  [yellow]Esc[-] clear  [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] edit  [yellow]r[-] refresh  [yellow]v[-] VPN  [yellow]c[-] connectivity"
-	statusFilterMode          = " [yellow]Type to filter, Enter to apply, Esc to cancel[-]"
-	statusFilterCleared       = " [yellow]s[-] SSH  [yellow]d[-] details  [yellow]/[-] filter  [yellow]r[-] refresh  [yellow]Esc[-] quit  [yellow]?[-] help"
-	statusNoSelection         = " [red]No instance selected[-]"
-	statusDisconnected        = " [green]Disconnected from %s[-]"
-	statusRefreshing          = " [yellow]Refreshing instance data from GCP...[-]"
-	statusRefreshed           = " [green]Refreshed![-]"
-	statusLoadingDetails      = " [yellow]Loading instance details...[-]"
-	statusLoadingVPN          = " [yellow]Loading VPN view...[-]"
-	statusLoadingConnectivity = " [yellow]Loading connectivity tests...[-]"
-	statusErrorDetails        = " [red]Error loading details: %v[-]"
-	statusErrorClient         = " [red]Error creating client: %v[-]"
-	statusErrorVPN            = " [red]Error loading VPN view: %v[-]"
-	statusErrorConnectivity   = " [red]Error loading connectivity tests: %v[-]"
+	statusDefault           = " [yellow]s[-] SSH  [yellow]d[-] details  [yellow]b[-] browser  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]v[-] VPN  [yellow]c[-] connectivity  [yellow]Shift+S[-] search  [yellow]i[-] IP lookup  [yellow]Esc[-] quit  [yellow]?[-] help"
+	statusFilterActive      = " [green]Filter active: '%s'[-]  [yellow]Esc[-] clear  [yellow]s[-] SSH  [yellow]d[-] details  [yellow]b[-] browser  [yellow]/[-] edit"
+	statusFilterMode        = " [yellow]Type to filter, Enter to apply, Esc to cancel[-]"
+	statusNoSelection       = " [red]No instance selected[-]"
+	statusDisconnected      = " [green]Disconnected from %s[-]"
+	statusLoadingDetails    = " [yellow]Loading instance details...[-]"
+	statusErrorDetails      = " [red]Error loading details: %v[-]"
+	statusErrorClient       = " [red]Error creating client: %v[-]"
+	statusErrorVPN          = " [red]Error loading VPN view: %v[-]"
+	statusErrorConnectivity = " [red]Error loading connectivity tests: %v[-]"
 )
+
+// tuiState holds all mutable state for the TUI
+type tuiState struct {
+	app           *tview.Application
+	cache         *cache.Cache
+	ctx           context.Context
+	outputRedir   *outputRedirector
+	parallelism   int
+	allInstances  []instanceData
+	isRefreshing  bool
+	currentFilter string
+
+	// UI components
+	table       *tview.Table
+	flex        *tview.Flex
+	status      *tview.TextView
+	filterInput *tview.InputField
+
+	// Keybinding manager
+	kb *KeyBindings
+}
+
+// restoreMainView restores the main instance view after a modal/view
+func (s *tuiState) restoreMainView() {
+	s.kb.SetMode(ModeNormal)
+	s.app.SetRoot(s.flex, true).SetFocus(s.table)
+	s.updateStatusBar()
+}
+
+// updateStatusBar updates the status bar based on current state
+func (s *tuiState) updateStatusBar() {
+	if s.currentFilter != "" {
+		s.status.SetText(fmt.Sprintf(statusFilterActive, s.currentFilter))
+	} else {
+		s.status.SetText(statusDefault)
+	}
+}
+
+// flashStatus shows a temporary status message
+func (s *tuiState) flashStatus(msg string, duration time.Duration) {
+	s.status.SetText(msg)
+	time.AfterFunc(duration, func() {
+		s.app.QueueUpdateDraw(func() {
+			s.updateStatusBar()
+		})
+	})
+}
+
+// getSelectedInstance returns the currently selected instance or nil
+func (s *tuiState) getSelectedInstance() *instanceData {
+	row, _ := s.table.GetSelection()
+	if row <= 0 || row >= s.table.GetRowCount() {
+		return nil
+	}
+
+	nameCell := s.table.GetCell(row, 0)
+	projectCell := s.table.GetCell(row, 1)
+	zoneCell := s.table.GetCell(row, 2)
+	if nameCell == nil || projectCell == nil || zoneCell == nil {
+		return nil
+	}
+
+	instanceName := nameCell.Text
+	instanceProject := projectCell.Text
+	instanceZone := zoneCell.Text
+
+	for i := range s.allInstances {
+		if s.allInstances[i].Name == instanceName &&
+			s.allInstances[i].Project == instanceProject &&
+			s.allInstances[i].Zone == instanceZone {
+			return &s.allInstances[i]
+		}
+	}
+	return nil
+}
+
+// loadInstances loads instances from cache or GCP
+func (s *tuiState) loadInstances(useLiveData bool) {
+	s.isRefreshing = true
+	s.allInstances = []instanceData{}
+
+	projects := s.cache.GetProjects()
+	for _, project := range projects {
+		locations, ok := s.cache.GetLocationsByProject(project)
+		if !ok {
+			continue
+		}
+
+		for _, location := range locations {
+			if location.Type == "instance" || location.Type == "mig" {
+				inst := instanceData{
+					Name:    location.Name,
+					Project: project,
+					Zone:    location.Location,
+					Status:  "[gray]LOADING...[-]",
+					IsMIG:   location.Type == "mig",
+				}
+
+				if useLiveData {
+					projectClient, err := gcp.NewClient(s.ctx, project)
+					if err == nil {
+						gcpInst, err := projectClient.FindInstance(s.ctx, location.Name, location.Location)
+						if err == nil {
+							inst.Status = formatStatus(gcpInst.Status)
+							inst.ExternalIP = gcpInst.ExternalIP
+							inst.InternalIP = gcpInst.InternalIP
+							inst.CanUseIAP = gcpInst.CanUseIAP
+							inst.HasLiveData = true
+						} else {
+							inst.Status = "[red]ERROR[-]"
+						}
+					} else {
+						inst.Status = "[red]ERROR[-]"
+					}
+				} else {
+					inst.Status = "[yellow]CACHED[-]"
+					inst.HasLiveData = false
+				}
+
+				inst.SearchText = strings.ToLower(inst.Name + " " + inst.Project + " " + inst.Zone)
+				s.allInstances = append(s.allInstances, inst)
+			}
+		}
+	}
+	s.isRefreshing = false
+}
+
+// updateTable updates the table with the current filter
+func (s *tuiState) updateTable() {
+	filter := s.currentFilter
+
+	// Clear existing rows (keep header)
+	for row := s.table.GetRowCount() - 1; row > 0; row-- {
+		s.table.RemoveRow(row)
+	}
+
+	currentRow := 1
+	matchCount := 0
+
+	for _, inst := range s.allInstances {
+		if filter != "" {
+			filterLower := strings.ToLower(filter)
+			nameLower := strings.ToLower(inst.Name)
+			projectLower := strings.ToLower(inst.Project)
+			zoneLower := strings.ToLower(inst.Zone)
+
+			nameMatch := strings.Contains(nameLower, filterLower)
+			projectMatch := strings.Contains(projectLower, filterLower)
+			zoneMatch := strings.Contains(zoneLower, filterLower)
+
+			if !nameMatch && !projectMatch && !zoneMatch {
+				continue
+			}
+		}
+
+		s.table.SetCell(currentRow, 0, tview.NewTableCell(inst.Name).SetExpansion(1))
+		s.table.SetCell(currentRow, 1, tview.NewTableCell(inst.Project).SetExpansion(1))
+		s.table.SetCell(currentRow, 2, tview.NewTableCell(inst.Zone).SetExpansion(1))
+		typeStr := "Instance"
+		if inst.IsMIG {
+			typeStr = "MIG"
+		}
+		s.table.SetCell(currentRow, 3, tview.NewTableCell(typeStr).SetExpansion(1))
+		s.table.SetCell(currentRow, 4, tview.NewTableCell(inst.Status).SetExpansion(1))
+		currentRow++
+		matchCount++
+	}
+
+	if filter != "" {
+		s.table.SetTitle(fmt.Sprintf(" Instances (%d/%d matched) ", matchCount, len(s.allInstances)))
+	} else {
+		s.table.SetTitle(fmt.Sprintf(" Compass Instances (%d) ", len(s.allInstances)))
+	}
+
+	if matchCount > 0 {
+		s.table.Select(1, 0)
+	}
+}
+
+// Action handlers
+
+func (s *tuiState) actionSSH() bool {
+	inst := s.getSelectedInstance()
+	if inst == nil {
+		s.flashStatus(statusNoSelection, 2*time.Second)
+		return true
+	}
+
+	instName := inst.Name
+	instProject := inst.Project
+	instZone := inst.Zone
+	isMIG := inst.IsMIG
+
+	if isMIG {
+		s.status.SetText(fmt.Sprintf(" [yellow]Resolving MIG %s...[-]", instName))
+		go s.resolveMIGAndSSH(instName, instProject, instZone)
+	} else {
+		defaultUseIAP := (inst.HasLiveData && inst.ExternalIP == "") || inst.CanUseIAP
+		cachedIAP := LoadIAPPreference(instName)
+		s.showSSHModal(instName, instProject, instZone, defaultUseIAP, cachedIAP)
+	}
+	return true
+}
+
+func (s *tuiState) resolveMIGAndSSH(migName, project, zone string) {
+	projectClient, err := gcp.NewClient(s.ctx, project)
+	if err != nil {
+		s.app.QueueUpdateDraw(func() {
+			s.flashStatus(fmt.Sprintf(" [red]Error creating client: %v[-]", err), 3*time.Second)
+		})
+		return
+	}
+
+	instance, err := projectClient.FindInstanceInMIG(s.ctx, migName, zone)
+	if err != nil {
+		s.app.QueueUpdateDraw(func() {
+			s.flashStatus(fmt.Sprintf(" [red]Error resolving MIG: %v[-]", err), 3*time.Second)
+		})
+		return
+	}
+
+	s.app.QueueUpdateDraw(func() {
+		cachedIAP := LoadIAPPreference(instance.Name)
+		s.showSSHModal(instance.Name, project, instance.Zone, instance.CanUseIAP, cachedIAP)
+	})
+}
+
+func (s *tuiState) showSSHModal(instName, instProject, instZone string, defaultUseIAP bool, cachedIAP *bool) {
+	s.kb.SetMode(ModeModal)
+	ShowSSHOptionsModal(s.app, instName, defaultUseIAP, cachedIAP,
+		func(opts SSHOptions) {
+			s.app.SetRoot(s.flex, true)
+			s.app.SetFocus(s.table)
+			s.kb.SetMode(ModeNormal)
+
+			RunSSHSession(s.app, instName, instProject, instZone, opts, s.outputRedir)
+
+			s.flashStatus(fmt.Sprintf(statusDisconnected, instName), 3*time.Second)
+		},
+		func() {
+			s.restoreMainView()
+		},
+	)
+}
+
+func (s *tuiState) actionShowDetails() bool {
+	inst := s.getSelectedInstance()
+	if inst == nil {
+		s.flashStatus(statusNoSelection, 2*time.Second)
+		return true
+	}
+
+	s.status.SetText(statusLoadingDetails)
+	go s.loadAndShowDetails(inst)
+	return true
+}
+
+func (s *tuiState) loadAndShowDetails(inst *instanceData) {
+	projectClient, err := gcp.NewClient(s.ctx, inst.Project)
+	if err != nil {
+		s.app.QueueUpdateDraw(func() {
+			s.flashStatus(fmt.Sprintf(statusErrorClient, err), 3*time.Second)
+		})
+		return
+	}
+
+	gcpInst, err := projectClient.FindInstance(s.ctx, inst.Name, inst.Zone)
+	s.app.QueueUpdateDraw(func() {
+		if err != nil {
+			s.flashStatus(fmt.Sprintf(statusErrorDetails, err), 3*time.Second)
+			return
+		}
+
+		detailText := FormatInstanceDetails(gcpInst, inst.Project)
+
+		detailView := tview.NewTextView().
+			SetDynamicColors(true).
+			SetText(detailText).
+			SetScrollable(true).
+			SetWordWrap(true)
+		detailView.SetBorder(true).SetTitle(fmt.Sprintf(" Instance: %s ", inst.Name))
+
+		detailStatus := tview.NewTextView().
+			SetDynamicColors(true).
+			SetText(" [yellow]Esc[-] back")
+
+		detailFlex := tview.NewFlex().
+			SetDirection(tview.FlexRow).
+			AddItem(detailView, 0, 1, true).
+			AddItem(detailStatus, 1, 0, false)
+
+		detailView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			if event.Key() == tcell.KeyEscape {
+				s.restoreMainView()
+				return nil
+			}
+			return event
+		})
+
+		s.kb.SetMode(ModeModal)
+		s.app.SetRoot(detailFlex, true).SetFocus(detailView)
+	})
+}
+
+func (s *tuiState) actionEnterFilterMode() bool {
+	s.kb.SetMode(ModeFilter)
+	s.filterInput.SetText(s.currentFilter)
+	s.flex.Clear()
+	s.flex.AddItem(s.filterInput, 1, 0, true)
+	s.flex.AddItem(s.table, 0, 1, false)
+	s.flex.AddItem(s.status, 1, 0, false)
+	s.app.SetFocus(s.filterInput)
+	s.status.SetText(statusFilterMode)
+	return true
+}
+
+func (s *tuiState) actionRefreshProjects() bool {
+	s.kb.SetMode(ModeModal)
+	showProjectRefreshPopupDirect(s.app, s.cache,
+		func(selectedProjects []string) {
+			s.kb.SetMode(ModeNormal)
+			refreshCtx, cancelRefresh := context.WithCancel(s.ctx)
+
+			_, spinnerDone := showLoadingScreen(s.app, " Refreshing Projects ", fmt.Sprintf("Refreshing %d project(s)...", len(selectedProjects)), func() {
+				cancelRefresh()
+				s.restoreMainView()
+				s.flashStatus(" [yellow]Refresh cancelled[-]", 2*time.Second)
+			})
+
+			go func() {
+				for _, project := range selectedProjects {
+					if refreshCtx.Err() != nil {
+						break
+					}
+					projectClient, err := gcp.NewClient(s.ctx, project)
+					if err != nil {
+						continue
+					}
+					_, _ = projectClient.ScanProjectResources(s.ctx, nil)
+				}
+
+				s.loadInstances(false)
+
+				s.app.QueueUpdateDraw(func() {
+					select {
+					case spinnerDone <- true:
+					default:
+					}
+					if refreshCtx.Err() == context.Canceled {
+						return
+					}
+					s.app.SetRoot(s.flex, true).SetFocus(s.table)
+					s.updateTable()
+					s.flashStatus(fmt.Sprintf(" [green]Refreshed %d project(s)[-]", len(selectedProjects)), 2*time.Second)
+				})
+			}()
+		},
+		func() {
+			s.restoreMainView()
+		},
+	)
+	return true
+}
+
+func (s *tuiState) actionShowHelp() bool {
+	helpText := `[yellow::b]Compass TUI - Keyboard Shortcuts[-:-:-]
+
+[yellow]Navigation[-]
+  [white]↑/k[-]           Move selection up
+  [white]↓/j[-]           Move selection down
+  [white]Home/g[-]        Jump to first item
+  [white]End/G[-]         Jump to last item
+  [white]PgUp[-]          Page up
+  [white]PgDn[-]          Page down
+
+[yellow]Instance Actions[-]
+  [white]s[-]             SSH to selected instance
+  [white]d[-]             Show instance details
+  [white]b[-]             Open in Cloud Console (browser)
+  [white]Shift+R[-]       Refresh project data from GCP
+
+[yellow]Views[-]
+  [white]v[-]             Switch to VPN view
+  [white]c[-]             Switch to connectivity tests view
+  [white]Shift+S[-]       Switch to global search view
+  [white]i[-]             Switch to IP lookup view
+
+[yellow]Filtering[-]
+  [white]/[-]             Enter filter mode
+  [white]Enter[-]         Apply filter (in filter mode)
+  [white]Esc[-]           Cancel/clear filter, or quit TUI
+
+[yellow]General[-]
+  [white]?[-]             Show this help
+  [white]q[-]             Quit
+  [white]Ctrl+C[-]        Quit
+  [white]Esc[-]           Close modals, clear filter, or quit
+
+[darkgray]Press Esc or ? to close this help[-]`
+
+	helpView := tview.NewTextView().
+		SetDynamicColors(true).
+		SetText(helpText).
+		SetScrollable(true)
+	helpView.SetBorder(true).
+		SetTitle(" Help - Keyboard Shortcuts ").
+		SetTitleAlign(tview.AlignCenter)
+
+	helpStatus := tview.NewTextView().
+		SetDynamicColors(true).
+		SetText(" [yellow]Esc[-] back  [yellow]?[-] close help")
+
+	helpFlex := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(helpView, 0, 1, true).
+		AddItem(helpStatus, 1, 0, false)
+
+	helpView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape || (event.Key() == tcell.KeyRune && event.Rune() == '?') {
+			s.restoreMainView()
+			return nil
+		}
+		return event
+	})
+
+	s.kb.SetMode(ModeHelp)
+	s.app.SetRoot(helpFlex, true).SetFocus(helpView)
+	return true
+}
+
+func (s *tuiState) actionSwitchToVPN() bool {
+	err := RunVPNView(s.ctx, s.cache, s.app, func() {
+		s.restoreMainView()
+	})
+	if err != nil {
+		s.flashStatus(fmt.Sprintf(statusErrorVPN, err), 3*time.Second)
+	}
+	return true
+}
+
+func (s *tuiState) actionSwitchToConnectivity() bool {
+	err := RunConnectivityView(s.ctx, s.cache, s.app, func() {
+		s.restoreMainView()
+	})
+	if err != nil {
+		s.flashStatus(fmt.Sprintf(statusErrorConnectivity, err), 3*time.Second)
+	}
+	return true
+}
+
+func (s *tuiState) actionSwitchToSearch() bool {
+	s.status.SetText(" [yellow]Loading search view...[-]")
+	go func() {
+		err := RunSearchView(s.ctx, s.cache, s.app, s.outputRedir, s.parallelism, func() {
+			s.restoreMainView()
+		})
+		s.app.QueueUpdateDraw(func() {
+			if err != nil {
+				s.app.SetRoot(s.flex, true).SetFocus(s.table)
+				s.flashStatus(fmt.Sprintf(" [red]Error loading search view: %v[-]", err), 3*time.Second)
+			}
+		})
+	}()
+	return true
+}
+
+func (s *tuiState) actionSwitchToIPLookup() bool {
+	s.status.SetText(" [yellow]Loading IP lookup view...[-]")
+	go func() {
+		err := RunIPLookupView(s.ctx, s.cache, s.app, s.parallelism, func() {
+			s.restoreMainView()
+		})
+		s.app.QueueUpdateDraw(func() {
+			if err != nil {
+				s.app.SetRoot(s.flex, true).SetFocus(s.table)
+				s.flashStatus(fmt.Sprintf(" [red]Error loading IP lookup view: %v[-]", err), 3*time.Second)
+			}
+		})
+	}()
+	return true
+}
+
+func (s *tuiState) actionClearFilterOrQuit() bool {
+	if s.currentFilter != "" {
+		s.currentFilter = ""
+		s.filterInput.SetText("")
+		s.updateTable()
+		s.updateStatusBar() // Show full keybindings legend
+		return true
+	}
+	s.app.Stop()
+	return true
+}
+
+func (s *tuiState) actionOpenInBrowser() bool {
+	inst := s.getSelectedInstance()
+	if inst == nil {
+		s.flashStatus(statusNoSelection, 2*time.Second)
+		return true
+	}
+
+	// Build Cloud Console URL for the instance
+	var url string
+	if inst.IsMIG {
+		// MIG URL
+		url = fmt.Sprintf("https://console.cloud.google.com/compute/instanceGroups/details/%s/%s?project=%s",
+			inst.Zone, inst.Name, inst.Project)
+	} else {
+		// Instance URL
+		url = fmt.Sprintf("https://console.cloud.google.com/compute/instancesDetail/zones/%s/instances/%s?project=%s",
+			inst.Zone, inst.Name, inst.Project)
+	}
+
+	if err := OpenInBrowser(url); err != nil {
+		s.flashStatus(fmt.Sprintf(" [red]Error opening browser: %v[-]", err), 3*time.Second)
+		return true
+	}
+
+	s.flashStatus(" [green]Opened in browser[-]", 2*time.Second)
+	return true
+}
+
+// setupKeybindings configures all keyboard shortcuts
+func (s *tuiState) setupKeybindings() {
+	s.kb = NewKeyBindings()
+
+	// Instance actions (normal mode only)
+	s.kb.RegisterKey('s', "SSH to instance", []ViewMode{ModeNormal}, s.actionSSH)
+	s.kb.RegisterKey('d', "Show details", []ViewMode{ModeNormal}, s.actionShowDetails)
+	s.kb.RegisterKey('b', "Open in browser", []ViewMode{ModeNormal}, s.actionOpenInBrowser)
+	s.kb.RegisterKey('/', "Filter", []ViewMode{ModeNormal}, s.actionEnterFilterMode)
+	s.kb.RegisterKey('R', "Refresh projects", []ViewMode{ModeNormal}, s.actionRefreshProjects)
+	s.kb.RegisterKey('?', "Show help", []ViewMode{ModeNormal}, s.actionShowHelp)
+
+	// View switching (normal mode only)
+	s.kb.RegisterKey('v', "VPN view", []ViewMode{ModeNormal}, s.actionSwitchToVPN)
+	s.kb.RegisterKey('c', "Connectivity view", []ViewMode{ModeNormal}, s.actionSwitchToConnectivity)
+	s.kb.RegisterKey('S', "Search view", []ViewMode{ModeNormal}, s.actionSwitchToSearch)
+	s.kb.RegisterKey('i', "IP lookup view", []ViewMode{ModeNormal}, s.actionSwitchToIPLookup)
+
+	// Quit (normal mode)
+	s.kb.RegisterKey('q', "Quit", []ViewMode{ModeNormal}, func() bool {
+		s.app.Stop()
+		return true
+	})
+
+	// Global keys
+	s.kb.RegisterSpecial(tcell.KeyCtrlC, "Quit", nil, func() bool {
+		s.app.Stop()
+		return true
+	})
+
+	s.kb.RegisterSpecial(tcell.KeyEscape, "Back/Quit", []ViewMode{ModeNormal}, s.actionClearFilterOrQuit)
+}
+
+// createInputCapture creates the main input capture function
+func (s *tuiState) createInputCapture() func(*tcell.EventKey) *tcell.EventKey {
+	return func(event *tcell.EventKey) *tcell.EventKey {
+		// In modal or filter mode, only handle Ctrl+C globally
+		mode := s.kb.GetMode()
+		if mode == ModeModal || mode == ModeFilter {
+			if event.Key() == tcell.KeyCtrlC {
+				s.app.Stop()
+				return nil
+			}
+			return event // Let the modal/filter handle other keys
+		}
+
+		// Don't process during refresh
+		if s.isRefreshing {
+			return event
+		}
+
+		// Try keybindings
+		if s.kb.Handle(event) {
+			return nil
+		}
+
+		return event
+	}
+}
 
 // instanceData holds information about an instance for filtering
 type instanceData struct {
@@ -106,726 +682,245 @@ func RunDirect(c *cache.Cache, parallelism int) error {
 	outputRedir := newOutputRedirector()
 	defer outputRedir.Restore()
 
-	app := tview.NewApplication()
-	ctx := context.Background()
-	// Store all instances for filtering
-	var allInstances []instanceData
-	var isRefreshing bool
-	var modalOpen bool
-
-	// Function to load instances from cache or GCP
-	loadInstances := func(useLiveData bool) {
-		isRefreshing = true
-		allInstances = []instanceData{}
-
-		projects := c.GetProjects()
-		for _, project := range projects {
-			locations, ok := c.GetLocationsByProject(project)
-			if !ok {
-				continue
-			}
-
-			for _, location := range locations {
-				if location.Type == "instance" || location.Type == "mig" {
-					inst := instanceData{
-						Name:    location.Name,
-						Project: project,
-						Zone:    location.Location,
-						Status:  "[gray]LOADING...[-]",
-						IsMIG:   location.Type == "mig",
-					}
-
-					// If live data requested, fetch from GCP
-					if useLiveData {
-						// Create a client for the correct project
-						projectClient, err := gcp.NewClient(ctx, project)
-						if err == nil {
-							gcpInst, err := projectClient.FindInstance(ctx, location.Name, location.Location)
-							if err == nil {
-								inst.Status = formatStatus(gcpInst.Status)
-								inst.ExternalIP = gcpInst.ExternalIP
-								inst.InternalIP = gcpInst.InternalIP
-								inst.CanUseIAP = gcpInst.CanUseIAP
-								inst.HasLiveData = true
-							} else {
-								inst.Status = "[red]ERROR[-]"
-							}
-						} else {
-							inst.Status = "[red]ERROR[-]"
-						}
-					} else {
-						// Use cached data
-						inst.Status = "[yellow]CACHED[-]"
-						inst.HasLiveData = false
-					}
-
-					// Create combined search text
-					inst.SearchText = strings.ToLower(inst.Name + " " + inst.Project + " " + inst.Zone)
-					allInstances = append(allInstances, inst)
-				}
-			}
-		}
-		isRefreshing = false
+	// Initialize state
+	s := &tuiState{
+		app:         tview.NewApplication(),
+		cache:       c,
+		ctx:         context.Background(),
+		outputRedir: outputRedir,
+		parallelism: parallelism,
 	}
 
-	// Initial load from cache (fast)
-	loadInstances(false)
-
-	// Create a simple table
-	table := tview.NewTable().
+	// Create UI components
+	s.table = tview.NewTable().
 		SetBorders(false).
 		SetSelectable(true, false).
 		SetFixed(1, 0)
 
-	table.SetBorder(true).SetTitle(fmt.Sprintf(" Compass Instances (%d) ", len(allInstances)))
-
 	// Add header
-	headers := []string{"Name", "Project", "Zone", "Status"}
+	headers := []string{"Name", "Project", "Zone", "Type", "Status"}
 	for col, header := range headers {
 		cell := tview.NewTableCell(header).
 			SetTextColor(tcell.ColorBlack).
 			SetBackgroundColor(tcell.ColorDarkCyan).
 			SetSelectable(false).
 			SetExpansion(1)
-		table.SetCell(0, col, cell)
+		s.table.SetCell(0, col, cell)
 	}
 
-	// Filter input field (hidden by default)
-	filterInput := tview.NewInputField().
+	// Filter input field
+	s.filterInput = tview.NewInputField().
 		SetLabel(" Filter: ").
 		SetFieldWidth(0).
 		SetFieldBackgroundColor(tcell.ColorBlack).
 		SetLabelColor(tcell.ColorYellow)
 
-	var filterMode bool
-	var currentFilter string
-
-	// Function to update table with current filter
-	updateTable := func(filter string) {
-		// Clear existing rows (keep header)
-		for row := table.GetRowCount() - 1; row > 0; row-- {
-			table.RemoveRow(row)
-		}
-
-		currentRow := 1
-		matchCount := 0
-
-		for _, inst := range allInstances {
-			// Apply filter if active
-			if filter != "" {
-				filterLower := strings.ToLower(filter)
-				nameLower := strings.ToLower(inst.Name)
-				projectLower := strings.ToLower(inst.Project)
-				zoneLower := strings.ToLower(inst.Zone)
-
-				// Use substring matching (contains) for exact matches
-				nameMatch := strings.Contains(nameLower, filterLower)
-				projectMatch := strings.Contains(projectLower, filterLower)
-				zoneMatch := strings.Contains(zoneLower, filterLower)
-
-				// Match if any field contains the filter
-				if !nameMatch && !projectMatch && !zoneMatch {
-					continue
-				}
-			}
-
-			table.SetCell(currentRow, 0, tview.NewTableCell(inst.Name).SetExpansion(1))
-			table.SetCell(currentRow, 1, tview.NewTableCell(inst.Project).SetExpansion(1))
-			table.SetCell(currentRow, 2, tview.NewTableCell(inst.Zone).SetExpansion(1))
-			table.SetCell(currentRow, 3, tview.NewTableCell(inst.Status).SetExpansion(1))
-			currentRow++
-			matchCount++
-		}
-
-		// Update title with match count
-		if filter != "" {
-			table.SetTitle(fmt.Sprintf(" Instances (%d/%d matched) ", matchCount, len(allInstances)))
-		} else {
-			table.SetTitle(fmt.Sprintf(" Compass Instances (%d) ", len(allInstances)))
-		}
-
-		// Select first data row if available
-		if matchCount > 0 {
-			table.Select(1, 0)
-		}
-	}
-
-	// Initial table population
-	updateTable("")
-
 	// Status bar
-	status := tview.NewTextView().
+	s.status = tview.NewTextView().
 		SetDynamicColors(true).
 		SetText(statusDefault)
 
 	// Layout
-	flex := tview.NewFlex().
+	s.flex = tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(table, 0, 1, true).
-		AddItem(status, 1, 0, false)
+		AddItem(s.table, 0, 1, true).
+		AddItem(s.status, 1, 0, false)
 
 	// Setup filter input handlers
-	filterInput.SetDoneFunc(func(key tcell.Key) {
+	s.filterInput.SetDoneFunc(func(key tcell.Key) {
 		switch key {
 		case tcell.KeyEnter:
-			// Apply filter and exit filter mode
-			currentFilter = filterInput.GetText()
-			updateTable(currentFilter)
-			filterMode = false
-			flex.RemoveItem(filterInput)
-			app.SetFocus(table)
-			if currentFilter != "" {
-				status.SetText(fmt.Sprintf(statusFilterActive, currentFilter))
-			} else {
-				status.SetText(statusDefault)
-			}
+			s.currentFilter = s.filterInput.GetText()
+			s.updateTable()
+			s.kb.SetMode(ModeNormal)
+			s.flex.Clear()
+			s.flex.AddItem(s.table, 0, 1, true)
+			s.flex.AddItem(s.status, 1, 0, false)
+			s.app.SetFocus(s.table)
+			s.updateStatusBar()
 		case tcell.KeyEscape:
-			// Cancel filter mode without applying
-			filterInput.SetText(currentFilter)
-			filterMode = false
-			flex.RemoveItem(filterInput)
-			app.SetFocus(table)
-			if currentFilter != "" {
-				status.SetText(fmt.Sprintf(statusFilterActive, currentFilter))
-			} else {
-				status.SetText(statusDefault)
-			}
+			s.filterInput.SetText(s.currentFilter)
+			s.kb.SetMode(ModeNormal)
+			s.flex.Clear()
+			s.flex.AddItem(s.table, 0, 1, true)
+			s.flex.AddItem(s.status, 1, 0, false)
+			s.app.SetFocus(s.table)
+			s.updateStatusBar()
 		}
 	})
 
 	// Update table as user types (live fuzzy search)
-	filterInput.SetChangedFunc(func(text string) {
-		updateTable(text)
+	s.filterInput.SetChangedFunc(func(text string) {
+		s.currentFilter = text
+		s.updateTable()
 	})
 
-	// Setup keyboard - store reference so we can restore it later
-	var mainInputCapture func(event *tcell.EventKey) *tcell.EventKey
-	mainInputCapture = func(event *tcell.EventKey) *tcell.EventKey {
-		// If a modal is open, let it handle all keys (except Ctrl+C)
-		if modalOpen && event.Key() != tcell.KeyCtrlC {
-			return event
-		}
+	// Load initial data
+	s.loadInstances(false)
+	s.updateTable()
+	s.table.SetBorder(true)
 
-		// If in filter mode, let the input field handle it
-		if filterMode {
-			return event
-		}
+	// Setup keybindings
+	s.setupKeybindings()
 
-		// Don't allow actions during refresh
-		if isRefreshing {
-			return event
-		}
-
-		switch event.Key() {
-		case tcell.KeyCtrlC:
-			app.Stop()
-			return nil
-
-		case tcell.KeyEscape:
-			// Clear filter if active, otherwise quit
-			if currentFilter != "" {
-				currentFilter = ""
-				filterInput.SetText("")
-				updateTable("")
-				status.SetText(statusFilterCleared)
-				return nil
-			}
-			// No filter active, quit the TUI
-			app.Stop()
-			return nil
-		case tcell.KeyRune:
-			if event.Rune() == 's' {
-				// SSH to selected instance
-				row, _ := table.GetSelection()
-				if row <= 0 || row >= table.GetRowCount() {
-					status.SetText(statusNoSelection)
-					time.AfterFunc(2*time.Second, func() {
-						app.QueueUpdateDraw(func() {
-							status.SetText(statusDefault)
-						})
-					})
-					return nil
-				}
-
-				// Get instance details from table cells (name, project, zone)
-				nameCell := table.GetCell(row, 0)
-				projectCell := table.GetCell(row, 1)
-				zoneCell := table.GetCell(row, 2)
-				if nameCell == nil || projectCell == nil || zoneCell == nil {
-					return nil
-				}
-				instanceName := nameCell.Text
-				instanceProject := projectCell.Text
-				instanceZone := zoneCell.Text
-
-				// Find matching instance in allInstances using name, project, AND zone
-				var selectedInst *instanceData
-				for i := range allInstances {
-					if allInstances[i].Name == instanceName &&
-						allInstances[i].Project == instanceProject &&
-						allInstances[i].Zone == instanceZone {
-						selectedInst = &allInstances[i]
-						break
-					}
-				}
-
-				if selectedInst != nil {
-					// Capture values for callbacks
-					instName := selectedInst.Name
-					instProject := selectedInst.Project
-					instZone := selectedInst.Zone
-					isMIG := selectedInst.IsMIG
-
-					// For MIG, we need to resolve to an actual instance first
-					if isMIG {
-						status.SetText(fmt.Sprintf(" [yellow]Resolving MIG %s...[-]", instName))
-						go func() {
-							projectClient, err := gcp.NewClient(ctx, instProject)
-							if err != nil {
-								app.QueueUpdateDraw(func() {
-									status.SetText(fmt.Sprintf(" [red]Error creating client: %v[-]", err))
-									time.AfterFunc(3*time.Second, func() {
-										app.QueueUpdateDraw(func() {
-											status.SetText(statusDefault)
-										})
-									})
-								})
-								return
-							}
-
-							// Resolve MIG to an instance
-							instance, err := projectClient.FindInstanceInMIG(ctx, instName, instZone)
-							if err != nil {
-								app.QueueUpdateDraw(func() {
-									status.SetText(fmt.Sprintf(" [red]Error resolving MIG: %v[-]", err))
-									time.AfterFunc(3*time.Second, func() {
-										app.QueueUpdateDraw(func() {
-											status.SetText(statusDefault)
-										})
-									})
-								})
-								return
-							}
-
-							// Now show the SSH modal with the resolved instance
-							app.QueueUpdateDraw(func() {
-								// Load cached IAP preference for the resolved instance
-								cachedIAP := LoadIAPPreference(instance.Name)
-								defaultUseIAP := instance.CanUseIAP
-
-								modalOpen = true
-								ShowSSHOptionsModal(app, instance.Name, defaultUseIAP, cachedIAP,
-									func(opts SSHOptions) {
-										app.SetRoot(flex, true)
-										app.SetFocus(table)
-										modalOpen = false
-
-										RunSSHSession(app, instance.Name, instProject, instance.Zone, opts, outputRedir)
-
-										status.SetText(fmt.Sprintf(statusDisconnected, instance.Name))
-										time.AfterFunc(3*time.Second, func() {
-											app.QueueUpdateDraw(func() {
-												status.SetText(statusDefault)
-											})
-										})
-									},
-									func() {
-										app.SetRoot(flex, true)
-										app.SetFocus(table)
-										modalOpen = false
-										if currentFilter != "" {
-											status.SetText(fmt.Sprintf(statusFilterActive, currentFilter))
-										} else {
-											status.SetText(statusDefault)
-										}
-									},
-								)
-							})
-						}()
-					} else {
-						// Regular instance - show SSH modal directly
-						// Determine default IAP setting:
-						// - HasLiveData is true AND ExternalIP is empty (no public IP), OR
-						// - CanUseIAP is explicitly set to true
-						defaultUseIAP := (selectedInst.HasLiveData && selectedInst.ExternalIP == "") || selectedInst.CanUseIAP
-
-						// Load cached IAP preference for this instance
-						cachedIAP := LoadIAPPreference(instName)
-
-						// Show SSH options modal
-						modalOpen = true
-						ShowSSHOptionsModal(app, instName, defaultUseIAP, cachedIAP,
-							func(opts SSHOptions) {
-								// Restore main view before SSH (needed for proper suspend/resume)
-								app.SetRoot(flex, true)
-								app.SetFocus(table)
-								modalOpen = false
-
-								// Execute SSH using shared function
-								RunSSHSession(app, instName, instProject, instZone, opts, outputRedir)
-
-								// After resume
-								status.SetText(fmt.Sprintf(statusDisconnected, instName))
-								time.AfterFunc(3*time.Second, func() {
-									app.QueueUpdateDraw(func() {
-										status.SetText(statusDefault)
-									})
-								})
-							},
-							func() {
-								// Cancel - restore main view
-								app.SetRoot(flex, true)
-								app.SetFocus(table)
-								modalOpen = false
-								if currentFilter != "" {
-									status.SetText(fmt.Sprintf(statusFilterActive, currentFilter))
-								} else {
-									status.SetText(statusDefault)
-								}
-							},
-						)
-					}
-				}
-				return nil
-			}
-			if event.Rune() == 'd' {
-				// Show instance details
-				row, _ := table.GetSelection()
-				if row <= 0 || row >= table.GetRowCount() {
-					status.SetText(statusNoSelection)
-					time.AfterFunc(2*time.Second, func() {
-						app.QueueUpdateDraw(func() {
-							status.SetText(statusDefault)
-						})
-					})
-					return nil
-				}
-
-				// Get instance details from table cells (name, project, zone)
-				nameCell := table.GetCell(row, 0)
-				projectCell := table.GetCell(row, 1)
-				zoneCell := table.GetCell(row, 2)
-				if nameCell == nil || projectCell == nil || zoneCell == nil {
-					return nil
-				}
-				instanceName := nameCell.Text
-				instanceProject := projectCell.Text
-				instanceZone := zoneCell.Text
-
-				// Find matching instance in allInstances using name, project, AND zone
-				var selectedInst *instanceData
-				for i := range allInstances {
-					if allInstances[i].Name == instanceName &&
-						allInstances[i].Project == instanceProject &&
-						allInstances[i].Zone == instanceZone {
-						selectedInst = &allInstances[i]
-						break
-					}
-				}
-
-				if selectedInst != nil {
-					// Fetch full instance details from GCP
-					status.SetText(statusLoadingDetails)
-					go func() {
-						// Create a client for the correct project
-						projectClient, err := gcp.NewClient(ctx, selectedInst.Project)
-						if err != nil {
-							app.QueueUpdateDraw(func() {
-								status.SetText(fmt.Sprintf(statusErrorClient, err))
-								time.AfterFunc(3*time.Second, func() {
-									app.QueueUpdateDraw(func() {
-										status.SetText(statusDefault)
-									})
-								})
-							})
-							return
-						}
-
-						gcpInst, err := projectClient.FindInstance(ctx, selectedInst.Name, selectedInst.Zone)
-						app.QueueUpdateDraw(func() {
-							if err != nil {
-								status.SetText(fmt.Sprintf(statusErrorDetails, err))
-								time.AfterFunc(3*time.Second, func() {
-									app.QueueUpdateDraw(func() {
-										status.SetText(statusDefault)
-									})
-								})
-								return
-							}
-
-							// Create fullscreen detail view using shared formatter
-							detailText := FormatInstanceDetails(gcpInst, selectedInst.Project)
-
-							detailView := tview.NewTextView().
-								SetDynamicColors(true).
-								SetText(detailText).
-								SetScrollable(true).
-								SetWordWrap(true)
-							detailView.SetBorder(true).SetTitle(fmt.Sprintf(" Instance: %s ", selectedInst.Name))
-
-							// Create status bar for detail view
-							detailStatus := tview.NewTextView().
-								SetDynamicColors(true).
-								SetText(" [yellow]Esc[-] back")
-
-							// Create fullscreen detail layout
-							detailFlex := tview.NewFlex().
-								SetDirection(tview.FlexRow).
-								AddItem(detailView, 0, 1, true).
-								AddItem(detailStatus, 1, 0, false)
-
-							// Set up input handler
-							detailView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-								if event.Key() == tcell.KeyEscape {
-									app.SetRoot(flex, true)
-									app.SetFocus(table)
-									modalOpen = false
-									if currentFilter != "" {
-										status.SetText(fmt.Sprintf(statusFilterActive, currentFilter))
-									} else {
-										status.SetText(statusDefault)
-									}
-									return nil
-								}
-								return event
-							})
-
-							modalOpen = true
-							app.SetRoot(detailFlex, true).SetFocus(detailView)
-						})
-					}()
-				}
-				return nil
-			}
-			if event.Rune() == '/' {
-				// Enter filter mode
-				filterMode = true
-				filterInput.SetText(currentFilter)
-				flex.Clear()
-				flex.AddItem(filterInput, 1, 0, true)
-				flex.AddItem(table, 0, 1, false)
-				flex.AddItem(status, 1, 0, false)
-				app.SetFocus(filterInput)
-				status.SetText(statusFilterMode)
-				return nil
-			}
-			if event.Rune() == 'R' {
-				// Refresh instance data from GCP with loading screen
-				refreshCtx, cancelRefresh := context.WithCancel(ctx)
-
-				_, spinnerDone := showLoadingScreen(app, " Refreshing Instances ", "Refreshing instance data from GCP...", func() {
-					cancelRefresh()
-					app.SetRoot(flex, true).SetFocus(table)
-					status.SetText(" [yellow]Refresh cancelled[-]")
-					time.AfterFunc(2*time.Second, func() {
-						app.QueueUpdateDraw(func() {
-							status.SetText(statusDefault)
-						})
-					})
-				})
-
-				go func() {
-					loadInstances(true)
-					app.QueueUpdateDraw(func() {
-						select {
-						case spinnerDone <- true:
-						default:
-						}
-						if refreshCtx.Err() == context.Canceled {
-							return
-						}
-						app.SetRoot(flex, true).SetFocus(table)
-						updateTable(currentFilter)
-						status.SetText(statusRefreshed)
-						time.AfterFunc(2*time.Second, func() {
-							app.QueueUpdateDraw(func() {
-								status.SetText(statusDefault)
-							})
-						})
-					})
-				}()
-				return nil
-			}
-			if event.Rune() == '?' {
-				// Show help overlay
-				helpText := `[yellow::b]Compass TUI - Keyboard Shortcuts[-:-:-]
-
-[yellow]Navigation[-]
-  [white]↑/k[-]           Move selection up
-  [white]↓/j[-]           Move selection down
-  [white]Home/g[-]        Jump to first item
-  [white]End/G[-]         Jump to last item
-  [white]PgUp[-]          Page up
-  [white]PgDn[-]          Page down
-
-[yellow]Instance Actions[-]
-  [white]s[-]             SSH to selected instance
-  [white]d[-]             Show instance details
-  [white]Shift+R[-]       Refresh instance data from GCP
-
-[yellow]Views[-]
-  [white]v[-]             Switch to VPN view
-  [white]c[-]             Switch to connectivity tests view
-  [white]Shift+S[-]       Switch to global search view
-  [white]i[-]             Switch to IP lookup view
-
-[yellow]Filtering[-]
-  [white]/[-]             Enter filter mode
-  [white]Enter[-]         Apply filter (in filter mode)
-  [white]Esc[-]           Cancel/clear filter, or quit TUI
-
-[yellow]General[-]
-  [white]?[-]             Show this help
-  [white]q[-]             Quit
-  [white]Ctrl+C[-]        Quit
-  [white]Esc[-]           Close modals, clear filter, or quit
-
-[darkgray]Press Esc or ? to close this help[-]`
-
-				helpView := tview.NewTextView().
-					SetDynamicColors(true).
-					SetText(helpText).
-					SetScrollable(true)
-				helpView.SetBorder(true).
-					SetTitle(" Help - Keyboard Shortcuts ").
-					SetTitleAlign(tview.AlignCenter)
-
-				// Create status bar for help view
-				helpStatus := tview.NewTextView().
-					SetDynamicColors(true).
-					SetText(" [yellow]Esc[-] back  [yellow]?[-] close help")
-
-				// Create fullscreen help layout
-				helpFlex := tview.NewFlex().
-					SetDirection(tview.FlexRow).
-					AddItem(helpView, 0, 1, true).
-					AddItem(helpStatus, 1, 0, false)
-
-				// Set up input handler
-				helpView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-					if event.Key() == tcell.KeyEscape || (event.Key() == tcell.KeyRune && event.Rune() == '?') {
-						app.SetRoot(flex, true)
-						app.SetFocus(table)
-						modalOpen = false
-						if currentFilter != "" {
-							status.SetText(fmt.Sprintf(statusFilterActive, currentFilter))
-						} else {
-							status.SetText(statusDefault)
-						}
-						return nil
-					}
-					return event
-				})
-
-				modalOpen = true
-				app.SetRoot(helpFlex, true).SetFocus(helpView)
-				return nil
-			}
-			if event.Rune() == 'v' {
-				// Switch to VPN view - shows project selector first
-				err := RunVPNView(ctx, c, app, func() {
-					// Callback to return to instance view
-					app.SetInputCapture(mainInputCapture) // Restore main input handler
-					app.SetRoot(flex, true).SetFocus(table)
-					updateTable(currentFilter)
-					status.SetText(statusDefault)
-				})
-				if err != nil {
-					status.SetText(fmt.Sprintf(statusErrorVPN, err))
-					time.AfterFunc(3*time.Second, func() {
-						app.QueueUpdateDraw(func() {
-							status.SetText(statusDefault)
-						})
-					})
-				}
-				return nil
-			}
-			if event.Rune() == 'c' {
-				// Switch to connectivity tests view - shows project selector first
-				err := RunConnectivityView(ctx, c, app, func() {
-					// Callback to return to instance view
-					app.SetInputCapture(mainInputCapture) // Restore main input handler
-					app.SetRoot(flex, true).SetFocus(table)
-					updateTable(currentFilter)
-					status.SetText(statusDefault)
-				})
-				if err != nil {
-					status.SetText(fmt.Sprintf(statusErrorConnectivity, err))
-					time.AfterFunc(3*time.Second, func() {
-						app.QueueUpdateDraw(func() {
-							status.SetText(statusDefault)
-						})
-					})
-				}
-				return nil
-			}
-			if event.Rune() == 'S' {
-				// Switch to search view
-				status.SetText(" [yellow]Loading search view...[-]")
-
-				go func() {
-					err := RunSearchView(ctx, c, app, outputRedir, parallelism, func() {
-						// Callback to return to instance view
-						app.SetInputCapture(mainInputCapture) // Restore main input handler
-						app.SetRoot(flex, true).SetFocus(table)
-						updateTable(currentFilter)
-						status.SetText(statusDefault)
-					})
-					app.QueueUpdateDraw(func() {
-						if err != nil {
-							app.SetRoot(flex, true).SetFocus(table)
-							status.SetText(fmt.Sprintf(" [red]Error loading search view: %v[-]", err))
-							time.AfterFunc(3*time.Second, func() {
-								app.QueueUpdateDraw(func() {
-									status.SetText(statusDefault)
-								})
-							})
-						}
-					})
-				}()
-				return nil
-			}
-			if event.Rune() == 'i' {
-				// Switch to IP lookup view
-				status.SetText(" [yellow]Loading IP lookup view...[-]")
-
-				go func() {
-					err := RunIPLookupView(ctx, c, app, parallelism, func() {
-						// Callback to return to instance view
-						app.SetInputCapture(mainInputCapture) // Restore main input handler
-						app.SetRoot(flex, true).SetFocus(table)
-						updateTable(currentFilter)
-						status.SetText(statusDefault)
-					})
-					app.QueueUpdateDraw(func() {
-						if err != nil {
-							app.SetRoot(flex, true).SetFocus(table)
-							status.SetText(fmt.Sprintf(" [red]Error loading IP lookup view: %v[-]", err))
-							time.AfterFunc(3*time.Second, func() {
-								app.QueueUpdateDraw(func() {
-									status.SetText(statusDefault)
-								})
-							})
-						}
-					})
-				}()
-				return nil
-			}
-			if event.Rune() == 'q' {
-				app.Stop()
-				return nil
-			}
-		}
-		return event
-	}
-
-	// Set the main input capture
-	app.SetInputCapture(mainInputCapture)
+	// Set input capture
+	s.app.SetInputCapture(s.createInputCapture())
 
 	// Run
-	if err := app.SetRoot(flex, true).EnableMouse(true).Run(); err != nil {
+	if err := s.app.SetRoot(s.flex, true).EnableMouse(true).Run(); err != nil {
 		return fmt.Errorf("tview run error: %w", err)
 	}
 
 	return nil
+}
+
+// showProjectRefreshPopupDirect displays a popup to select projects for refresh in direct mode
+func showProjectRefreshPopupDirect(
+	app *tview.Application,
+	cache *cache.Cache,
+	onComplete func(selectedProjects []string),
+	onCancel func(),
+) {
+	// Get projects sorted by usage
+	projects := cache.GetProjectsByUsage()
+
+	if len(projects) == 0 {
+		// No projects in cache, show error modal
+		modal := tview.NewModal().
+			SetText("No projects found in cache.\n\nRun 'compass gcp projects import' to import projects first.").
+			AddButtons([]string{"OK"}).
+			SetDoneFunc(func(buttonIndex int, buttonLabel string) {
+				if onCancel != nil {
+					onCancel()
+				}
+			})
+		app.SetRoot(modal, true).SetFocus(modal)
+		return
+	}
+
+	// Track selected projects
+	selected := make(map[string]bool)
+	allSelected := false
+
+	// Create the list with checkboxes
+	list := tview.NewList().
+		ShowSecondaryText(false).
+		SetHighlightFullLine(true)
+
+	list.SetBorder(true).SetTitle(" Select Projects to Refresh ")
+
+	// Function to update the list display
+	updateList := func() {
+		list.Clear()
+
+		// Add "All Projects" option first
+		allCheckbox := "[ ]"
+		if allSelected {
+			allCheckbox = "[x]"
+		}
+		list.AddItem(fmt.Sprintf("%s All Projects (%d)", allCheckbox, len(projects)), "", 0, nil)
+
+		// Add individual projects
+		for _, project := range projects {
+			checkbox := "[ ]"
+			if selected[project] || allSelected {
+				checkbox = "[x]"
+			}
+			list.AddItem(fmt.Sprintf("%s %s", checkbox, project), "", 0, nil)
+		}
+	}
+
+	updateList()
+
+	// Status bar
+	statusText := tview.NewTextView().
+		SetDynamicColors(true).
+		SetText(" [yellow]Space[-] toggle  [yellow]Enter[-] refresh  [yellow]Esc[-] cancel")
+
+	// Main layout
+	contentFlex := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(list, 0, 1, true).
+		AddItem(statusText, 1, 0, false)
+
+	// Create centered modal container
+	modal := tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(nil, 0, 1, false).
+			AddItem(contentFlex, 20, 0, true).
+			AddItem(nil, 0, 1, false), 60, 0, true).
+		AddItem(nil, 0, 1, false)
+
+	// Handle keyboard input
+	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEscape:
+			if onCancel != nil {
+				onCancel()
+			}
+			return nil
+
+		case tcell.KeyEnter:
+			// Gather selected projects
+			var toRefresh []string
+			if allSelected {
+				toRefresh = projects
+			} else {
+				for project := range selected {
+					toRefresh = append(toRefresh, project)
+				}
+			}
+
+			if len(toRefresh) == 0 {
+				// Flash a message - no projects selected
+				statusText.SetText(" [red]No projects selected! Use Space to select.[-]")
+				return nil
+			}
+
+			// Call the completion callback with selected projects
+			if onComplete != nil {
+				onComplete(toRefresh)
+			}
+			return nil
+
+		case tcell.KeyRune:
+			if event.Rune() == ' ' {
+				// Toggle selection
+				idx := list.GetCurrentItem()
+				if idx == 0 {
+					// Toggle "All"
+					allSelected = !allSelected
+					if allSelected {
+						// Clear individual selections when "All" is selected
+						selected = make(map[string]bool)
+					}
+				} else if idx > 0 && idx <= len(projects) {
+					project := projects[idx-1]
+					if allSelected {
+						// Deselect "All" when individual is toggled
+						allSelected = false
+						// Select all except the toggled one
+						for _, p := range projects {
+							if p != project {
+								selected[p] = true
+							}
+						}
+					} else {
+						if selected[project] {
+							delete(selected, project)
+						} else {
+							selected[project] = true
+						}
+					}
+				}
+				updateList()
+				list.SetCurrentItem(idx)
+				return nil
+			}
+		}
+		return event
+	})
+
+	app.SetRoot(modal, true).SetFocus(list)
 }

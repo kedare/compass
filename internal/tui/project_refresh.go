@@ -299,6 +299,8 @@ func performProjectRefresh(app *App, projects []string, onComplete func()) {
 						totalStats.Zones += count
 					case "instances":
 						totalStats.Instances += count
+					case "migs":
+						totalStats.MIGs += count
 					case "subnets":
 						totalStats.Subnets += count
 					}
@@ -312,8 +314,8 @@ func performProjectRefresh(app *App, projects []string, onComplete func()) {
 				}
 
 				if stats != nil {
-					logger.Log.Debugf("Refreshed project %s: %d zones, %d instances, %d subnets",
-						proj, stats.Zones, stats.Instances, stats.Subnets)
+					logger.Log.Debugf("Refreshed project %s: %d zones, %d instances, %d MIGs, %d subnets",
+						proj, stats.Zones, stats.Instances, stats.MIGs, stats.Subnets)
 				}
 			}(project, i)
 		}
@@ -336,8 +338,8 @@ func performProjectRefresh(app *App, projects []string, onComplete func()) {
 
 			// Show result
 			statsMu.Lock()
-			resultMsg := fmt.Sprintf("Refreshed: %d zones, %d instances, %d subnets",
-				totalStats.Zones, totalStats.Instances, totalStats.Subnets)
+			resultMsg := fmt.Sprintf("Refreshed: %d zones, %d instances, %d MIGs, %d subnets",
+				totalStats.Zones, totalStats.Instances, totalStats.MIGs, totalStats.Subnets)
 			statsMu.Unlock()
 
 			errorsMu.Lock()
