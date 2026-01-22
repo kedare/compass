@@ -211,20 +211,14 @@ func (c *Client) listMIGInstancesFromCache(ctx context.Context, migName string) 
 		return nil, false, ErrCacheNotAvailable
 	}
 
-	cachedInfo, found := c.cache.Get(migName)
+	// Use GetWithProject for precise lookup by name+project
+	cachedInfo, found := c.cache.GetWithProject(migName, c.project)
 	if !found || cachedInfo.Type != cache.ResourceTypeMIG {
 		return nil, false, ErrNoCacheEntry
 	}
 
 	logger.Log.Debugf("Found MIG location in cache: project=%s, zone=%s, region=%s, isRegional=%v",
 		cachedInfo.Project, cachedInfo.Zone, cachedInfo.Region, cachedInfo.IsRegional)
-
-	if cachedInfo.Project != c.project {
-		logger.Log.Debugf("Cached project %s doesn't match current project %s, performing full search",
-			cachedInfo.Project, c.project)
-
-		return nil, false, ErrProjectMismatch
-	}
 
 	if cachedInfo.IsRegional {
 		refs, err := c.listManagedInstancesInRegionalMIG(ctx, migName, cachedInfo.Region)

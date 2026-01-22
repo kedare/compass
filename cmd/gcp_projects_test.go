@@ -292,7 +292,7 @@ func TestGcpProjectsRemoveRequiresArg(t *testing.T) {
 
 func TestGcpProjectsRefreshCommand(t *testing.T) {
 	require.NotNil(t, gcpProjectsRefreshCmd)
-	require.Equal(t, "refresh <project-name>", gcpProjectsRefreshCmd.Use)
+	require.Equal(t, "refresh [project-name]", gcpProjectsRefreshCmd.Use)
 	require.NotEmpty(t, gcpProjectsRefreshCmd.Short)
 	require.NotEmpty(t, gcpProjectsRefreshCmd.Long)
 	require.NotNil(t, gcpProjectsRefreshCmd.Run)
@@ -319,17 +319,19 @@ func TestGcpProjectsRefreshHelp(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestGcpProjectsRefreshRequiresArg(t *testing.T) {
-	// Refresh command should require exactly 1 argument
+func TestGcpProjectsRefreshAcceptsOptionalArg(t *testing.T) {
+	// Refresh command should accept 0 or 1 arguments
 	require.NotNil(t, gcpProjectsRefreshCmd.Args)
 
-	// Test that Args is set to ExactArgs(1)
+	// Test that Args accepts 0 arguments (refresh all projects)
 	err := gcpProjectsRefreshCmd.Args(gcpProjectsRefreshCmd, []string{})
-	require.Error(t, err, "refresh command should require an argument")
+	require.NoError(t, err, "refresh command should accept zero arguments")
 
+	// Test that Args accepts 1 argument (refresh specific project)
 	err = gcpProjectsRefreshCmd.Args(gcpProjectsRefreshCmd, []string{"project-name"})
 	require.NoError(t, err, "refresh command should accept one argument")
 
+	// Test that Args rejects multiple arguments
 	err = gcpProjectsRefreshCmd.Args(gcpProjectsRefreshCmd, []string{"project1", "project2"})
 	require.Error(t, err, "refresh command should not accept multiple arguments")
 }

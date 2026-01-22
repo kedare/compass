@@ -245,6 +245,6 @@ func CloseLogFile() {
 func (l *Logger) writeToFile(level, message string) {
 	if l.logFile != nil {
 		timestamp := time.Now().Format("2006-01-02 15:04:05")
-		fmt.Fprintf(l.logFile, "%s [%s] %s\n", timestamp, level, message)
+		_, _ = fmt.Fprintf(l.logFile, "%s [%s] %s\n", timestamp, level, message)
 	}
 }
