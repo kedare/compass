@@ -14,6 +14,7 @@ import (
 type ScanStats struct {
 	Zones     int
 	Instances int
+	MIGs      int
 	Subnets   int
 }
 
@@ -22,12 +23,27 @@ type ScanProgress func(resource string, count int)
 
 // ScanProjectResources scans all resources in a project and caches them.
 // This includes zones, instances, and subnets.
+// Stale instances/MIGs are automatically removed before rescanning.
 func (c *Client) ScanProjectResources(ctx context.Context, progress ScanProgress) (*ScanStats, error) {
 	if c == nil || c.service == nil {
 		return nil, fmt.Errorf("client is not initialized")
 	}
 
 	stats := &ScanStats{}
+
+	// Clear existing cached resources for this project before rescanning
+	// This ensures deleted resources are removed from the cache
+	if c.cache != nil {
+		if err := c.cache.ClearProjectInstances(c.project); err != nil {
+			logger.Log.Warnf("Failed to clear existing instances for project %s: %v", c.project, err)
+		}
+		if err := c.cache.ClearProjectSubnets(c.project); err != nil {
+			logger.Log.Warnf("Failed to clear existing subnets for project %s: %v", c.project, err)
+		}
+		if err := c.cache.ClearProjectZones(c.project); err != nil {
+			logger.Log.Warnf("Failed to clear existing zones for project %s: %v", c.project, err)
+		}
+	}
 
 	// Scan zones
 	zones, err := c.scanZones(ctx)
@@ -48,6 +64,17 @@ func (c *Client) ScanProjectResources(ctx context.Context, progress ScanProgress
 		stats.Instances = instances
 		if progress != nil {
 			progress("instances", stats.Instances)
+		}
+	}
+
+	// Scan MIGs
+	migs, err := c.scanMIGs(ctx)
+	if err != nil {
+		logger.Log.Warnf("Failed to scan MIGs for project %s: %v", c.project, err)
+	} else {
+		stats.MIGs = migs
+		if progress != nil {
+			progress("migs", stats.MIGs)
 		}
 	}
 
@@ -93,6 +120,7 @@ func (c *Client) scanInstances(ctx context.Context) (int, error) {
 			Project: c.project,
 			Zone:    inst.Zone,
 			Type:    cache.ResourceTypeInstance,
+			MIGName: inst.MIGName,
 		}
 	}
 
@@ -103,6 +131,40 @@ func (c *Client) scanInstances(ctx context.Context) (int, error) {
 	}
 
 	return len(instances), nil
+}
+
+// scanMIGs lists all managed instance groups and caches them.
+func (c *Client) scanMIGs(ctx context.Context) (int, error) {
+	if c.cache == nil {
+		return 0, nil
+	}
+
+	migs, err := c.ListManagedInstanceGroups(ctx, "")
+	if err != nil {
+		return 0, err
+	}
+
+	// Batch cache all MIGs
+	entries := make(map[string]*cache.LocationInfo, len(migs))
+	for _, mig := range migs {
+		// Use region for regional MIGs, zone for zonal MIGs
+		location := mig.Location
+		entries[mig.Name] = &cache.LocationInfo{
+			Project:    c.project,
+			Zone:       location, // Zone field is used for both zone and region
+			Region:     location,
+			Type:       cache.ResourceTypeMIG,
+			IsRegional: mig.IsRegional,
+		}
+	}
+
+	if len(entries) > 0 {
+		if err := c.cache.SetBatch(entries); err != nil {
+			logger.Log.Warnf("Failed to batch cache MIGs: %v", err)
+		}
+	}
+
+	return len(migs), nil
 }
 
 // scanSubnets lists all subnets and caches them.

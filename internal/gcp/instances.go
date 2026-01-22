@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/kedare/compass/internal/cache"
 	"github.com/kedare/compass/internal/logger"
@@ -32,25 +33,19 @@ func (c *Client) FindInstance(ctx context.Context, instanceName, zone string, pr
 		return instance, err
 	}
 
-	// Try cache first if available
+	// Try cache first if available - use GetWithProject for precise lookup
 	if c.cache != nil {
-		if cachedInfo, found := c.cache.Get(instanceName); found && cachedInfo.Type == cache.ResourceTypeInstance {
+		if cachedInfo, found := c.cache.GetWithProject(instanceName, c.project); found && cachedInfo.Type == cache.ResourceTypeInstance {
 			logger.Log.Debugf("Found instance location in cache: project=%s, zone=%s", cachedInfo.Project, cachedInfo.Zone)
 
-			// Verify cached project matches current project
-			if cachedInfo.Project == c.project {
-				instance, err := c.findInstanceInZone(ctx, instanceName, cachedInfo.Zone)
-				if err == nil {
-					logger.Log.Debug("Successfully retrieved instance using cached location")
+			instance, err := c.findInstanceInZone(ctx, instanceName, cachedInfo.Zone)
+			if err == nil {
+				logger.Log.Debug("Successfully retrieved instance using cached location")
 
-					return instance, nil
-				}
-
-				logger.Log.Debugf("Cached location invalid, performing full search: %v", err)
-			} else {
-				logger.Log.Debugf("Cached project %s doesn't match current project %s, performing full search",
-					cachedInfo.Project, c.project)
+				return instance, nil
 			}
+
+			logger.Log.Debugf("Cached location invalid, performing full search: %v", err)
 		}
 	}
 
@@ -315,8 +310,18 @@ func (c *Client) convertInstance(instance *compute.Instance) *Instance {
 		for _, meta := range instance.Metadata.Items {
 			if meta != nil {
 				result.MetadataKeys = append(result.MetadataKeys, meta.Key)
+				// Extract MIG name from created-by metadata
+				if meta.Key == "created-by" && meta.Value != nil {
+					result.MIGName = extractMIGNameFromCreatedBy(*meta.Value)
+					logger.Log.Debugf("Instance %s has created-by metadata: %s -> MIG: %s", instance.Name, *meta.Value, result.MIGName)
+				}
 			}
 		}
+	}
+
+	// Debug: log if instance looks like a MIG member but has no MIGName
+	if result.MIGName == "" && strings.Contains(result.Name, "gke-") {
+		logger.Log.Debugf("Instance %s looks like GKE node but has no MIGName. Metadata keys: %v", result.Name, result.MetadataKeys)
 	}
 
 	// Prefer IAP only when no external IP is available.

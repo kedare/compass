@@ -12,6 +12,29 @@ import (
 	"google.golang.org/api/compute/v1"
 )
 
+// GetManagedInstanceGroup returns details of a specific managed instance group.
+func (c *Client) GetManagedInstanceGroup(ctx context.Context, migName, location string) (*ManagedInstanceGroup, error) {
+	logger.Log.Debugf("Getting managed instance group: %s in %s", migName, location)
+
+	isRegional := c.isRegion(location)
+
+	var mig *compute.InstanceGroupManager
+	var err error
+
+	if isRegional {
+		mig, err = c.service.RegionInstanceGroupManagers.Get(c.project, location, migName).Context(ctx).Do()
+	} else {
+		mig, err = c.service.InstanceGroupManagers.Get(c.project, location, migName).Context(ctx).Do()
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get managed instance group %s: %w", migName, err)
+	}
+
+	result := convertManagedInstanceGroup(mig, location, isRegional)
+	return &result, nil
+}
+
 // ListMIGInstances returns the instances managed by the specified MIG along with whether the MIG is regional.
 func (c *Client) ListMIGInstances(ctx context.Context, migName, location string, progress ...ProgressCallback) ([]ManagedInstanceRef, bool, error) {
 	var cb ProgressCallback
@@ -188,20 +211,14 @@ func (c *Client) listMIGInstancesFromCache(ctx context.Context, migName string) 
 		return nil, false, ErrCacheNotAvailable
 	}
 
-	cachedInfo, found := c.cache.Get(migName)
+	// Use GetWithProject for precise lookup by name+project
+	cachedInfo, found := c.cache.GetWithProject(migName, c.project)
 	if !found || cachedInfo.Type != cache.ResourceTypeMIG {
 		return nil, false, ErrNoCacheEntry
 	}
 
 	logger.Log.Debugf("Found MIG location in cache: project=%s, zone=%s, region=%s, isRegional=%v",
 		cachedInfo.Project, cachedInfo.Zone, cachedInfo.Region, cachedInfo.IsRegional)
-
-	if cachedInfo.Project != c.project {
-		logger.Log.Debugf("Cached project %s doesn't match current project %s, performing full search",
-			cachedInfo.Project, c.project)
-
-		return nil, false, ErrProjectMismatch
-	}
 
 	if cachedInfo.IsRegional {
 		refs, err := c.listManagedInstancesInRegionalMIG(ctx, migName, cachedInfo.Region)

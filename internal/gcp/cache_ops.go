@@ -59,7 +59,8 @@ func (c *Client) cacheInstance(instanceName string, instance *Instance) {
 		Type:    cache.ResourceTypeInstance,
 	}
 
-	if stored, found := c.cache.Get(instanceName); found && stored != nil && stored.IAP != nil {
+	// Use GetWithProject for precise lookup by name+project to preserve IAP preference
+	if stored, found := c.cache.GetWithProject(instanceName, c.project); found && stored != nil && stored.IAP != nil {
 		info.IAP = stored.IAP
 	}
 

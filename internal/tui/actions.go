@@ -123,7 +123,7 @@ func RunSSHSession(app *tview.Application, name, project, zone string, opts SSHO
 
 	// Mark the instance and project as used for future priority ordering
 	if cacheStore, err := gcp.LoadCache(); err == nil && cacheStore != nil {
-		_ = cacheStore.MarkInstanceUsed(name)
+		_ = cacheStore.MarkInstanceUsed(name, project)
 		_ = cacheStore.MarkProjectUsed(project)
 	}
 
@@ -323,6 +323,118 @@ func ShowSSHOptionsModal(app *tview.Application, instanceName string, defaultUse
 	app.SetFocus(form)
 }
 
+// MIGInstanceSelection represents a selected instance from a MIG.
+type MIGInstanceSelection struct {
+	Name   string
+	Zone   string
+	Status string
+}
+
+// ShowMIGInstanceSelectionModal displays a modal to select an instance from a MIG.
+// It shows all instances with their status and lets the user choose one.
+// onSelect is called with the selected instance when the user confirms.
+// onCancel is called when the user cancels the selection.
+func ShowMIGInstanceSelectionModal(app *tview.Application, migName string, instances []gcp.ManagedInstanceRef, onSelect func(instance MIGInstanceSelection), onCancel func()) {
+	// Create table for instance selection
+	table := tview.NewTable().
+		SetSelectable(true, false).
+		SetFixed(1, 0)
+
+	// Truncate MIG name if too long for title
+	titleMigName := migName
+	if len(titleMigName) > 40 {
+		titleMigName = titleMigName[:37] + "..."
+	}
+	table.SetBorder(true).SetTitle(fmt.Sprintf(" Select Instance (%s) ", titleMigName))
+
+	// Add header row
+	headers := []string{"Name", "Status", "Zone"}
+	for col, header := range headers {
+		cell := tview.NewTableCell(header).
+			SetTextColor(tcell.ColorYellow).
+			SetSelectable(false).
+			SetExpansion(1)
+		table.SetCell(0, col, cell)
+	}
+
+	// Add instance rows
+	for i, inst := range instances {
+		row := i + 1
+
+		// Name column
+		table.SetCell(row, 0, tview.NewTableCell(inst.Name).SetExpansion(1))
+
+		// Status column with color
+		statusColor := tcell.ColorRed
+		if inst.IsRunning() {
+			statusColor = tcell.ColorGreen
+		}
+		table.SetCell(row, 1, tview.NewTableCell(inst.Status).SetTextColor(statusColor).SetExpansion(1))
+
+		// Zone column
+		table.SetCell(row, 2, tview.NewTableCell(inst.Zone).SetExpansion(1))
+	}
+
+	// Status bar
+	status := tview.NewTextView().
+		SetDynamicColors(true).
+		SetText(" [yellow]Enter[-] select  [yellow]↑/↓[-] navigate  [yellow]Esc[-] cancel")
+
+	// Main layout
+	flex := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(table, 0, 1, true).
+		AddItem(status, 1, 0, false)
+
+	// Calculate modal dimensions
+	// Height: header + instances + border (2) + status (1)
+	modalHeight := len(instances) + 4
+	if modalHeight > 15 {
+		modalHeight = 15
+	}
+	if modalHeight < 6 {
+		modalHeight = 6
+	}
+
+	// Width: accommodate long instance names
+	modalWidth := 90
+
+	// Create centered modal container
+	modal := tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(nil, 0, 1, false).
+			AddItem(flex, modalHeight, 0, true).
+			AddItem(nil, 0, 1, false), modalWidth, 0, true).
+		AddItem(nil, 0, 1, false)
+
+	// Handle keyboard input
+	table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEscape:
+			onCancel()
+			return nil
+		case tcell.KeyEnter:
+			row, _ := table.GetSelection()
+			if row > 0 && row <= len(instances) {
+				selected := instances[row-1]
+				onSelect(MIGInstanceSelection{
+					Name:   selected.Name,
+					Zone:   selected.Zone,
+					Status: selected.Status,
+				})
+			}
+			return nil
+		}
+		return event
+	})
+
+	// Select first data row
+	table.Select(1, 0)
+
+	app.SetRoot(modal, true).SetFocus(table)
+}
+
 // ExecuteDetails fetches and displays instance details.
 // Note: The caller should set any "loading" status message before calling this method,
 // as this method spawns a goroutine and returns immediately.
@@ -353,7 +465,7 @@ func (e *InstanceActionExecutor) ExecuteDetails(ctx *ActionContext, showDetailFu
 
 		// Mark the instance and project as used for future priority ordering
 		if cacheStore, cacheErr := gcp.LoadCache(); cacheErr == nil && cacheStore != nil {
-			_ = cacheStore.MarkInstanceUsed(e.Name)
+			_ = cacheStore.MarkInstanceUsed(e.Name, e.Project)
 			_ = cacheStore.MarkProjectUsed(e.Project)
 		}
 
@@ -461,6 +573,100 @@ func FormatInstanceDetails(instance *gcp.Instance, project string) string {
 		details.WriteString("\n")
 		details.WriteString("[cyan::b]Metadata Keys[-:-:-]\n")
 		details.WriteString(fmt.Sprintf("  %s\n", strings.Join(instance.MetadataKeys, ", ")))
+	}
+
+	details.WriteString("\n[darkgray]Press Esc to close[-]")
+	return details.String()
+}
+
+// FormatMIGDetailsLive formats managed instance group information for display using live data
+func FormatMIGDetailsLive(mig *gcp.ManagedInstanceGroup, project string, instances []gcp.ManagedInstanceRef) string {
+	var details strings.Builder
+	details.WriteString("[yellow::b]Managed Instance Group[-:-:-]\n\n")
+
+	// Basic info
+	details.WriteString(fmt.Sprintf("[white::b]Name:[-:-:-]              %s\n", mig.Name))
+	details.WriteString(fmt.Sprintf("[white::b]Project:[-:-:-]           %s\n", project))
+	locationType := "Zone"
+	if mig.IsRegional {
+		locationType = "Region"
+	}
+	details.WriteString(fmt.Sprintf("[white::b]%s:[-:-:-]%s%s\n", locationType, strings.Repeat(" ", 14-len(locationType)), mig.Location))
+	if mig.Description != "" {
+		details.WriteString(fmt.Sprintf("[white::b]Description:[-:-:-]       %s\n", mig.Description))
+	}
+
+	details.WriteString("\n")
+
+	// Size and Status
+	details.WriteString("[cyan::b]Size & Status[-:-:-]\n")
+	details.WriteString(fmt.Sprintf("  [white::b]Target Size:[-:-:-]      %d\n", mig.TargetSize))
+	details.WriteString(fmt.Sprintf("  [white::b]Current Size:[-:-:-]     %d\n", mig.CurrentSize))
+	stableStr := "[red]No[-]"
+	if mig.IsStable {
+		stableStr = "[green]Yes[-]"
+	}
+	details.WriteString(fmt.Sprintf("  [white::b]Is Stable:[-:-:-]        %s\n", stableStr))
+
+	details.WriteString("\n")
+
+	// Template
+	details.WriteString("[cyan::b]Configuration[-:-:-]\n")
+	details.WriteString(fmt.Sprintf("  [white::b]Instance Template:[-:-:-] %s\n", mig.InstanceTemplate))
+	if mig.BaseInstanceName != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Base Instance Name:[-:-:-] %s\n", mig.BaseInstanceName))
+	}
+
+	// Update Policy
+	if mig.UpdateType != "" {
+		details.WriteString("\n")
+		details.WriteString("[cyan::b]Update Policy[-:-:-]\n")
+		details.WriteString(fmt.Sprintf("  [white::b]Update Type:[-:-:-]      %s\n", mig.UpdateType))
+		if mig.MaxSurge != "" {
+			details.WriteString(fmt.Sprintf("  [white::b]Max Surge:[-:-:-]        %s\n", mig.MaxSurge))
+		}
+		if mig.MaxUnavailable != "" {
+			details.WriteString(fmt.Sprintf("  [white::b]Max Unavailable:[-:-:-]  %s\n", mig.MaxUnavailable))
+		}
+	}
+
+	// Autoscaling
+	if mig.AutoscalingEnabled {
+		details.WriteString("\n")
+		details.WriteString("[cyan::b]Autoscaling[-:-:-]\n")
+		details.WriteString(fmt.Sprintf("  [white::b]Min Replicas:[-:-:-]     %d\n", mig.MinReplicas))
+		details.WriteString(fmt.Sprintf("  [white::b]Max Replicas:[-:-:-]     %d\n", mig.MaxReplicas))
+	}
+
+	// Named Ports
+	if len(mig.NamedPorts) > 0 {
+		details.WriteString("\n")
+		details.WriteString("[cyan::b]Named Ports[-:-:-]\n")
+		for name, port := range mig.NamedPorts {
+			details.WriteString(fmt.Sprintf("  %s: %d\n", name, port))
+		}
+	}
+
+	// Target Zones (for regional MIGs)
+	if len(mig.TargetZones) > 0 {
+		details.WriteString("\n")
+		details.WriteString("[cyan::b]Target Zones[-:-:-]\n")
+		for _, zone := range mig.TargetZones {
+			details.WriteString(fmt.Sprintf("  %s\n", zone))
+		}
+	}
+
+	// Instances
+	if len(instances) > 0 {
+		details.WriteString("\n")
+		details.WriteString("[cyan::b]Instances[-:-:-]\n")
+		for _, inst := range instances {
+			statusColor := "red"
+			if inst.IsRunning() {
+				statusColor = "green"
+			}
+			details.WriteString(fmt.Sprintf("  [%s]%s[-] %s (%s)\n", statusColor, inst.Status, inst.Name, inst.Zone))
+		}
 	}
 
 	details.WriteString("\n[darkgray]Press Esc to close[-]")

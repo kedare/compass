@@ -32,17 +32,21 @@ const (
 
 	createInstancesTable = `
 		CREATE TABLE IF NOT EXISTS instances (
-			name TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
 			timestamp INTEGER NOT NULL,
 			project TEXT NOT NULL,
 			zone TEXT,
 			region TEXT,
 			type TEXT NOT NULL,
 			is_regional INTEGER DEFAULT 0,
-			iap INTEGER
+			iap INTEGER,
+			last_used INTEGER,
+			mig_name TEXT,
+			PRIMARY KEY (name, project)
 		)`
 
 	createInstancesIndexes = `
+		CREATE INDEX IF NOT EXISTS idx_instances_name ON instances(name);
 		CREATE INDEX IF NOT EXISTS idx_instances_project ON instances(project);
 		CREATE INDEX IF NOT EXISTS idx_instances_timestamp ON instances(timestamp)`
 

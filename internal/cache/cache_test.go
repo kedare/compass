@@ -132,7 +132,7 @@ func TestDelete(t *testing.T) {
 	err := cache.Set("test-instance", info)
 	require.NoError(t, err)
 
-	err = cache.Delete("test-instance")
+	err = cache.Delete("test-instance", "test-project")
 	require.NoError(t, err)
 
 	_, found := cache.Get("test-instance")
@@ -358,14 +358,14 @@ func TestMarkInstanceAndProjectUsed(t *testing.T) {
 
 	// Set old last_used
 	oldTime := time.Now().Add(-time.Hour).Unix()
-	_, err = cache.db.Exec(`UPDATE instances SET last_used = ? WHERE name = ?`, oldTime, "test-instance")
+	_, err = cache.db.Exec(`UPDATE instances SET last_used = ? WHERE name = ? AND project = ?`, oldTime, "test-instance", "test-project")
 	require.NoError(t, err)
 	_, err = cache.db.Exec(`UPDATE projects SET last_used = ? WHERE name = ?`, oldTime, "test-project")
 	require.NoError(t, err)
 
 	// Verify old last_used
 	var instanceLastUsed, projectLastUsed int64
-	err = cache.db.QueryRow(`SELECT last_used FROM instances WHERE name = ?`, "test-instance").Scan(&instanceLastUsed)
+	err = cache.db.QueryRow(`SELECT last_used FROM instances WHERE name = ? AND project = ?`, "test-instance", "test-project").Scan(&instanceLastUsed)
 	require.NoError(t, err)
 	require.Equal(t, oldTime, instanceLastUsed)
 
@@ -373,14 +373,14 @@ func TestMarkInstanceAndProjectUsed(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, oldTime, projectLastUsed)
 
-	// Mark as used
-	err = cache.MarkInstanceUsed("test-instance")
+	// Mark as used (now requires project parameter)
+	err = cache.MarkInstanceUsed("test-instance", "test-project")
 	require.NoError(t, err)
 	err = cache.MarkProjectUsed("test-project")
 	require.NoError(t, err)
 
 	// Verify new last_used is more recent
-	err = cache.db.QueryRow(`SELECT last_used FROM instances WHERE name = ?`, "test-instance").Scan(&instanceLastUsed)
+	err = cache.db.QueryRow(`SELECT last_used FROM instances WHERE name = ? AND project = ?`, "test-instance", "test-project").Scan(&instanceLastUsed)
 	require.NoError(t, err)
 	require.Greater(t, instanceLastUsed, oldTime)
 
@@ -667,4 +667,230 @@ func TestDeleteProject_ThenAddAgain(t *testing.T) {
 	err = cache.AddProject("test-project")
 	require.NoError(t, err)
 	require.True(t, cache.HasProject("test-project"))
+}
+
+// TestSameNameDifferentProjects verifies that the same instance name can exist in multiple projects.
+func TestSameNameDifferentProjects(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Add instance with same name in two different projects
+	infoA := &LocationInfo{
+		Project: "project-a",
+		Zone:    "us-central1-a",
+		Type:    ResourceTypeInstance,
+	}
+	infoB := &LocationInfo{
+		Project: "project-b",
+		Zone:    "us-east1-b",
+		Type:    ResourceTypeInstance,
+	}
+
+	err := cache.Set("shared-instance", infoA)
+	require.NoError(t, err)
+
+	err = cache.Set("shared-instance", infoB)
+	require.NoError(t, err)
+
+	// Both should be retrievable with GetWithProject
+	retrievedA, found := cache.GetWithProject("shared-instance", "project-a")
+	require.True(t, found)
+	require.Equal(t, "project-a", retrievedA.Project)
+	require.Equal(t, "us-central1-a", retrievedA.Zone)
+
+	retrievedB, found := cache.GetWithProject("shared-instance", "project-b")
+	require.True(t, found)
+	require.Equal(t, "project-b", retrievedB.Project)
+	require.Equal(t, "us-east1-b", retrievedB.Zone)
+
+	// Get (without project) should return one of them (most recently used)
+	retrieved, found := cache.Get("shared-instance")
+	require.True(t, found)
+	require.NotEmpty(t, retrieved.Project)
+}
+
+// TestGetAllByName verifies that GetAllByName returns all matches across projects.
+func TestGetAllByName(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Add instance with same name in three different projects
+	projects := []string{"project-a", "project-b", "project-c"}
+	zones := []string{"us-central1-a", "us-east1-b", "europe-west1-c"}
+
+	for i, project := range projects {
+		info := &LocationInfo{
+			Project: project,
+			Zone:    zones[i],
+			Type:    ResourceTypeInstance,
+		}
+		err := cache.Set("multi-project-instance", info)
+		require.NoError(t, err)
+	}
+
+	// GetAllByName should return all three
+	matches := cache.GetAllByName("multi-project-instance")
+	require.Len(t, matches, 3)
+
+	// Verify all projects are present
+	foundProjects := make(map[string]bool)
+	for _, match := range matches {
+		foundProjects[match.Project] = true
+		require.Equal(t, "multi-project-instance", match.Name)
+		require.NotNil(t, match.Info)
+	}
+	require.True(t, foundProjects["project-a"])
+	require.True(t, foundProjects["project-b"])
+	require.True(t, foundProjects["project-c"])
+
+	// Non-existent instance should return empty slice
+	noMatches := cache.GetAllByName("non-existent")
+	require.Empty(t, noMatches)
+}
+
+// TestDeleteWithProject verifies that Delete only removes the specific (name, project) entry.
+func TestDeleteWithProject(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Add instance with same name in two projects
+	err := cache.Set("delete-test", &LocationInfo{
+		Project: "project-a",
+		Zone:    "us-central1-a",
+		Type:    ResourceTypeInstance,
+	})
+	require.NoError(t, err)
+
+	err = cache.Set("delete-test", &LocationInfo{
+		Project: "project-b",
+		Zone:    "us-east1-b",
+		Type:    ResourceTypeInstance,
+	})
+	require.NoError(t, err)
+
+	// Verify both exist
+	_, foundA := cache.GetWithProject("delete-test", "project-a")
+	require.True(t, foundA)
+	_, foundB := cache.GetWithProject("delete-test", "project-b")
+	require.True(t, foundB)
+
+	// Delete only from project-a
+	err = cache.Delete("delete-test", "project-a")
+	require.NoError(t, err)
+
+	// project-a should be gone, project-b should remain
+	_, foundA = cache.GetWithProject("delete-test", "project-a")
+	require.False(t, foundA)
+	_, foundB = cache.GetWithProject("delete-test", "project-b")
+	require.True(t, foundB)
+}
+
+// TestGetWithProjectMiss verifies that GetWithProject returns false for non-existent entries.
+func TestGetWithProjectMiss(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Add instance in project-a
+	err := cache.Set("test-instance", &LocationInfo{
+		Project: "project-a",
+		Zone:    "us-central1-a",
+		Type:    ResourceTypeInstance,
+	})
+	require.NoError(t, err)
+
+	// GetWithProject for different project should miss
+	_, found := cache.GetWithProject("test-instance", "project-b")
+	require.False(t, found)
+
+	// GetWithProject for non-existent instance should miss
+	_, found = cache.GetWithProject("non-existent", "project-a")
+	require.False(t, found)
+}
+
+// TestMarkInstanceUsedWithProject verifies that MarkInstanceUsed works with the composite key.
+func TestMarkInstanceUsedWithProject(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Add instances with same name in two projects
+	err := cache.Set("mark-test", &LocationInfo{
+		Project: "project-a",
+		Zone:    "us-central1-a",
+		Type:    ResourceTypeInstance,
+	})
+	require.NoError(t, err)
+
+	err = cache.Set("mark-test", &LocationInfo{
+		Project: "project-b",
+		Zone:    "us-east1-b",
+		Type:    ResourceTypeInstance,
+	})
+	require.NoError(t, err)
+
+	// Set old last_used for both
+	oldTime := time.Now().Add(-time.Hour).Unix()
+	_, err = cache.db.Exec(`UPDATE instances SET last_used = ? WHERE name = ?`, oldTime, "mark-test")
+	require.NoError(t, err)
+
+	// Mark only project-a as used
+	err = cache.MarkInstanceUsed("mark-test", "project-a")
+	require.NoError(t, err)
+
+	// Verify project-a was updated
+	var lastUsedA, lastUsedB int64
+	err = cache.db.QueryRow(`SELECT last_used FROM instances WHERE name = ? AND project = ?`, "mark-test", "project-a").Scan(&lastUsedA)
+	require.NoError(t, err)
+	require.Greater(t, lastUsedA, oldTime)
+
+	// Verify project-b was NOT updated
+	err = cache.db.QueryRow(`SELECT last_used FROM instances WHERE name = ? AND project = ?`, "mark-test", "project-b").Scan(&lastUsedB)
+	require.NoError(t, err)
+	require.Equal(t, oldTime, lastUsedB)
+}
+
+// TestIAPPreservationWithCompositeKey verifies IAP preference is preserved per (name, project).
+func TestIAPPreservationWithCompositeKey(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Add instance with IAP=true in project-a
+	iapTrue := true
+	err := cache.Set("iap-test", &LocationInfo{
+		Project: "project-a",
+		Zone:    "us-central1-a",
+		Type:    ResourceTypeInstance,
+		IAP:     &iapTrue,
+	})
+	require.NoError(t, err)
+
+	// Add instance with IAP=false in project-b
+	iapFalse := false
+	err = cache.Set("iap-test", &LocationInfo{
+		Project: "project-b",
+		Zone:    "us-east1-b",
+		Type:    ResourceTypeInstance,
+		IAP:     &iapFalse,
+	})
+	require.NoError(t, err)
+
+	// Verify each project has its own IAP preference
+	retrievedA, found := cache.GetWithProject("iap-test", "project-a")
+	require.True(t, found)
+	require.NotNil(t, retrievedA.IAP)
+	require.True(t, *retrievedA.IAP)
+
+	retrievedB, found := cache.GetWithProject("iap-test", "project-b")
+	require.True(t, found)
+	require.NotNil(t, retrievedB.IAP)
+	require.False(t, *retrievedB.IAP)
+
+	// Update project-a without IAP - should preserve existing
+	err = cache.Set("iap-test", &LocationInfo{
+		Project: "project-a",
+		Zone:    "us-west1-a", // Changed zone
+		Type:    ResourceTypeInstance,
+		IAP:     nil, // Not setting IAP
+	})
+	require.NoError(t, err)
+
+	// Verify IAP was preserved for project-a
+	retrievedA, found = cache.GetWithProject("iap-test", "project-a")
+	require.True(t, found)
+	require.NotNil(t, retrievedA.IAP)
+	require.True(t, *retrievedA.IAP)
+	require.Equal(t, "us-west1-a", retrievedA.Zone)
 }

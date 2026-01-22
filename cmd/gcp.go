@@ -98,20 +98,50 @@ Examples:
 
 		if resourceType == "" || project == "" || zone == "" {
 			logger.Log.Debug("Checking cache for resource information")
-			cache, err := gcp.LoadCache()
-			if err == nil && cache != nil {
-				if cachedInfo, found := cache.Get(instanceName); found {
-					if resourceType == "" {
+			cacheStore, err := gcp.LoadCache()
+			if err == nil && cacheStore != nil {
+				// Check if this instance exists in multiple projects
+				if project == "" {
+					matches := cacheStore.GetAllByName(instanceName)
+					if len(matches) > 1 {
+						// Same name exists in multiple projects - prompt for selection
+						logger.Log.Debugf("Found %d matches for %s across different projects", len(matches), instanceName)
+						selected, selectErr := promptProjectSelection(ctx, cmd, instanceName, matches)
+						if selectErr != nil {
+							if isContextCanceled(ctx, selectErr) {
+								logger.Log.Info("Project selection canceled")
+								return
+							}
+							logger.Log.Fatalf("Failed to select project: %v", selectErr)
+						}
+						cachedProject = selected.Project
+						cachedResourceType = string(selected.Info.Type)
+						if selected.Info.Zone != "" {
+							cachedZone = selected.Info.Zone
+						} else if selected.Info.Region != "" {
+							cachedZone = selected.Info.Region
+						}
+						logger.Log.Debugf("Selected project %s for resource %s", cachedProject, instanceName)
+					} else if len(matches) == 1 {
+						// Single match - use it directly
+						cachedProject = matches[0].Project
+						cachedResourceType = string(matches[0].Info.Type)
+						if matches[0].Info.Zone != "" {
+							cachedZone = matches[0].Info.Zone
+						}
+						logger.Log.Debugf("Found single cached match for %s in project %s", instanceName, cachedProject)
+					}
+				}
+
+				// If we still don't have cached info and project is specified, try direct lookup
+				if cachedResourceType == "" && project != "" {
+					if cachedInfo, found := cacheStore.GetWithProject(instanceName, project); found {
 						cachedResourceType = string(cachedInfo.Type)
 						logger.Log.Debugf("Found cached resource type: %s", cachedResourceType)
-					}
-					if project == "" && cachedInfo.Project != "" {
-						cachedProject = cachedInfo.Project
-						logger.Log.Debugf("Found cached project: %s", cachedProject)
-					}
-					if zone == "" && cachedInfo.Zone != "" {
-						cachedZone = cachedInfo.Zone
-						logger.Log.Debugf("Found cached zone: %s", cachedZone)
+						if zone == "" && cachedInfo.Zone != "" {
+							cachedZone = cachedInfo.Zone
+							logger.Log.Debugf("Found cached zone: %s", cachedZone)
+						}
 					}
 				}
 			}
@@ -134,9 +164,9 @@ Examples:
 
 				// Try to get projects from cache (only if cache is enabled)
 				// Use GetProjectsByUsage() to search recently used projects first for faster lookups
-				cache, err := gcp.LoadCache()
-				if err == nil && cache != nil {
-					cachedProjects = cache.GetProjectsByUsage()
+				cacheStore, err := gcp.LoadCache()
+				if err == nil && cacheStore != nil {
+					cachedProjects = cacheStore.GetProjectsByUsage()
 					if len(cachedProjects) > 0 {
 						logger.Log.Debugf("Will search across %d cached projects (ordered by recent usage)", len(cachedProjects))
 					} else {
@@ -292,7 +322,7 @@ Examples:
 
 		// Mark the instance and project as used for future priority ordering
 		if cacheStore, cacheErr := gcp.LoadCache(); cacheErr == nil && cacheStore != nil {
-			_ = cacheStore.MarkInstanceUsed(instance.Name)
+			_ = cacheStore.MarkInstanceUsed(instance.Name, project)
 			_ = cacheStore.MarkProjectUsed(project)
 		}
 
@@ -1041,6 +1071,132 @@ func (p *lookupProgressBar) stopLocked() {
 	}
 
 	p.closed = true
+}
+
+// promptProjectSelection prompts the user to select a project when an instance name
+// exists in multiple projects.
+func promptProjectSelection(ctx context.Context, cmd *cobra.Command, instanceName string, matches []cache.InstanceMatch) (*cache.InstanceMatch, error) {
+	stdin := cmd.InOrStdin()
+	stdout := cmd.OutOrStdout()
+
+	if isTerminalReader(stdin) && isTerminalWriter(stdout) {
+		if selected, err := promptProjectSelectionInteractive(ctx, instanceName, matches); err == nil {
+			return selected, nil
+		} else if !isContextCanceled(ctx, err) {
+			logger.Log.Debugf("Interactive selection failed, falling back to text prompt: %v", err)
+		} else {
+			return nil, err
+		}
+	}
+
+	reader := bufio.NewReader(stdin)
+
+	return promptProjectSelectionFromReader(reader, stdout, instanceName, matches)
+}
+
+func promptProjectSelectionInteractive(ctx context.Context, instanceName string, matches []cache.InstanceMatch) (*cache.InstanceMatch, error) {
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("no matches available for %s", instanceName)
+	}
+
+	options := make([]string, len(matches))
+	for i, match := range matches {
+		zone := match.Info.Zone
+		if zone == "" {
+			zone = match.Info.Region
+		}
+		options[i] = fmt.Sprintf("%s (project: %s, zone: %s)", match.Name, match.Project, zone)
+	}
+
+	var interrupted bool
+
+	selectedOption, err := pterm.DefaultInteractiveSelect.
+		WithOptions(options).
+		WithDefaultText(fmt.Sprintf("'%s' exists in multiple projects. Select one:", instanceName)).
+		WithDefaultOption(options[0]).
+		WithOnInterruptFunc(func() {
+			interrupted = true
+		}).
+		Show()
+	if err != nil {
+		return nil, err
+	}
+
+	if interrupted || isContextCanceled(ctx, nil) {
+		return nil, context.Canceled
+	}
+
+	for i, option := range options {
+		if option == selectedOption {
+			return &matches[i], nil
+		}
+	}
+
+	return &matches[0], nil
+}
+
+func promptProjectSelectionFromReader(reader *bufio.Reader, out io.Writer, instanceName string, matches []cache.InstanceMatch) (*cache.InstanceMatch, error) {
+	if _, err := fmt.Fprintf(out, "'%s' exists in multiple projects:\n", instanceName); err != nil {
+		return nil, err
+	}
+
+	for i, match := range matches {
+		zone := match.Info.Zone
+		if zone == "" {
+			zone = match.Info.Region
+		}
+		if _, err := fmt.Fprintf(out, "  [%d] %s (project: %s, zone: %s)\n", i+1, match.Name, match.Project, zone); err != nil {
+			return nil, err
+		}
+	}
+
+	if _, err := fmt.Fprintf(out, "Select project [default 1]: "); err != nil {
+		return nil, err
+	}
+
+	selected := 0
+
+	for {
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				if _, writeErr := fmt.Fprintln(out); writeErr != nil {
+					return nil, writeErr
+				}
+
+				break
+			}
+
+			return nil, err
+		}
+
+		input = strings.TrimSpace(input)
+		if input == "" {
+			if _, writeErr := fmt.Fprintln(out); writeErr != nil {
+				return nil, writeErr
+			}
+
+			break
+		}
+
+		value, err := strconv.Atoi(input)
+		if err != nil || value < 1 || value > len(matches) {
+			if _, writeErr := fmt.Fprintf(out, "Invalid selection. Enter a value between 1 and %d: ", len(matches)); writeErr != nil {
+				return nil, writeErr
+			}
+
+			continue
+		}
+
+		if _, writeErr := fmt.Fprintln(out); writeErr != nil {
+			return nil, writeErr
+		}
+		selected = value - 1
+
+		break
+	}
+
+	return &matches[selected], nil
 }
 
 func init() {

@@ -90,6 +90,30 @@ func extractResourceName(url string) string {
 	return parts[len(parts)-1]
 }
 
+// extractMIGNameFromCreatedBy extracts the MIG name from a created-by metadata URL.
+// The URL format is like:
+// https://www.googleapis.com/compute/v1/projects/my-project/zones/us-central1-a/instanceGroupManagers/my-mig
+// or for regional MIGs:
+// https://www.googleapis.com/compute/v1/projects/my-project/regions/us-central1/instanceGroupManagers/my-mig
+func extractMIGNameFromCreatedBy(createdByURL string) string {
+	if createdByURL == "" {
+		return ""
+	}
+
+	// Check if it contains instanceGroupManagers
+	if !strings.Contains(createdByURL, "instanceGroupManagers") {
+		return ""
+	}
+
+	// The MIG name is the last component of the URL
+	parts := strings.Split(createdByURL, "/")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+
+	return ""
+}
+
 func extractHealthCheckPort(hc *compute.HealthCheck) int64 {
 	if hc.HttpHealthCheck != nil {
 		return hc.HttpHealthCheck.Port

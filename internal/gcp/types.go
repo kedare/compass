@@ -50,6 +50,8 @@ type Instance struct {
 	Labels map[string]string
 	// Metadata keys (not values for security)
 	MetadataKeys []string
+	// MIGName is set if this instance belongs to a managed instance group.
+	MIGName string
 }
 
 // InstanceDisk represents a disk attached to an instance.
