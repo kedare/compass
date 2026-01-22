@@ -1037,6 +1037,94 @@ func (c *Cache) Delete(resourceName string) error {
 	return nil
 }
 
+// ClearProjectInstances removes all instances and MIGs for a project from the cache.
+// This is used before rescanning to ensure stale entries are removed.
+// Unlike DeleteProject, this preserves zones, subnets, and the project entry.
+func (c *Cache) ClearProjectInstances(projectName string) error {
+	if c.isNoOp() {
+		return nil
+	}
+
+	if projectName == "" {
+		return nil
+	}
+
+	start := time.Now()
+	defer func() {
+		c.stats.recordOperation("ClearProjectInstances", time.Since(start))
+	}()
+
+	result, err := c.exec("DELETE FROM instances WHERE project = ?", projectName)
+	if err != nil {
+		return fmt.Errorf("failed to clear instances for project %s: %w", projectName, err)
+	}
+
+	count, _ := result.RowsAffected()
+	if count > 0 {
+		logger.Log.Debugf("Cleared %d instances/MIGs from cache for project %s", count, projectName)
+	}
+
+	return nil
+}
+
+// ClearProjectSubnets removes all subnets for a project from the cache.
+// This is used before rescanning to ensure stale entries are removed.
+func (c *Cache) ClearProjectSubnets(projectName string) error {
+	if c.isNoOp() {
+		return nil
+	}
+
+	if projectName == "" {
+		return nil
+	}
+
+	start := time.Now()
+	defer func() {
+		c.stats.recordOperation("ClearProjectSubnets", time.Since(start))
+	}()
+
+	result, err := c.exec("DELETE FROM subnets WHERE project = ?", projectName)
+	if err != nil {
+		return fmt.Errorf("failed to clear subnets for project %s: %w", projectName, err)
+	}
+
+	count, _ := result.RowsAffected()
+	if count > 0 {
+		logger.Log.Debugf("Cleared %d subnets from cache for project %s", count, projectName)
+	}
+
+	return nil
+}
+
+// ClearProjectZones removes zones for a project from the cache.
+// This is used before rescanning to ensure stale entries are removed.
+func (c *Cache) ClearProjectZones(projectName string) error {
+	if c.isNoOp() {
+		return nil
+	}
+
+	if projectName == "" {
+		return nil
+	}
+
+	start := time.Now()
+	defer func() {
+		c.stats.recordOperation("ClearProjectZones", time.Since(start))
+	}()
+
+	result, err := c.exec("DELETE FROM zones WHERE project = ?", projectName)
+	if err != nil {
+		return fmt.Errorf("failed to clear zones for project %s: %w", projectName, err)
+	}
+
+	count, _ := result.RowsAffected()
+	if count > 0 {
+		logger.Log.Debugf("Cleared %d zone entries from cache for project %s", count, projectName)
+	}
+
+	return nil
+}
+
 // DeleteProject removes a project and all its associated resources from the cache.
 // This includes entries from the projects, instances, zones, and subnets tables.
 func (c *Cache) DeleteProject(projectName string) error {

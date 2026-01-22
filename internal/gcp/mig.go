@@ -12,6 +12,29 @@ import (
 	"google.golang.org/api/compute/v1"
 )
 
+// GetManagedInstanceGroup returns details of a specific managed instance group.
+func (c *Client) GetManagedInstanceGroup(ctx context.Context, migName, location string) (*ManagedInstanceGroup, error) {
+	logger.Log.Debugf("Getting managed instance group: %s in %s", migName, location)
+
+	isRegional := c.isRegion(location)
+
+	var mig *compute.InstanceGroupManager
+	var err error
+
+	if isRegional {
+		mig, err = c.service.RegionInstanceGroupManagers.Get(c.project, location, migName).Context(ctx).Do()
+	} else {
+		mig, err = c.service.InstanceGroupManagers.Get(c.project, location, migName).Context(ctx).Do()
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get managed instance group %s: %w", migName, err)
+	}
+
+	result := convertManagedInstanceGroup(mig, location, isRegional)
+	return &result, nil
+}
+
 // ListMIGInstances returns the instances managed by the specified MIG along with whether the MIG is regional.
 func (c *Client) ListMIGInstances(ctx context.Context, migName, location string, progress ...ProgressCallback) ([]ManagedInstanceRef, bool, error) {
 	var cb ProgressCallback

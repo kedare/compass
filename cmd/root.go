@@ -13,6 +13,7 @@ import (
 
 var (
 	logLevel    string
+	logFile     string
 	useCache    bool
 	concurrency int
 )
@@ -30,6 +31,14 @@ diagnostics without leaving the CLI.`,
 			fmt.Fprintf(os.Stderr, "Invalid log level '%s': %v\n", logLevel, err)
 			os.Exit(1)
 		}
+
+		if logFile != "" {
+			if err := logger.SetLogFile(logFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to set log file '%s': %v\n", logFile, err)
+				os.Exit(1)
+			}
+		}
+
 		logger.Log.Debugf("Log level set to: %s", logLevel)
 
 		cache.SetEnabled(useCache)
@@ -59,6 +68,7 @@ func ExecuteContext(ctx context.Context) error {
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "Set the logging level (trace, debug, info, warn, error, fatal, panic)")
+	rootCmd.PersistentFlags().StringVar(&logFile, "log-file", "", "Write logs to a file (in addition to stderr)")
 	rootCmd.PersistentFlags().BoolVar(&useCache, "cache", true, "Enable cache usage across commands")
 	rootCmd.PersistentFlags().IntVar(&concurrency, "concurrency", 10, "Maximum number of concurrent operations (worker pool size)")
 	rootCmd.AddCommand(gcpCmd)

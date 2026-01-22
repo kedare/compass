@@ -579,6 +579,100 @@ func FormatInstanceDetails(instance *gcp.Instance, project string) string {
 	return details.String()
 }
 
+// FormatMIGDetailsLive formats managed instance group information for display using live data
+func FormatMIGDetailsLive(mig *gcp.ManagedInstanceGroup, project string, instances []gcp.ManagedInstanceRef) string {
+	var details strings.Builder
+	details.WriteString("[yellow::b]Managed Instance Group[-:-:-]\n\n")
+
+	// Basic info
+	details.WriteString(fmt.Sprintf("[white::b]Name:[-:-:-]              %s\n", mig.Name))
+	details.WriteString(fmt.Sprintf("[white::b]Project:[-:-:-]           %s\n", project))
+	locationType := "Zone"
+	if mig.IsRegional {
+		locationType = "Region"
+	}
+	details.WriteString(fmt.Sprintf("[white::b]%s:[-:-:-]%s%s\n", locationType, strings.Repeat(" ", 14-len(locationType)), mig.Location))
+	if mig.Description != "" {
+		details.WriteString(fmt.Sprintf("[white::b]Description:[-:-:-]       %s\n", mig.Description))
+	}
+
+	details.WriteString("\n")
+
+	// Size and Status
+	details.WriteString("[cyan::b]Size & Status[-:-:-]\n")
+	details.WriteString(fmt.Sprintf("  [white::b]Target Size:[-:-:-]      %d\n", mig.TargetSize))
+	details.WriteString(fmt.Sprintf("  [white::b]Current Size:[-:-:-]     %d\n", mig.CurrentSize))
+	stableStr := "[red]No[-]"
+	if mig.IsStable {
+		stableStr = "[green]Yes[-]"
+	}
+	details.WriteString(fmt.Sprintf("  [white::b]Is Stable:[-:-:-]        %s\n", stableStr))
+
+	details.WriteString("\n")
+
+	// Template
+	details.WriteString("[cyan::b]Configuration[-:-:-]\n")
+	details.WriteString(fmt.Sprintf("  [white::b]Instance Template:[-:-:-] %s\n", mig.InstanceTemplate))
+	if mig.BaseInstanceName != "" {
+		details.WriteString(fmt.Sprintf("  [white::b]Base Instance Name:[-:-:-] %s\n", mig.BaseInstanceName))
+	}
+
+	// Update Policy
+	if mig.UpdateType != "" {
+		details.WriteString("\n")
+		details.WriteString("[cyan::b]Update Policy[-:-:-]\n")
+		details.WriteString(fmt.Sprintf("  [white::b]Update Type:[-:-:-]      %s\n", mig.UpdateType))
+		if mig.MaxSurge != "" {
+			details.WriteString(fmt.Sprintf("  [white::b]Max Surge:[-:-:-]        %s\n", mig.MaxSurge))
+		}
+		if mig.MaxUnavailable != "" {
+			details.WriteString(fmt.Sprintf("  [white::b]Max Unavailable:[-:-:-]  %s\n", mig.MaxUnavailable))
+		}
+	}
+
+	// Autoscaling
+	if mig.AutoscalingEnabled {
+		details.WriteString("\n")
+		details.WriteString("[cyan::b]Autoscaling[-:-:-]\n")
+		details.WriteString(fmt.Sprintf("  [white::b]Min Replicas:[-:-:-]     %d\n", mig.MinReplicas))
+		details.WriteString(fmt.Sprintf("  [white::b]Max Replicas:[-:-:-]     %d\n", mig.MaxReplicas))
+	}
+
+	// Named Ports
+	if len(mig.NamedPorts) > 0 {
+		details.WriteString("\n")
+		details.WriteString("[cyan::b]Named Ports[-:-:-]\n")
+		for name, port := range mig.NamedPorts {
+			details.WriteString(fmt.Sprintf("  %s: %d\n", name, port))
+		}
+	}
+
+	// Target Zones (for regional MIGs)
+	if len(mig.TargetZones) > 0 {
+		details.WriteString("\n")
+		details.WriteString("[cyan::b]Target Zones[-:-:-]\n")
+		for _, zone := range mig.TargetZones {
+			details.WriteString(fmt.Sprintf("  %s\n", zone))
+		}
+	}
+
+	// Instances
+	if len(instances) > 0 {
+		details.WriteString("\n")
+		details.WriteString("[cyan::b]Instances[-:-:-]\n")
+		for _, inst := range instances {
+			statusColor := "red"
+			if inst.IsRunning() {
+				statusColor = "green"
+			}
+			details.WriteString(fmt.Sprintf("  [%s]%s[-] %s (%s)\n", statusColor, inst.Status, inst.Name, inst.Zone))
+		}
+	}
+
+	details.WriteString("\n[darkgray]Press Esc to close[-]")
+	return details.String()
+}
+
 // FormatInstanceTemplateDetails formats instance template information for display
 func FormatInstanceTemplateDetails(name, project, location string, detailsMap map[string]string) string {
 	var details strings.Builder

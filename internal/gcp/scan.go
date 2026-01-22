@@ -23,12 +23,27 @@ type ScanProgress func(resource string, count int)
 
 // ScanProjectResources scans all resources in a project and caches them.
 // This includes zones, instances, and subnets.
+// Stale instances/MIGs are automatically removed before rescanning.
 func (c *Client) ScanProjectResources(ctx context.Context, progress ScanProgress) (*ScanStats, error) {
 	if c == nil || c.service == nil {
 		return nil, fmt.Errorf("client is not initialized")
 	}
 
 	stats := &ScanStats{}
+
+	// Clear existing cached resources for this project before rescanning
+	// This ensures deleted resources are removed from the cache
+	if c.cache != nil {
+		if err := c.cache.ClearProjectInstances(c.project); err != nil {
+			logger.Log.Warnf("Failed to clear existing instances for project %s: %v", c.project, err)
+		}
+		if err := c.cache.ClearProjectSubnets(c.project); err != nil {
+			logger.Log.Warnf("Failed to clear existing subnets for project %s: %v", c.project, err)
+		}
+		if err := c.cache.ClearProjectZones(c.project); err != nil {
+			logger.Log.Warnf("Failed to clear existing zones for project %s: %v", c.project, err)
+		}
+	}
 
 	// Scan zones
 	zones, err := c.scanZones(ctx)

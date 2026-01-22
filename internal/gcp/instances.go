@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/kedare/compass/internal/cache"
 	"github.com/kedare/compass/internal/logger"
@@ -318,9 +319,15 @@ func (c *Client) convertInstance(instance *compute.Instance) *Instance {
 				// Extract MIG name from created-by metadata
 				if meta.Key == "created-by" && meta.Value != nil {
 					result.MIGName = extractMIGNameFromCreatedBy(*meta.Value)
+					logger.Log.Debugf("Instance %s has created-by metadata: %s -> MIG: %s", instance.Name, *meta.Value, result.MIGName)
 				}
 			}
 		}
+	}
+
+	// Debug: log if instance looks like a MIG member but has no MIGName
+	if result.MIGName == "" && strings.Contains(result.Name, "gke-") {
+		logger.Log.Debugf("Instance %s looks like GKE node but has no MIGName. Metadata keys: %v", result.Name, result.MetadataKeys)
 	}
 
 	// Prefer IAP only when no external IP is available.

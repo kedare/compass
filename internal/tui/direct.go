@@ -167,10 +167,12 @@ func (s *tuiState) loadInstances(useLiveData bool) {
 		for _, location := range locations {
 			// Skip instances that belong to a MIG (they can be accessed via the MIG entry)
 			if location.Type == "instance" && location.MIGName != "" {
+				logger.Log.Debugf("Skipping MIG member instance: %s (MIG: %s)", location.Name, location.MIGName)
 				continue
 			}
 
 			if location.Type == "instance" || location.Type == "mig" {
+				logger.Log.Debugf("Adding to list: %s (type: %s, MIGName: %q)", location.Name, location.Type, location.MIGName)
 				inst := instanceData{
 					Name:    location.Name,
 					Project: project,
@@ -392,42 +394,67 @@ func (s *tuiState) loadAndShowDetails(inst *instanceData) {
 		return
 	}
 
-	gcpInst, err := projectClient.FindInstance(s.ctx, inst.Name, inst.Zone)
-	s.app.QueueUpdateDraw(func() {
+	if inst.IsMIG {
+		// Fetch MIG details
+		mig, err := projectClient.GetManagedInstanceGroup(s.ctx, inst.Name, inst.Zone)
 		if err != nil {
-			s.flashStatus(fmt.Sprintf(statusErrorDetails, err), 3*time.Second)
+			s.app.QueueUpdateDraw(func() {
+				s.flashStatus(fmt.Sprintf(statusErrorDetails, err), 3*time.Second)
+			})
 			return
 		}
 
-		detailText := FormatInstanceDetails(gcpInst, inst.Project)
+		// Also fetch the instances in the MIG
+		instances, _, _ := projectClient.ListMIGInstances(s.ctx, inst.Name, inst.Zone)
 
-		detailView := tview.NewTextView().
-			SetDynamicColors(true).
-			SetText(detailText).
-			SetScrollable(true).
-			SetWordWrap(true)
-		detailView.SetBorder(true).SetTitle(fmt.Sprintf(" Instance: %s ", inst.Name))
-
-		detailStatus := tview.NewTextView().
-			SetDynamicColors(true).
-			SetText(" [yellow]Esc[-] back")
-
-		detailFlex := tview.NewFlex().
-			SetDirection(tview.FlexRow).
-			AddItem(detailView, 0, 1, true).
-			AddItem(detailStatus, 1, 0, false)
-
-		detailView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-			if event.Key() == tcell.KeyEscape {
-				s.restoreMainView()
-				return nil
-			}
-			return event
+		s.app.QueueUpdateDraw(func() {
+			detailText := FormatMIGDetailsLive(mig, inst.Project, instances)
+			s.showDetailView(detailText, fmt.Sprintf(" MIG: %s ", inst.Name))
 		})
+	} else {
+		// Fetch instance details
+		gcpInst, err := projectClient.FindInstance(s.ctx, inst.Name, inst.Zone)
+		if err != nil {
+			s.app.QueueUpdateDraw(func() {
+				s.flashStatus(fmt.Sprintf(statusErrorDetails, err), 3*time.Second)
+			})
+			return
+		}
 
-		s.kb.SetMode(ModeModal)
-		s.app.SetRoot(detailFlex, true).SetFocus(detailView)
+		s.app.QueueUpdateDraw(func() {
+			detailText := FormatInstanceDetails(gcpInst, inst.Project)
+			s.showDetailView(detailText, fmt.Sprintf(" Instance: %s ", inst.Name))
+		})
+	}
+}
+
+func (s *tuiState) showDetailView(detailText, title string) {
+	detailView := tview.NewTextView().
+		SetDynamicColors(true).
+		SetText(detailText).
+		SetScrollable(true).
+		SetWordWrap(true)
+	detailView.SetBorder(true).SetTitle(title)
+
+	detailStatus := tview.NewTextView().
+		SetDynamicColors(true).
+		SetText(" [yellow]Esc[-] back")
+
+	detailFlex := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(detailView, 0, 1, true).
+		AddItem(detailStatus, 1, 0, false)
+
+	detailView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			s.restoreMainView()
+			return nil
+		}
+		return event
 	})
+
+	s.kb.SetMode(ModeModal)
+	s.app.SetRoot(detailFlex, true).SetFocus(detailView)
 }
 
 func (s *tuiState) actionEnterFilterMode() bool {
