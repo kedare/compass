@@ -165,6 +165,11 @@ func (s *tuiState) loadInstances(useLiveData bool) {
 		}
 
 		for _, location := range locations {
+			// Skip instances that belong to a MIG (they can be accessed via the MIG entry)
+			if location.Type == "instance" && location.MIGName != "" {
+				continue
+			}
+
 			if location.Type == "instance" || location.Type == "mig" {
 				inst := instanceData{
 					Name:    location.Name,
@@ -289,10 +294,55 @@ func (s *tuiState) resolveMIGAndSSH(migName, project, zone string) {
 		return
 	}
 
-	instance, err := projectClient.FindInstanceInMIG(s.ctx, migName, zone)
+	// Get all instances in the MIG
+	instances, _, err := projectClient.ListMIGInstances(s.ctx, migName, zone)
 	if err != nil {
 		s.app.QueueUpdateDraw(func() {
 			s.flashStatus(fmt.Sprintf(" [red]Error resolving MIG: %v[-]", err), 3*time.Second)
+		})
+		return
+	}
+
+	if len(instances) == 0 {
+		s.app.QueueUpdateDraw(func() {
+			s.flashStatus(" [red]No instances found in MIG[-]", 3*time.Second)
+		})
+		return
+	}
+
+	// If only one instance, connect directly
+	if len(instances) == 1 {
+		s.connectToMIGInstance(projectClient, project, instances[0])
+		return
+	}
+
+	// Multiple instances - show selection modal
+	s.app.QueueUpdateDraw(func() {
+		s.kb.SetMode(ModeModal)
+		ShowMIGInstanceSelectionModal(s.app, migName, instances,
+			func(selected MIGInstanceSelection) {
+				// User selected an instance, now connect to it
+				s.status.SetText(fmt.Sprintf(" [yellow]Connecting to %s...[-]", selected.Name))
+				go s.connectToMIGInstance(projectClient, project, gcp.ManagedInstanceRef{
+					Name:   selected.Name,
+					Zone:   selected.Zone,
+					Status: selected.Status,
+				})
+			},
+			func() {
+				// User cancelled
+				s.restoreMainView()
+			},
+		)
+	})
+}
+
+func (s *tuiState) connectToMIGInstance(client *gcp.Client, project string, instRef gcp.ManagedInstanceRef) {
+	// Fetch full instance details to check for IAP capability
+	instance, err := client.FindInstance(s.ctx, instRef.Name, instRef.Zone)
+	if err != nil {
+		s.app.QueueUpdateDraw(func() {
+			s.flashStatus(fmt.Sprintf(" [red]Error fetching instance: %v[-]", err), 3*time.Second)
 		})
 		return
 	}

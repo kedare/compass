@@ -54,6 +54,9 @@ type LocationInfo struct {
 	IsRegional bool         `json:"is_regional,omitempty"`
 	// IAP stores the persisted user preference for using IAP tunneling with this instance.
 	IAP *bool `json:"iap,omitempty"`
+	// MIGName is set if this instance belongs to a managed instance group.
+	// Instances with MIGName set should typically be accessed via their MIG.
+	MIGName string `json:"mig_name,omitempty"`
 }
 
 // SubnetSecondaryRange captures details about a secondary IP range attached to a subnet.
@@ -126,6 +129,7 @@ type CachedLocation struct {
 	Name     string
 	Type     ResourceType
 	Location string
+	MIGName  string // Set if this instance belongs to a MIG
 }
 
 // preparedStatements holds pre-compiled SQL statements for better performance.
@@ -326,8 +330,8 @@ func (c *Cache) prepareStatements() error {
 	}
 
 	c.stmts.setInstance, err = c.db.Prepare(
-		`INSERT OR REPLACE INTO instances (name, timestamp, project, zone, region, type, is_regional, iap, last_used)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		`INSERT OR REPLACE INTO instances (name, timestamp, project, zone, region, type, is_regional, iap, last_used, mig_name)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare setInstance: %w", err)
 	}
@@ -585,10 +589,10 @@ func (c *Cache) Set(resourceName string, info *LocationInfo) error {
 		isRegional = 1
 	}
 
-	logSQL("setInstance", resourceName, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix())
+	logSQL("setInstance", resourceName, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix(), info.MIGName)
 
 	_, err := c.stmts.setInstance.Exec(
-		resourceName, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix(),
+		resourceName, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix(), info.MIGName,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to cache instance %s: %w", resourceName, err)
@@ -657,9 +661,9 @@ func (c *Cache) SetBatch(entries map[string]*LocationInfo) error {
 			isRegional = 1
 		}
 
-		logSQL("setInstance (batch)", name, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix())
+		logSQL("setInstance (batch)", name, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix(), info.MIGName)
 
-		_, err = stmt.Exec(name, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix())
+		_, err = stmt.Exec(name, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix(), info.MIGName)
 		if err != nil {
 			return fmt.Errorf("failed to cache instance %s: %w", name, err)
 		}
@@ -794,7 +798,7 @@ func (c *Cache) GetLocationsByProject(project string) ([]CachedLocation, bool) {
 	expiryTime := time.Now().Add(-ttl).Unix()
 
 	rows, err := c.query(
-		`SELECT name, type, zone, region FROM instances WHERE project = ? AND timestamp > ?`,
+		`SELECT name, type, zone, region, COALESCE(mig_name, '') FROM instances WHERE project = ? AND timestamp > ?`,
 		project, expiryTime,
 	)
 	if err != nil {
@@ -807,8 +811,8 @@ func (c *Cache) GetLocationsByProject(project string) ([]CachedLocation, bool) {
 	var results []CachedLocation
 
 	for rows.Next() {
-		var name, resourceType, zone, region string
-		if err := rows.Scan(&name, &resourceType, &zone, &region); err != nil {
+		var name, resourceType, zone, region, migName string
+		if err := rows.Scan(&name, &resourceType, &zone, &region, &migName); err != nil {
 			logger.Log.Warnf("Failed to scan instance row: %v", err)
 
 			continue
@@ -823,6 +827,7 @@ func (c *Cache) GetLocationsByProject(project string) ([]CachedLocation, bool) {
 			Name:     name,
 			Type:     ResourceType(resourceType),
 			Location: location,
+			MIGName:  migName,
 		})
 	}
 

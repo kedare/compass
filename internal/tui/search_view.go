@@ -683,8 +683,8 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 							return
 						}
 
-						// Resolve MIG to an instance
-						instance, err := projectClient.FindInstanceInMIG(ctx, resourceName, resourceLocation)
+						// Get all instances in the MIG
+						instances, _, err := projectClient.ListMIGInstances(ctx, resourceName, resourceLocation)
 						if err != nil {
 							app.QueueUpdateDraw(func() {
 								status.SetText(fmt.Sprintf(" [red]Error resolving MIG: %v[-]", err))
@@ -697,28 +697,83 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 							return
 						}
 
-						// Now show the SSH modal with the resolved instance
-						app.QueueUpdateDraw(func() {
-							cachedIAP := LoadIAPPreference(instance.Name)
-							defaultUseIAP := instance.CanUseIAP
+						if len(instances) == 0 {
+							app.QueueUpdateDraw(func() {
+								status.SetText(" [red]No instances found in MIG[-]")
+								time.AfterFunc(3*time.Second, func() {
+									app.QueueUpdateDraw(func() {
+										updateStatusWithActions()
+									})
+								})
+							})
+							return
+						}
 
-							modalOpen = true
-							ShowSSHOptionsModal(app, instance.Name, defaultUseIAP, cachedIAP,
-								func(opts SSHOptions) {
-									app.SetRoot(flex, true)
-									app.SetFocus(table)
-									modalOpen = false
-
-									RunSSHSession(app, instance.Name, resourceProject, instance.Zone, opts, outputRedir)
-
-									status.SetText(fmt.Sprintf(" [green]Disconnected from %s[-]", instance.Name))
+						// Helper to connect to a specific instance
+						connectToInstance := func(instRef gcp.ManagedInstanceRef) {
+							instance, err := projectClient.FindInstance(ctx, instRef.Name, instRef.Zone)
+							if err != nil {
+								app.QueueUpdateDraw(func() {
+									status.SetText(fmt.Sprintf(" [red]Error fetching instance: %v[-]", err))
 									time.AfterFunc(3*time.Second, func() {
 										app.QueueUpdateDraw(func() {
 											updateStatusWithActions()
 										})
 									})
+								})
+								return
+							}
+
+							app.QueueUpdateDraw(func() {
+								cachedIAP := LoadIAPPreference(instance.Name)
+								defaultUseIAP := instance.CanUseIAP
+
+								modalOpen = true
+								ShowSSHOptionsModal(app, instance.Name, defaultUseIAP, cachedIAP,
+									func(opts SSHOptions) {
+										app.SetRoot(flex, true)
+										app.SetFocus(table)
+										modalOpen = false
+
+										RunSSHSession(app, instance.Name, resourceProject, instance.Zone, opts, outputRedir)
+
+										status.SetText(fmt.Sprintf(" [green]Disconnected from %s[-]", instance.Name))
+										time.AfterFunc(3*time.Second, func() {
+											app.QueueUpdateDraw(func() {
+												updateStatusWithActions()
+											})
+										})
+									},
+									func() {
+										app.SetRoot(flex, true)
+										app.SetFocus(table)
+										modalOpen = false
+										updateStatusWithActions()
+									},
+								)
+							})
+						}
+
+						// If only one instance, connect directly
+						if len(instances) == 1 {
+							connectToInstance(instances[0])
+							return
+						}
+
+						// Multiple instances - show selection modal
+						app.QueueUpdateDraw(func() {
+							modalOpen = true
+							ShowMIGInstanceSelectionModal(app, resourceName, instances,
+								func(selected MIGInstanceSelection) {
+									status.SetText(fmt.Sprintf(" [yellow]Connecting to %s...[-]", selected.Name))
+									go connectToInstance(gcp.ManagedInstanceRef{
+										Name:   selected.Name,
+										Zone:   selected.Zone,
+										Status: selected.Status,
+									})
 								},
 								func() {
+									// User cancelled
 									app.SetRoot(flex, true)
 									app.SetFocus(table)
 									modalOpen = false

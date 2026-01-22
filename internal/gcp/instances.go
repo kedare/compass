@@ -315,6 +315,10 @@ func (c *Client) convertInstance(instance *compute.Instance) *Instance {
 		for _, meta := range instance.Metadata.Items {
 			if meta != nil {
 				result.MetadataKeys = append(result.MetadataKeys, meta.Key)
+				// Extract MIG name from created-by metadata
+				if meta.Key == "created-by" && meta.Value != nil {
+					result.MIGName = extractMIGNameFromCreatedBy(*meta.Value)
+				}
 			}
 		}
 	}

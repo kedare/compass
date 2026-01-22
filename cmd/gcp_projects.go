@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 
 	"github.com/kedare/compass/internal/gcp"
@@ -71,27 +72,39 @@ Examples:
 }
 
 var gcpProjectsRefreshCmd = &cobra.Command{
-	Use:   "refresh <project-name>",
-	Short: "Refresh cached resources for a GCP project",
-	Long: `Re-scan and update cached resources for a specific GCP project.
+	Use:   "refresh [project-name]",
+	Short: "Refresh cached resources for GCP project(s)",
+	Long: `Re-scan and update cached resources for GCP projects.
+
+When called without arguments, refreshes all currently imported projects.
+When called with a project name, refreshes only that specific project.
 
 This will refresh the cache with current data from GCP:
   - Zones available in the project
   - All compute instances
+  - All managed instance groups (MIGs)
   - All subnets
 
 The project must already be in the cache. Use 'compass gcp projects import' to add new projects.
 
 Examples:
+  # Refresh all imported projects
+  compass gcp projects refresh
+
+  # Refresh a specific project
   compass gcp projects refresh my-project`,
-	Args: cobra.ExactArgs(1),
+	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		ctx := cmd.Context()
 		if ctx == nil {
 			ctx = context.Background()
 		}
 
-		runProjectsRefresh(ctx, args[0])
+		if len(args) == 0 {
+			runProjectsRefreshAll(ctx)
+		} else {
+			runProjectsRefresh(ctx, args[0])
+		}
 	},
 	ValidArgsFunction: projectNameCompletion,
 }
@@ -154,6 +167,25 @@ func runProjectsRefresh(ctx context.Context, projectName string) {
 	scanProjectResources(ctx, []string{projectName})
 
 	pterm.Success.Printfln("Project '%s' cache refreshed!", projectName)
+}
+
+// runProjectsRefreshAll rescans and updates cached resources for all imported projects.
+func runProjectsRefreshAll(ctx context.Context) {
+	cache, err := gcp.LoadCache()
+	if err != nil {
+		logger.Log.Fatalf("Failed to load cache: %v", err)
+	}
+
+	projects := cache.GetProjects()
+	if len(projects) == 0 {
+		logger.Log.Fatal("No projects in cache. Use 'compass gcp projects import' to add projects first.")
+	}
+
+	logger.Log.Infof("Refreshing cached resources for %d project(s)...", len(projects))
+
+	scanProjectResources(ctx, projects)
+
+	pterm.Success.Printfln("All %d project(s) cache refreshed!", len(projects))
 }
 
 // runProjectsImport discovers all accessible GCP projects and prompts the user to select
@@ -235,10 +267,10 @@ func runProjectsImport(ctx context.Context, regexPattern string) {
 	pterm.Success.Printfln("Projects imported and resources cached! You can now use 'compass gcp ssh' without --project flag.")
 }
 
-// scanProjectResources scans zones, instances, and subnets for each project and caches them.
+// scanProjectResources scans zones, instances, MIGs, and subnets for each project and caches them.
 func scanProjectResources(ctx context.Context, projects []string) {
-	// 3 API operations per project: zones, instances, subnets
-	totalAPICalls := len(projects) * 3
+	// 4 API operations per project: zones, instances, MIGs, subnets
+	totalAPICalls := len(projects) * 4
 	var completedAPICalls int
 	var apiCallsMu sync.Mutex
 
@@ -259,16 +291,33 @@ func scanProjectResources(ctx context.Context, projects []string) {
 		WithShowCount(true).
 		Start()
 
+	// Track max title length to ensure proper clearing of previous text
+	var maxTitleLen int
+	var maxTitleMu sync.Mutex
+
 	// Function to update progress bar title with current stats
 	updateTitle := func(currentProject, currentOp string) {
 		statsMu.Lock()
 		zones := totalStats.Zones
 		instances := totalStats.Instances
+		migs := totalStats.MIGs
 		subnets := totalStats.Subnets
 		statsMu.Unlock()
 
-		progressBar.UpdateTitle(fmt.Sprintf("%s (%s) | %d zones, %d instances, %d subnets",
-			currentProject, currentOp, zones, instances, subnets))
+		title := fmt.Sprintf("%s (%s) | %d zones, %d instances, %d MIGs, %d subnets",
+			currentProject, currentOp, zones, instances, migs, subnets)
+
+		// Pad with spaces to clear any remaining characters from previous longer titles
+		maxTitleMu.Lock()
+		if len(title) > maxTitleLen {
+			maxTitleLen = len(title)
+		}
+		if len(title) < maxTitleLen {
+			title = title + strings.Repeat(" ", maxTitleLen-len(title))
+		}
+		maxTitleMu.Unlock()
+
+		progressBar.UpdateTitle(title)
 	}
 
 	// Scan each project concurrently with limited parallelism
@@ -289,10 +338,10 @@ func scanProjectResources(ctx context.Context, projects []string) {
 				errors = append(errors, fmt.Sprintf("%s: %v", proj, err))
 				errorsMu.Unlock()
 
-				// Count all 3 operations as done (failed)
+				// Count all 4 operations as done (failed)
 				apiCallsMu.Lock()
-				completedAPICalls += 3
-				progressBar.Add(3)
+				completedAPICalls += 4
+				progressBar.Add(4)
 				apiCallsMu.Unlock()
 				return
 			}
@@ -305,6 +354,8 @@ func scanProjectResources(ctx context.Context, projects []string) {
 					totalStats.Zones += count
 				case "instances":
 					totalStats.Instances += count
+				case "migs":
+					totalStats.MIGs += count
 				case "subnets":
 					totalStats.Subnets += count
 				}
@@ -343,8 +394,8 @@ func scanProjectResources(ctx context.Context, projects []string) {
 
 	// Print summary
 	statsMu.Lock()
-	pterm.Success.Printfln("Cached: %d zones, %d instances, %d subnets across %d projects",
-		totalStats.Zones, totalStats.Instances, totalStats.Subnets, len(projects))
+	pterm.Success.Printfln("Cached: %d zones, %d instances, %d MIGs, %d subnets across %d projects",
+		totalStats.Zones, totalStats.Instances, totalStats.MIGs, totalStats.Subnets, len(projects))
 	statsMu.Unlock()
 
 	// Print errors if any

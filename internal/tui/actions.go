@@ -323,6 +323,118 @@ func ShowSSHOptionsModal(app *tview.Application, instanceName string, defaultUse
 	app.SetFocus(form)
 }
 
+// MIGInstanceSelection represents a selected instance from a MIG.
+type MIGInstanceSelection struct {
+	Name   string
+	Zone   string
+	Status string
+}
+
+// ShowMIGInstanceSelectionModal displays a modal to select an instance from a MIG.
+// It shows all instances with their status and lets the user choose one.
+// onSelect is called with the selected instance when the user confirms.
+// onCancel is called when the user cancels the selection.
+func ShowMIGInstanceSelectionModal(app *tview.Application, migName string, instances []gcp.ManagedInstanceRef, onSelect func(instance MIGInstanceSelection), onCancel func()) {
+	// Create table for instance selection
+	table := tview.NewTable().
+		SetSelectable(true, false).
+		SetFixed(1, 0)
+
+	// Truncate MIG name if too long for title
+	titleMigName := migName
+	if len(titleMigName) > 40 {
+		titleMigName = titleMigName[:37] + "..."
+	}
+	table.SetBorder(true).SetTitle(fmt.Sprintf(" Select Instance (%s) ", titleMigName))
+
+	// Add header row
+	headers := []string{"Name", "Status", "Zone"}
+	for col, header := range headers {
+		cell := tview.NewTableCell(header).
+			SetTextColor(tcell.ColorYellow).
+			SetSelectable(false).
+			SetExpansion(1)
+		table.SetCell(0, col, cell)
+	}
+
+	// Add instance rows
+	for i, inst := range instances {
+		row := i + 1
+
+		// Name column
+		table.SetCell(row, 0, tview.NewTableCell(inst.Name).SetExpansion(1))
+
+		// Status column with color
+		statusColor := tcell.ColorRed
+		if inst.IsRunning() {
+			statusColor = tcell.ColorGreen
+		}
+		table.SetCell(row, 1, tview.NewTableCell(inst.Status).SetTextColor(statusColor).SetExpansion(1))
+
+		// Zone column
+		table.SetCell(row, 2, tview.NewTableCell(inst.Zone).SetExpansion(1))
+	}
+
+	// Status bar
+	status := tview.NewTextView().
+		SetDynamicColors(true).
+		SetText(" [yellow]Enter[-] select  [yellow]↑/↓[-] navigate  [yellow]Esc[-] cancel")
+
+	// Main layout
+	flex := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(table, 0, 1, true).
+		AddItem(status, 1, 0, false)
+
+	// Calculate modal dimensions
+	// Height: header + instances + border (2) + status (1)
+	modalHeight := len(instances) + 4
+	if modalHeight > 15 {
+		modalHeight = 15
+	}
+	if modalHeight < 6 {
+		modalHeight = 6
+	}
+
+	// Width: accommodate long instance names
+	modalWidth := 90
+
+	// Create centered modal container
+	modal := tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(nil, 0, 1, false).
+			AddItem(flex, modalHeight, 0, true).
+			AddItem(nil, 0, 1, false), modalWidth, 0, true).
+		AddItem(nil, 0, 1, false)
+
+	// Handle keyboard input
+	table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEscape:
+			onCancel()
+			return nil
+		case tcell.KeyEnter:
+			row, _ := table.GetSelection()
+			if row > 0 && row <= len(instances) {
+				selected := instances[row-1]
+				onSelect(MIGInstanceSelection{
+					Name:   selected.Name,
+					Zone:   selected.Zone,
+					Status: selected.Status,
+				})
+			}
+			return nil
+		}
+		return event
+	})
+
+	// Select first data row
+	table.Select(1, 0)
+
+	app.SetRoot(modal, true).SetFocus(table)
+}
+
 // ExecuteDetails fetches and displays instance details.
 // Note: The caller should set any "loading" status message before calling this method,
 // as this method spawns a goroutine and returns immediately.

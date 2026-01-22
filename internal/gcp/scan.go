@@ -105,6 +105,7 @@ func (c *Client) scanInstances(ctx context.Context) (int, error) {
 			Project: c.project,
 			Zone:    inst.Zone,
 			Type:    cache.ResourceTypeInstance,
+			MIGName: inst.MIGName,
 		}
 	}
 
