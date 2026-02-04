@@ -101,6 +101,7 @@ type tuiState struct {
 // restoreMainView restores the main instance view after a modal/view
 func (s *tuiState) restoreMainView() {
 	s.kb.SetMode(ModeNormal)
+	s.app.SetInputCapture(s.createInputCapture())
 	s.app.SetRoot(s.flex, true).SetFocus(s.table)
 	s.updateStatusBar()
 }
