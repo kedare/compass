@@ -329,6 +329,7 @@ func RunIPLookupView(ctx context.Context, c *cache.Cache, app *tview.Application
 					app.QueueUpdateDraw(func() {
 						if isSearching {
 							progressText.SetText(fmt.Sprintf("[yellow]%s %d/%d projects | %d results[-]", frame, completed, totalProjects, count))
+							status.SetText(fmt.Sprintf(" [yellow]Looking up IP... (%d/%d projects)[-]  [yellow]Esc[-] cancel", completed, totalProjects))
 						}
 					})
 				case <-spinnerDone:
