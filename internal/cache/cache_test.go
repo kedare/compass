@@ -843,6 +843,258 @@ func TestMarkInstanceUsedWithProject(t *testing.T) {
 	require.Equal(t, oldTime, lastUsedB)
 }
 
+// TestSSHFlagsStorage verifies that SSH flags can be stored and retrieved.
+func TestSSHFlagsStorage(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Set instance with SSH flags
+	info := &LocationInfo{
+		Project:  "test-project",
+		Zone:     "us-central1-a",
+		Type:     ResourceTypeInstance,
+		SSHFlags: []string{"-v", "-D 1080", "-L 8080:localhost:8080"},
+	}
+
+	err := cache.Set("test-instance", info)
+	require.NoError(t, err)
+
+	// Verify SSH flags were stored and retrieved via Get
+	retrieved, found := cache.Get("test-instance")
+	require.True(t, found)
+	require.Equal(t, []string{"-v", "-D 1080", "-L 8080:localhost:8080"}, retrieved.SSHFlags)
+}
+
+// TestSSHFlagsGetWithProject verifies SSH flags are retrievable with GetWithProject.
+func TestSSHFlagsGetWithProject(t *testing.T) {
+	cache := newTestCache(t)
+
+	err := cache.Set("test-instance", &LocationInfo{
+		Project:  "project-a",
+		Zone:     "us-central1-a",
+		Type:     ResourceTypeInstance,
+		SSHFlags: []string{"-v"},
+	})
+	require.NoError(t, err)
+
+	retrieved, found := cache.GetWithProject("test-instance", "project-a")
+	require.True(t, found)
+	require.Equal(t, []string{"-v"}, retrieved.SSHFlags)
+}
+
+// TestSSHFlagsGetAllByName verifies SSH flags are included in GetAllByName results.
+func TestSSHFlagsGetAllByName(t *testing.T) {
+	cache := newTestCache(t)
+
+	err := cache.Set("multi-inst", &LocationInfo{
+		Project:  "project-a",
+		Zone:     "us-central1-a",
+		Type:     ResourceTypeInstance,
+		SSHFlags: []string{"-v"},
+	})
+	require.NoError(t, err)
+
+	err = cache.Set("multi-inst", &LocationInfo{
+		Project:  "project-b",
+		Zone:     "us-east1-b",
+		Type:     ResourceTypeInstance,
+		SSHFlags: []string{"-D 1080"},
+	})
+	require.NoError(t, err)
+
+	matches := cache.GetAllByName("multi-inst")
+	require.Len(t, matches, 2)
+
+	flagsByProject := make(map[string][]string)
+	for _, m := range matches {
+		flagsByProject[m.Project] = m.Info.SSHFlags
+	}
+
+	require.Equal(t, []string{"-v"}, flagsByProject["project-a"])
+	require.Equal(t, []string{"-D 1080"}, flagsByProject["project-b"])
+}
+
+// TestSSHFlagsNilWhenNotSet verifies that SSH flags are nil when not stored.
+func TestSSHFlagsNilWhenNotSet(t *testing.T) {
+	cache := newTestCache(t)
+
+	err := cache.Set("test-instance", &LocationInfo{
+		Project: "test-project",
+		Zone:    "us-central1-a",
+		Type:    ResourceTypeInstance,
+	})
+	require.NoError(t, err)
+
+	retrieved, found := cache.Get("test-instance")
+	require.True(t, found)
+	require.Nil(t, retrieved.SSHFlags)
+}
+
+// TestSSHFlagsUpdate verifies that SSH flags can be updated.
+func TestSSHFlagsUpdate(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Set initial flags
+	err := cache.Set("test-instance", &LocationInfo{
+		Project:  "test-project",
+		Zone:     "us-central1-a",
+		Type:     ResourceTypeInstance,
+		SSHFlags: []string{"-v"},
+	})
+	require.NoError(t, err)
+
+	// Update with new flags
+	err = cache.Set("test-instance", &LocationInfo{
+		Project:  "test-project",
+		Zone:     "us-central1-a",
+		Type:     ResourceTypeInstance,
+		SSHFlags: []string{"-D 1080", "-L 8080:localhost:8080"},
+	})
+	require.NoError(t, err)
+
+	retrieved, found := cache.Get("test-instance")
+	require.True(t, found)
+	require.Equal(t, []string{"-D 1080", "-L 8080:localhost:8080"}, retrieved.SSHFlags)
+}
+
+// TestSSHFlagsClearBySettingEmpty verifies that SSH flags can be cleared by setting empty slice.
+func TestSSHFlagsClearBySettingEmpty(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Set initial flags
+	err := cache.Set("test-instance", &LocationInfo{
+		Project:  "test-project",
+		Zone:     "us-central1-a",
+		Type:     ResourceTypeInstance,
+		SSHFlags: []string{"-v"},
+	})
+	require.NoError(t, err)
+
+	// Clear by setting nil
+	err = cache.Set("test-instance", &LocationInfo{
+		Project:  "test-project",
+		Zone:     "us-central1-a",
+		Type:     ResourceTypeInstance,
+		SSHFlags: nil,
+	})
+	require.NoError(t, err)
+
+	retrieved, found := cache.Get("test-instance")
+	require.True(t, found)
+	require.Nil(t, retrieved.SSHFlags)
+}
+
+// TestSSHFlagsPerProject verifies that SSH flags are stored independently per project.
+func TestSSHFlagsPerProject(t *testing.T) {
+	cache := newTestCache(t)
+
+	// Set different flags for same instance in different projects
+	err := cache.Set("shared-instance", &LocationInfo{
+		Project:  "project-a",
+		Zone:     "us-central1-a",
+		Type:     ResourceTypeInstance,
+		SSHFlags: []string{"-v", "-D 1080"},
+	})
+	require.NoError(t, err)
+
+	err = cache.Set("shared-instance", &LocationInfo{
+		Project:  "project-b",
+		Zone:     "us-east1-b",
+		Type:     ResourceTypeInstance,
+		SSHFlags: []string{"-L 3306:localhost:3306"},
+	})
+	require.NoError(t, err)
+
+	// Verify each project has its own SSH flags
+	retrievedA, found := cache.GetWithProject("shared-instance", "project-a")
+	require.True(t, found)
+	require.Equal(t, []string{"-v", "-D 1080"}, retrievedA.SSHFlags)
+
+	retrievedB, found := cache.GetWithProject("shared-instance", "project-b")
+	require.True(t, found)
+	require.Equal(t, []string{"-L 3306:localhost:3306"}, retrievedB.SSHFlags)
+}
+
+// TestSSHFlagsPersistence verifies that SSH flags persist across cache instances.
+func TestSSHFlagsPersistence(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_cache.db")
+
+	// Create first cache instance and add data with SSH flags
+	cache1, err := newWithPath(dbPath)
+	require.NoError(t, err)
+
+	err = cache1.Set("test-instance", &LocationInfo{
+		Project:  "test-project",
+		Zone:     "us-central1-a",
+		Type:     ResourceTypeInstance,
+		SSHFlags: []string{"-v", "-D 1080"},
+	})
+	require.NoError(t, err)
+	_ = cache1.Close()
+
+	// Create second cache instance and verify SSH flags persisted
+	cache2, err := newWithPath(dbPath)
+	require.NoError(t, err)
+	defer func() { _ = cache2.Close() }()
+
+	retrieved, found := cache2.Get("test-instance")
+	require.True(t, found)
+	require.Equal(t, []string{"-v", "-D 1080"}, retrieved.SSHFlags)
+}
+
+// TestSSHFlagsWithIAP verifies that SSH flags coexist with IAP preferences.
+func TestSSHFlagsWithIAP(t *testing.T) {
+	cache := newTestCache(t)
+
+	iapTrue := true
+	err := cache.Set("test-instance", &LocationInfo{
+		Project:  "test-project",
+		Zone:     "us-central1-a",
+		Type:     ResourceTypeInstance,
+		IAP:      &iapTrue,
+		SSHFlags: []string{"-v", "-D 1080"},
+	})
+	require.NoError(t, err)
+
+	retrieved, found := cache.Get("test-instance")
+	require.True(t, found)
+	require.NotNil(t, retrieved.IAP)
+	require.True(t, *retrieved.IAP)
+	require.Equal(t, []string{"-v", "-D 1080"}, retrieved.SSHFlags)
+}
+
+// TestSSHFlagsBatchSet verifies SSH flags work with SetBatch.
+func TestSSHFlagsBatchSet(t *testing.T) {
+	cache := newTestCache(t)
+
+	entries := map[string]*LocationInfo{
+		"inst-with-flags": {
+			Project:  "test-project",
+			Zone:     "us-central1-a",
+			Type:     ResourceTypeInstance,
+			SSHFlags: []string{"-v", "-D 1080"},
+		},
+		"inst-without-flags": {
+			Project: "test-project",
+			Zone:    "us-east1-b",
+			Type:    ResourceTypeInstance,
+		},
+	}
+
+	err := cache.SetBatch(entries)
+	require.NoError(t, err)
+
+	// Instance with flags
+	retrieved, found := cache.GetWithProject("inst-with-flags", "test-project")
+	require.True(t, found)
+	require.Equal(t, []string{"-v", "-D 1080"}, retrieved.SSHFlags)
+
+	// Instance without flags
+	retrieved, found = cache.GetWithProject("inst-without-flags", "test-project")
+	require.True(t, found)
+	require.Nil(t, retrieved.SSHFlags)
+}
+
 // TestIAPPreservationWithCompositeKey verifies IAP preference is preserved per (name, project).
 func TestIAPPreservationWithCompositeKey(t *testing.T) {
 	cache := newTestCache(t)
