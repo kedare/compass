@@ -109,8 +109,9 @@ func NewInstanceActionExecutor(name, project, zone string, useIAP bool) *Instanc
 
 // SSHOptions contains configuration options for an SSH session
 type SSHOptions struct {
-	UseIAP   *bool    // nil = auto, true = force IAP, false = no IAP
-	SSHFlags []string // Additional SSH flags
+	UseIAP        *bool    // nil = auto, true = force IAP, false = no IAP
+	SSHFlags      []string // Additional SSH flags
+	RememberFlags bool     // Whether to persist SSH flags for future connections
 }
 
 // RunSSHSession suspends the TUI and runs an SSH session to the specified instance.
@@ -130,6 +131,11 @@ func RunSSHSession(app *tview.Application, name, project, zone string, opts SSHO
 	// Save the IAP preference if explicitly set (not Auto)
 	if opts.UseIAP != nil {
 		SaveIAPPreference(name, project, zone, *opts.UseIAP)
+	}
+
+	// Save SSH flags if remember is enabled
+	if opts.RememberFlags {
+		SaveSSHFlags(name, project, zone, opts.SSHFlags)
 	}
 
 	app.Suspend(func() {
@@ -229,11 +235,76 @@ func SaveIAPPreference(instanceName, project, zone string, useIAP bool) {
 	_ = cacheStore.Set(instanceName, info)
 }
 
+// LoadSSHFlags loads the cached SSH flags for an instance.
+// Returns nil if no flags are stored.
+func LoadSSHFlags(instanceName, project string) []string {
+	cacheStore, err := gcp.LoadCache()
+	if err != nil || cacheStore == nil || instanceName == "" {
+		return nil
+	}
+
+	var info *cache.LocationInfo
+	var found bool
+
+	if project != "" {
+		info, found = cacheStore.GetWithProject(instanceName, project)
+	} else {
+		info, found = cacheStore.Get(instanceName)
+	}
+
+	if !found || info == nil {
+		return nil
+	}
+
+	return info.SSHFlags
+}
+
+// SaveSSHFlags saves SSH flags for an instance.
+func SaveSSHFlags(instanceName, project, zone string, flags []string) {
+	if instanceName == "" {
+		return
+	}
+
+	cacheStore, err := gcp.LoadCache()
+	if err != nil || cacheStore == nil {
+		return
+	}
+
+	// Get existing info or create new
+	var info *cache.LocationInfo
+	var found bool
+
+	if project != "" {
+		info, found = cacheStore.GetWithProject(instanceName, project)
+	} else {
+		info, found = cacheStore.Get(instanceName)
+	}
+
+	if !found || info == nil {
+		info = &cache.LocationInfo{
+			Project: project,
+			Zone:    zone,
+			Type:    cache.ResourceTypeInstance,
+		}
+	} else {
+		if info.Project == "" {
+			info.Project = project
+		}
+		if info.Zone == "" {
+			info.Zone = zone
+		}
+	}
+
+	info.SSHFlags = flags
+	_ = cacheStore.Set(instanceName, info)
+}
+
 // ShowSSHOptionsModal displays a modal to configure SSH options before connecting.
 // It calls onConnect with the selected options when the user confirms, or onCancel when cancelled.
 // cachedIAP is the previously stored IAP preference for this instance (nil = no preference).
 // defaultUseIAP is the suggested default based on instance properties (e.g., no external IP).
-func ShowSSHOptionsModal(app *tview.Application, instanceName string, defaultUseIAP bool, cachedIAP *bool, onConnect func(opts SSHOptions), onCancel func()) {
+// cachedSSHFlags is the previously stored SSH flags for this instance (nil = no saved flags).
+func ShowSSHOptionsModal(app *tview.Application, instanceName string, defaultUseIAP bool, cachedIAP *bool, cachedSSHFlags []string, onConnect func(opts SSHOptions), onCancel func()) {
 	// Create form
 	form := tview.NewForm()
 
@@ -253,13 +324,25 @@ func ShowSSHOptionsModal(app *tview.Application, instanceName string, defaultUse
 
 	var selectedIAP string
 	var sshFlagsInput string
+	var rememberFlagsChecked bool
+
+	// Pre-fill SSH flags from cache
+	defaultSSHFlags := ""
+	if len(cachedSSHFlags) > 0 {
+		defaultSSHFlags = strings.Join(cachedSSHFlags, " ")
+		rememberFlagsChecked = true // Default to checked when flags already saved
+	}
 
 	form.AddDropDown("IAP Tunnel", iapOptions, iapIndex, func(option string, index int) {
 		selectedIAP = option
 	})
 
-	form.AddInputField("SSH Flags", "", 20, nil, func(text string) {
+	form.AddInputField("SSH Flags", defaultSSHFlags, 20, nil, func(text string) {
 		sshFlagsInput = text
+	})
+
+	form.AddCheckbox("Remember Flags", rememberFlagsChecked, func(checked bool) {
+		rememberFlagsChecked = checked
 	})
 
 	form.AddButton("Connect", func() {
@@ -285,6 +368,8 @@ func ShowSSHOptionsModal(app *tview.Application, instanceName string, defaultUse
 		if sshFlagsInput != "" {
 			opts.SSHFlags = strings.Fields(sshFlagsInput)
 		}
+
+		opts.RememberFlags = rememberFlagsChecked
 
 		onConnect(opts)
 	})
@@ -313,13 +398,13 @@ func ShowSSHOptionsModal(app *tview.Application, instanceName string, defaultUse
 		AddItem(nil, 0, 1, false).
 		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
 			AddItem(nil, 0, 1, false).
-			AddItem(form, 11, 1, true).
+			AddItem(form, 13, 1, true).
 			AddItem(nil, 0, 1, false), 50, 1, true).
 		AddItem(nil, 0, 1, false)
 
 	app.SetRoot(modal, true)
-	// Focus on the Connect button (index 2: after dropdown and input field)
-	form.SetFocus(2)
+	// Focus on the Connect button (index 3: after dropdown, input field, and checkbox)
+	form.SetFocus(3)
 	app.SetFocus(form)
 }
 

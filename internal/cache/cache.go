@@ -57,6 +57,8 @@ type LocationInfo struct {
 	// MIGName is set if this instance belongs to a managed instance group.
 	// Instances with MIGName set should typically be accessed via their MIG.
 	MIGName string `json:"mig_name,omitempty"`
+	// SSHFlags stores the remembered SSH flags for this instance.
+	SSHFlags []string `json:"ssh_flags,omitempty"`
 }
 
 // SubnetSecondaryRange captures details about a secondary IP range attached to a subnet.
@@ -334,7 +336,7 @@ func (c *Cache) prepareStatements() error {
 
 	// Get most recently used instance by name only (backward compatible)
 	c.stmts.getInstance, err = c.db.Prepare(
-		`SELECT timestamp, project, zone, region, type, is_regional, iap
+		`SELECT timestamp, project, zone, region, type, is_regional, iap, ssh_flags
 		 FROM instances WHERE name = ? AND timestamp > ?
 		 ORDER BY last_used DESC NULLS LAST, timestamp DESC LIMIT 1`)
 	if err != nil {
@@ -343,7 +345,7 @@ func (c *Cache) prepareStatements() error {
 
 	// Get specific instance by name and project
 	c.stmts.getInstanceByProject, err = c.db.Prepare(
-		`SELECT timestamp, project, zone, region, type, is_regional, iap
+		`SELECT timestamp, project, zone, region, type, is_regional, iap, ssh_flags
 		 FROM instances WHERE name = ? AND project = ? AND timestamp > ?`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare getInstanceByProject: %w", err)
@@ -351,7 +353,7 @@ func (c *Cache) prepareStatements() error {
 
 	// Get all instances with a given name across all projects
 	c.stmts.getAllByName, err = c.db.Prepare(
-		`SELECT timestamp, project, zone, region, type, is_regional, iap
+		`SELECT timestamp, project, zone, region, type, is_regional, iap, ssh_flags
 		 FROM instances WHERE name = ? AND timestamp > ?
 		 ORDER BY last_used DESC NULLS LAST, timestamp DESC`)
 	if err != nil {
@@ -359,8 +361,8 @@ func (c *Cache) prepareStatements() error {
 	}
 
 	c.stmts.setInstance, err = c.db.Prepare(
-		`INSERT OR REPLACE INTO instances (name, timestamp, project, zone, region, type, is_regional, iap, last_used, mig_name)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		`INSERT OR REPLACE INTO instances (name, timestamp, project, zone, region, type, is_regional, iap, last_used, mig_name, ssh_flags)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare setInstance: %w", err)
 	}
@@ -539,11 +541,12 @@ func (c *Cache) Get(resourceName string) (*LocationInfo, bool) {
 	var timestamp int64
 	var isRegional int
 	var iap *int
+	var sshFlagsJSON *string
 
 	logSQL("getInstance", resourceName, expiryTime)
 
 	err := c.stmts.getInstance.QueryRow(resourceName, expiryTime).Scan(
-		&timestamp, &info.Project, &info.Zone, &info.Region, &info.Type, &isRegional, &iap,
+		&timestamp, &info.Project, &info.Zone, &info.Region, &info.Type, &isRegional, &iap, &sshFlagsJSON,
 	)
 
 	if err == sql.ErrNoRows {
@@ -566,6 +569,10 @@ func (c *Cache) Get(resourceName string) (*LocationInfo, bool) {
 	if iap != nil {
 		val := *iap == 1
 		info.IAP = &val
+	}
+
+	if sshFlagsJSON != nil && *sshFlagsJSON != "" {
+		_ = json.Unmarshal([]byte(*sshFlagsJSON), &info.SSHFlags)
 	}
 
 	// Refresh timestamp for LRU semantics (now includes project in WHERE clause)
@@ -604,11 +611,12 @@ func (c *Cache) GetWithProject(resourceName, project string) (*LocationInfo, boo
 	var timestamp int64
 	var isRegional int
 	var iap *int
+	var sshFlagsJSON *string
 
 	logSQL("getInstanceByProject", resourceName, project, expiryTime)
 
 	err := c.stmts.getInstanceByProject.QueryRow(resourceName, project, expiryTime).Scan(
-		&timestamp, &info.Project, &info.Zone, &info.Region, &info.Type, &isRegional, &iap,
+		&timestamp, &info.Project, &info.Zone, &info.Region, &info.Type, &isRegional, &iap, &sshFlagsJSON,
 	)
 
 	if err == sql.ErrNoRows {
@@ -631,6 +639,10 @@ func (c *Cache) GetWithProject(resourceName, project string) (*LocationInfo, boo
 	if iap != nil {
 		val := *iap == 1
 		info.IAP = &val
+	}
+
+	if sshFlagsJSON != nil && *sshFlagsJSON != "" {
+		_ = json.Unmarshal([]byte(*sshFlagsJSON), &info.SSHFlags)
 	}
 
 	// Refresh timestamp for LRU semantics
@@ -681,8 +693,9 @@ func (c *Cache) GetAllByName(resourceName string) []InstanceMatch {
 		var timestamp int64
 		var isRegional int
 		var iap *int
+		var sshFlagsJSON *string
 
-		err := rows.Scan(&timestamp, &info.Project, &info.Zone, &info.Region, &info.Type, &isRegional, &iap)
+		err := rows.Scan(&timestamp, &info.Project, &info.Zone, &info.Region, &info.Type, &isRegional, &iap, &sshFlagsJSON)
 		if err != nil {
 			logger.Log.Warnf("Failed to scan row for resource %s: %v", resourceName, err)
 			continue
@@ -694,6 +707,10 @@ func (c *Cache) GetAllByName(resourceName string) []InstanceMatch {
 		if iap != nil {
 			val := *iap == 1
 			info.IAP = &val
+		}
+
+		if sshFlagsJSON != nil && *sshFlagsJSON != "" {
+			_ = json.Unmarshal([]byte(*sshFlagsJSON), &info.SSHFlags)
 		}
 
 		matches = append(matches, InstanceMatch{
@@ -750,15 +767,24 @@ func (c *Cache) Set(resourceName string, info *LocationInfo) error {
 		iap = existingIAP
 	}
 
+	var sshFlagsJSON *string
+	if len(info.SSHFlags) > 0 {
+		data, marshalErr := json.Marshal(info.SSHFlags)
+		if marshalErr == nil {
+			s := string(data)
+			sshFlagsJSON = &s
+		}
+	}
+
 	isRegional := 0
 	if info.IsRegional {
 		isRegional = 1
 	}
 
-	logSQL("setInstance", resourceName, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix(), info.MIGName)
+	logSQL("setInstance", resourceName, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix(), info.MIGName, sshFlagsJSON)
 
 	_, err := c.stmts.setInstance.Exec(
-		resourceName, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix(), info.MIGName,
+		resourceName, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix(), info.MIGName, sshFlagsJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to cache instance %s: %w", resourceName, err)
@@ -822,14 +848,23 @@ func (c *Cache) SetBatch(entries map[string]*LocationInfo) error {
 			iap = &val
 		}
 
+		var sshFlagsJSON *string
+		if len(info.SSHFlags) > 0 {
+			data, marshalErr := json.Marshal(info.SSHFlags)
+			if marshalErr == nil {
+				s := string(data)
+				sshFlagsJSON = &s
+			}
+		}
+
 		isRegional := 0
 		if info.IsRegional {
 			isRegional = 1
 		}
 
-		logSQL("setInstance (batch)", name, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix(), info.MIGName)
+		logSQL("setInstance (batch)", name, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix(), info.MIGName, sshFlagsJSON)
 
-		_, err = stmt.Exec(name, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix(), info.MIGName)
+		_, err = stmt.Exec(name, now.Unix(), info.Project, info.Zone, info.Region, string(info.Type), isRegional, iap, now.Unix(), info.MIGName, sshFlagsJSON)
 		if err != nil {
 			return fmt.Errorf("failed to cache instance %s: %w", name, err)
 		}
