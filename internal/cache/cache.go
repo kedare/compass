@@ -999,7 +999,7 @@ func (c *Cache) GetLocationsByProject(project string) ([]CachedLocation, bool) {
 	expiryTime := time.Now().Add(-ttl).Unix()
 
 	rows, err := c.query(
-		`SELECT name, type, zone, region, COALESCE(mig_name, '') FROM instances WHERE project = ? AND timestamp > ?`,
+		`SELECT name, type, zone, region, COALESCE(mig_name, '') FROM instances WHERE project = ? AND timestamp > ? ORDER BY name ASC`,
 		project, expiryTime,
 	)
 	if err != nil {
