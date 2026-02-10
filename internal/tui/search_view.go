@@ -40,6 +40,15 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 	var currentSearchTerm string                     // Track current search term for affinity reinforcement
 	var recordedAffinity = make(map[string]struct{}) // Track what's been recorded this search session
 
+	// Search history navigation
+	var searchHistory []string
+	var historyIndex = -1
+
+	// Load search history
+	if history, err := c.GetSearchHistory(20); err == nil {
+		searchHistory = history
+	}
+
 	// Get initial projects from cache (will be overridden per-search with affinity data)
 	initialProjects := c.GetProjectsByUsage()
 	if len(initialProjects) == 0 {
@@ -55,7 +64,7 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 		SetFieldWidth(0).
 		SetFieldBackgroundColor(tcell.ColorBlack).
 		SetLabelColor(tcell.ColorYellow).
-		SetPlaceholder("Enter search term and press Enter")
+		SetPlaceholder("Search by name, IP, or resource... (↑/↓ for history)")
 
 	table := tview.NewTable().
 		SetBorders(false).
@@ -216,10 +225,49 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 			matchCount++
 		}
 
+		// Calculate resource type counts
+		typeCounts := make(map[string]int)
+		for _, entry := range results {
+			typeCounts[entry.Type]++
+		}
+
+		// Build type summary (show top 3 types)
+		type typeCount struct {
+			name  string
+			count int
+		}
+		var sortedTypes []typeCount
+		for typeName, count := range typeCounts {
+			sortedTypes = append(sortedTypes, typeCount{name: typeName, count: count})
+		}
+		sort.Slice(sortedTypes, func(i, j int) bool {
+			return sortedTypes[i].count > sortedTypes[j].count
+		})
+
+		typeSummary := ""
+		if len(sortedTypes) > 0 {
+			var parts []string
+			for i, tc := range sortedTypes {
+				if i >= 3 {
+					break
+				}
+				// Shorten the type name for display
+				shortType := tc.name
+				if idx := strings.LastIndex(tc.name, "."); idx >= 0 {
+					shortType = tc.name[idx+1:]
+				}
+				parts = append(parts, fmt.Sprintf("%d %s", tc.count, shortType))
+			}
+			if len(sortedTypes) > 3 {
+				parts = append(parts, fmt.Sprintf("%d other", len(sortedTypes)-3))
+			}
+			typeSummary = " [" + strings.Join(parts, ", ") + "]"
+		}
+
 		if filter != "" {
-			table.SetTitle(fmt.Sprintf(" Search Results (%d/%d matched) ", matchCount, len(results)))
+			table.SetTitle(fmt.Sprintf(" Search Results (%d/%d matched)%s ", matchCount, len(results), typeSummary))
 		} else {
-			table.SetTitle(fmt.Sprintf(" Search Results (%d) ", len(results)))
+			table.SetTitle(fmt.Sprintf(" Search Results (%d)%s ", len(results), typeSummary))
 		}
 
 		if matchCount > 0 && table.GetRowCount() > 1 {
@@ -358,6 +406,16 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 		currentSearchTerm = query
 		recordedAffinity = make(map[string]struct{})
 
+		// Add to search history
+		go func() {
+			_ = c.AddSearchHistory(query)
+			// Reload history for next time
+			if history, err := c.GetSearchHistory(20); err == nil {
+				searchHistory = history
+				historyIndex = -1
+			}
+		}()
+
 		// Get projects prioritized for this search term using learned affinity
 		searchProjects := c.GetProjectsForSearch(query, nil)
 		if len(searchProjects) == 0 {
@@ -397,7 +455,20 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 					app.QueueUpdateDraw(func() {
 						if isSearching {
 							if prog.TotalRequests > 0 {
-								progressText.SetText(fmt.Sprintf("[yellow]%s %d/%d requests | %d results[-]", frame, prog.CompletedRequests, prog.TotalRequests, count))
+								// Calculate project progress
+								projectsSearched := prog.CompletedRequests / len(engine.GetProviderKinds())
+								if projectsSearched > len(searchProjects) {
+									projectsSearched = len(searchProjects)
+								}
+
+								// Show current project being searched
+								currentProjectInfo := ""
+								if prog.CurrentProject != "" {
+									currentProjectInfo = fmt.Sprintf(" | [cyan]%s[-]", prog.CurrentProject)
+								}
+
+								progressText.SetText(fmt.Sprintf("[yellow]%s[%d/%d projects]%s | %d results[-]",
+									frame, projectsSearched, len(searchProjects), currentProjectInfo, count))
 							} else {
 								progressText.SetText(fmt.Sprintf("[yellow]%s Starting...[-]", frame))
 							}
@@ -529,12 +600,45 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 		})
 	}
 
+	// Search input history navigation
+	searchInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyUp:
+			// Navigate backward in history
+			if len(searchHistory) > 0 {
+				if historyIndex == -1 {
+					historyIndex = 0
+				} else if historyIndex < len(searchHistory)-1 {
+					historyIndex++
+				}
+				if historyIndex >= 0 && historyIndex < len(searchHistory) {
+					searchInput.SetText(searchHistory[historyIndex])
+				}
+			}
+			return nil
+		case tcell.KeyDown:
+			// Navigate forward in history
+			if len(searchHistory) > 0 && historyIndex > 0 {
+				historyIndex--
+				if historyIndex >= 0 {
+					searchInput.SetText(searchHistory[historyIndex])
+				}
+			} else if historyIndex == 0 {
+				historyIndex = -1
+				searchInput.SetText("")
+			}
+			return nil
+		}
+		return event
+	})
+
 	// Search input handler
 	searchInput.SetDoneFunc(func(key tcell.Key) {
 		switch key {
 		case tcell.KeyEnter:
 			query := strings.TrimSpace(searchInput.GetText())
 			if query != "" {
+				historyIndex = -1 // Reset history navigation
 				app.SetFocus(table)
 				// Run search in goroutine to avoid blocking the event loop
 				go performSearch(query)
@@ -892,6 +996,48 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 					// For MIGs, use formatted details
 					details := FormatMIGDetails(selectedEntry.Name, selectedEntry.Project, selectedEntry.Location, selectedEntry.Details)
 					showInstanceDetailModal(app, table, flex, selectedEntry.Name, details, &modalOpen, status, currentFilter, updateStatusWithActions)
+				} else if selectedEntry.Type == string(search.KindConnectivityTest) {
+					// For connectivity tests, fetch and show full details
+					status.SetText(" [yellow]Loading connectivity test details...[-]")
+
+					go func() {
+						connClient, err := gcp.NewConnectivityClient(ctx, selectedEntry.Project)
+						if err != nil {
+							app.QueueUpdateDraw(func() {
+								status.SetText(fmt.Sprintf(" [red]Error creating client: %v[-]", err))
+								time.AfterFunc(3*time.Second, func() {
+									app.QueueUpdateDraw(func() {
+										updateStatusWithActions()
+									})
+								})
+							})
+							return
+						}
+
+						test, err := connClient.GetTest(ctx, selectedEntry.Name)
+						if err != nil {
+							app.QueueUpdateDraw(func() {
+								status.SetText(fmt.Sprintf(" [red]Error loading test: %v[-]", err))
+								time.AfterFunc(3*time.Second, func() {
+									app.QueueUpdateDraw(func() {
+										updateStatusWithActions()
+									})
+								})
+							})
+							return
+						}
+
+						app.QueueUpdateDraw(func() {
+							ShowConnectivityTestDetails(app, test, func() {
+								// On close callback
+								modalOpen = false
+								app.SetRoot(flex, true)
+								app.SetFocus(table)
+								updateStatusWithActions()
+							})
+							modalOpen = true
+						})
+					}()
 				} else {
 					// For other types, show generic details
 					showSearchResultDetail(app, table, flex, selectedEntry, &modalOpen, status, currentFilter, updateStatusWithActions)
@@ -1087,6 +1233,11 @@ func createSearchEngine(parallelism int) *search.Engine {
 				return gcp.NewClient(ctx, project)
 			},
 		},
+		&search.ConnectivityTestProvider{
+			NewClient: func(ctx context.Context, project string) (search.ConnectivityTestClient, error) {
+				return gcp.NewConnectivityClient(ctx, project)
+			},
+		},
 	)
 	engine.MaxConcurrentProjects = parallelism
 	return engine
@@ -1107,6 +1258,8 @@ func getTypeColor(resourceType string) string {
 		return "yellow"
 	case strings.HasPrefix(resourceType, "secretmanager."):
 		return "red"
+	case strings.HasPrefix(resourceType, "networkmanagement."):
+		return "purple"
 	default:
 		return "white"
 	}
@@ -1221,6 +1374,7 @@ func showSearchHelp(app *tview.Application, table *tview.Table, mainFlex *tview.
 
 [yellow]Search[-]
   [white]Enter[-]         Start search / Focus search input
+  [white]↑/↓[-]           Navigate search history (in search box)
   [white]Tab[-]           Toggle fuzzy matching
   [white]Esc[-]           Cancel search (if running) / Clear filter / Go back
 
@@ -1239,6 +1393,10 @@ func showSearchHelp(app *tview.Application, table *tview.Table, mainFlex *tview.
 
 [yellow]Search Features[-]
   • Results appear progressively as they're found
+  • High-priority projects (based on past searches) are searched first
+  • Progress shows current project being searched
+  • Result counts by resource type shown in title
+  • Search history: Use ↑/↓ to recall previous searches
   • Search can be cancelled at any time with Esc
   • Cancelled searches keep existing results
   • Filter (/) narrows displayed results without new search

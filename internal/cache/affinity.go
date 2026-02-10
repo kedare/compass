@@ -370,3 +370,102 @@ func extractSearchPrefix(term string) string {
 
 	return ""
 }
+
+// AddSearchHistory adds a search term to the search history.
+func (c *Cache) AddSearchHistory(searchTerm string) error {
+	if c.isNoOp() {
+		return nil
+	}
+
+	searchTerm = normalizeSearchTerm(searchTerm)
+	if searchTerm == "" {
+		return nil
+	}
+
+	start := time.Now()
+	defer func() {
+		c.stats.recordOperation("AddSearchHistory", time.Since(start))
+	}()
+
+	now := time.Now().Unix()
+
+	// Insert or update the search history
+	query := `
+		INSERT INTO search_history (search_term, last_used, use_count)
+		VALUES (?, ?, 1)
+		ON CONFLICT(search_term) DO UPDATE SET
+			last_used = excluded.last_used,
+			use_count = use_count + 1`
+
+	logSQL(query, searchTerm, now)
+
+	_, err := c.db.Exec(query, searchTerm, now)
+	return err
+}
+
+// GetSearchHistory returns recent search terms, ordered by most recent first.
+// Limited to the specified count (default 10).
+func (c *Cache) GetSearchHistory(limit int) ([]string, error) {
+	if c.isNoOp() {
+		return nil, nil
+	}
+
+	if limit <= 0 {
+		limit = 10
+	}
+
+	start := time.Now()
+	defer func() {
+		c.stats.recordOperation("GetSearchHistory", time.Since(start))
+	}()
+
+	query := `SELECT search_term FROM search_history ORDER BY last_used DESC LIMIT ?`
+	logSQL(query, limit)
+
+	rows, err := c.db.Query(query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var history []string
+	for rows.Next() {
+		var term string
+		if err := rows.Scan(&term); err != nil {
+			logger.Log.Warnf("Failed to scan search history: %v", err)
+			continue
+		}
+		history = append(history, term)
+	}
+
+	return history, rows.Err()
+}
+
+// CleanSearchHistory removes old search history entries.
+func (c *Cache) CleanSearchHistory(maxAge time.Duration) (int64, error) {
+	if c.isNoOp() {
+		return 0, nil
+	}
+
+	start := time.Now()
+	defer func() {
+		c.stats.recordOperation("CleanSearchHistory", time.Since(start))
+	}()
+
+	cutoff := time.Now().Add(-maxAge).Unix()
+
+	query := `DELETE FROM search_history WHERE last_used < ?`
+	logSQL(query, cutoff)
+
+	result, err := c.db.Exec(query, cutoff)
+	if err != nil {
+		return 0, err
+	}
+
+	deleted, _ := result.RowsAffected()
+	if deleted > 0 {
+		logger.Log.Debugf("Cleaned %d old search history entries", deleted)
+	}
+
+	return deleted, nil
+}

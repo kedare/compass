@@ -58,6 +58,8 @@ const (
 	KindVPNTunnel ResourceKind = "compute.vpnTunnel"
 	// KindRoute represents a VPC route.
 	KindRoute ResourceKind = "compute.route"
+	// KindConnectivityTest represents a Network Connectivity Test.
+	KindConnectivityTest ResourceKind = "networkmanagement.connectivityTest"
 )
 
 // AllResourceKinds returns all available resource kind values for use in validation and completion.
@@ -86,6 +88,7 @@ func AllResourceKinds() []ResourceKind {
 		KindVPNGateway,
 		KindVPNTunnel,
 		KindRoute,
+		KindConnectivityTest,
 	}
 }
 
