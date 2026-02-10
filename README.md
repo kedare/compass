@@ -162,35 +162,114 @@ compass completion fish > ~/.config/fish/completions/compass.fish
 compass completion powershell | Out-String | Invoke-Expression
 ```
 
-## Quick Start
+## Getting Started
+
+### Initial Setup
+
+After installing `compass`, you're ready to use it immediately if you already have `gcloud` installed and authenticated. Compass uses your existing `gcloud` credentials, so there's no additional authentication needed.
+
+**Verify your setup:**
+```bash
+# Check compass is installed
+compass version
+
+# Check gcloud is authenticated
+gcloud auth list
+```
+
+### Loading Projects
+
+For multi-project operations (IP lookups, instance discovery across projects, global search), you'll want to import your GCP projects into the cache:
+
+**Interactive project selection:**
+```bash
+compass gcp projects import
+```
+
+This command discovers all projects you have access to and presents an interactive menu. Use arrow keys to navigate, `Space` to select/deselect projects, and `Enter` to confirm. Only selected projects will be used for multi-project searches.
+
+**Quick import with regex:**
+```bash
+# Import all production projects
+compass gcp projects import --regex "^prod-"
+
+# Import dev and staging projects
+compass gcp projects import -r "dev|staging"
+```
+
+**Why import projects?**
+- Enables instance discovery without specifying `--project` every time
+- Powers the global resource search across your infrastructure
+- Speeds up IP lookups by caching subnet information
+- Learns from your search patterns to prioritize frequently-used projects
+
+### Using the Interactive TUI
+
+Launch the Terminal UI for a visual, keyboard-driven experience:
 
 ```bash
-# Simple SSH to an instance (discovers project, zone automatically if cached)
+compass interactive   # or: compass i
+```
+
+**Essential keyboard shortcuts:**
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `↑` / `↓` | Navigate | Move through the list |
+| `s` | SSH | Connect to selected instance |
+| `d` | Details | Show detailed information |
+| `b` | Browser | Open resource in Cloud Console |
+| `/` | Filter | Filter current view (AND/OR/NOT operators) |
+| `Shift+S` | Search | Global search across all resource types |
+| `Shift+R` | Refresh | Reload current view |
+| `v` | VPN View | Switch to VPN inspection |
+| `c` | CT View | Switch to connectivity tests |
+| `i` | IP Lookup | Switch to IP address lookup |
+| `?` | Help | Show all available shortcuts |
+| `Esc` | Back/Quit | Clear filter or exit application |
+
+**Filter syntax:**
+- `web prod` — AND: must contain both "web" AND "prod"
+- `web|api` — OR: must contain "web" OR "api"
+- `-dev` — NOT: must NOT contain "dev"
+- Combine: `web|api prod -staging` — ("web" or "api") AND "prod" but NOT "staging"
+
+**In global search (`Shift+S`):**
+- `Tab` — Toggle fuzzy matching (e.g., "prd" matches "production")
+- Results appear progressively as they're found across 22 resource types
+- Use `/` to further filter results after search completes
+
+### Common Commands
+
+Once you've set up projects, here are the most frequently used commands:
+
+**SSH to instances:**
+```bash
+# If the instance is in a cached project, just use its name
 compass gcp ssh my-instance
 
-# First time connecting - specify the project
+# First time connecting to a new instance? Specify the project
 compass gcp ssh my-instance --project my-gcp-project
+
+# Subsequent connections remember the project, zone, and IAP preference
+compass gcp ssh my-instance
+```
+
+Compass automatically discovers the instance's zone, determines if IAP tunneling is needed, caches the metadata for instant future connections, and learns which projects to prioritize for similar searches.
+
+**Search and lookup:**
+```bash
+# Global search across all resource types (22 types supported)
+compass gcp search piou
 
 # Look up which resources use a specific IP address
 compass gcp ip lookup 192.168.0.208
+```
 
-# Import projects for multi-project operations (interactive)
-compass gcp projects import
-
-# Import projects matching a regex pattern (non-interactive)
-compass gcp projects import --regex "^prod-"
-
-# Search cached projects for instances with matching names
-compass gcp search piou
-
-# Inspect VPN gateways
+**VPN and connectivity:**
+```bash
+# Inspect VPN gateways, tunnels, and BGP sessions
 compass gcp vpn list --project prod
-
-# Launch the interactive TUI
-compass interactive
-
-# Update to the latest published release
-compass update
 
 # Test connectivity between instances
 compass gcp connectivity-test create web-to-db \
@@ -198,6 +277,12 @@ compass gcp connectivity-test create web-to-db \
   --source-instance web-1 \
   --destination-instance db-1 \
   --destination-port 5432
+```
+
+**Maintenance:**
+```bash
+# Update to the latest published release
+compass update
 ```
 
 ## Command Examples
