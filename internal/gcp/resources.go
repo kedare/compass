@@ -3,6 +3,7 @@ package gcp
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/kedare/compass/internal/logger"
 	"google.golang.org/api/compute/v1"
@@ -169,12 +170,21 @@ func (c *Client) ListAddresses(ctx context.Context) ([]*Address, error) {
 					continue
 				}
 
+				// Extract user resource names from full URLs
+				users := make([]string, 0, len(addr.Users))
+				for _, u := range addr.Users {
+					users = append(users, extractResourceName(u))
+				}
+
 				results = append(results, &Address{
 					Name:        addr.Name,
 					Address:     addr.Address,
 					Region:      regionName,
 					AddressType: addr.AddressType,
 					Status:      addr.Status,
+					Description: addr.Description,
+					Subnetwork:  extractResourceName(addr.Subnetwork),
+					Users:       users,
 				})
 			}
 		}
@@ -919,12 +929,90 @@ func (c *Client) ListFirewallRules(ctx context.Context) ([]*FirewallRule, error)
 				continue
 			}
 
+			// Format allowed rules as "protocol:ports" strings
+			allowed := make([]string, 0, len(rule.Allowed))
+			for _, a := range rule.Allowed {
+				entry := a.IPProtocol
+				if len(a.Ports) > 0 {
+					entry += ":" + strings.Join(a.Ports, ",")
+				}
+				allowed = append(allowed, entry)
+			}
+
 			results = append(results, &FirewallRule{
-				Name:      rule.Name,
-				Network:   extractResourceName(rule.Network),
-				Direction: rule.Direction,
-				Priority:  rule.Priority,
-				Disabled:  rule.Disabled,
+				Name:         rule.Name,
+				Network:      extractResourceName(rule.Network),
+				Direction:    rule.Direction,
+				Priority:     rule.Priority,
+				Disabled:     rule.Disabled,
+				Description:  rule.Description,
+				SourceRanges: rule.SourceRanges,
+				TargetTags:   rule.TargetTags,
+				Allowed:      allowed,
+			})
+		}
+
+		if resp.NextPageToken == "" {
+			break
+		}
+
+		pageToken = resp.NextPageToken
+	}
+
+	return results, nil
+}
+
+// ListRoutes returns the VPC routes available in the project.
+func (c *Client) ListRoutes(ctx context.Context) ([]*Route, error) {
+	logger.Log.Debug("Listing routes")
+
+	pageToken := ""
+	var results []*Route
+
+	for {
+		call := c.service.Routes.List(c.project).Context(ctx)
+		if pageToken != "" {
+			call = call.PageToken(pageToken)
+		}
+
+		resp, err := call.Do()
+		if err != nil {
+			logger.Log.Errorf("Failed to list routes: %v", err)
+
+			return nil, fmt.Errorf("failed to list routes: %w", err)
+		}
+
+		for _, route := range resp.Items {
+			if route == nil {
+				continue
+			}
+
+			// Determine next hop
+			nextHop := ""
+			switch {
+			case route.NextHopGateway != "":
+				nextHop = extractResourceName(route.NextHopGateway)
+			case route.NextHopInstance != "":
+				nextHop = extractResourceName(route.NextHopInstance)
+			case route.NextHopIp != "":
+				nextHop = route.NextHopIp
+			case route.NextHopVpnTunnel != "":
+				nextHop = extractResourceName(route.NextHopVpnTunnel)
+			case route.NextHopIlb != "":
+				nextHop = route.NextHopIlb
+			case route.NextHopPeering != "":
+				nextHop = route.NextHopPeering
+			}
+
+			results = append(results, &Route{
+				Name:        route.Name,
+				Description: route.Description,
+				DestRange:   route.DestRange,
+				Network:     extractResourceName(route.Network),
+				Priority:    route.Priority,
+				NextHop:     nextHop,
+				RouteType:   route.RouteType,
+				Tags:        route.Tags,
 			})
 		}
 

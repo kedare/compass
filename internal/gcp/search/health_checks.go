@@ -43,7 +43,7 @@ func (p *HealthCheckProvider) Search(ctx context.Context, project string, query 
 
 	matches := make([]Result, 0, len(checks))
 	for _, check := range checks {
-		if check == nil || !query.Matches(check.Name) {
+		if check == nil || !query.MatchesAny(check.Name, check.Type) {
 			continue
 		}
 

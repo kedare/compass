@@ -51,6 +51,35 @@ func TestGKENodePoolProviderReturnsMatches(t *testing.T) {
 	}
 }
 
+func TestGKENodePoolProviderMatchesByDetailFields(t *testing.T) {
+	client := &fakeGKENodePoolClient{pools: []*gcp.GKENodePool{
+		{Name: "pool-a", ClusterName: "web-cluster", MachineType: "e2-standard-4", NodeCount: 5},
+		{Name: "pool-b", ClusterName: "api-cluster", MachineType: "n2-highmem-8", NodeCount: 3},
+	}}
+
+	provider := &GKENodePoolProvider{NewClient: func(ctx context.Context, project string) (GKENodePoolClient, error) {
+		return client, nil
+	}}
+
+	// Search by cluster name
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "web-cluster"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "pool-a" {
+		t.Fatalf("expected 1 result for cluster name search, got %d", len(results))
+	}
+
+	// Search by machine type
+	results, err = provider.Search(context.Background(), "proj-a", Query{Term: "n2-highmem"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "pool-b" {
+		t.Fatalf("expected 1 result for machine type search, got %d", len(results))
+	}
+}
+
 func TestGKENodePoolProviderPropagatesErrors(t *testing.T) {
 	provider := &GKENodePoolProvider{NewClient: func(context.Context, string) (GKENodePoolClient, error) {
 		return nil, errors.New("client boom")

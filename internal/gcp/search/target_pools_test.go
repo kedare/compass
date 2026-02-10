@@ -51,6 +51,25 @@ func TestTargetPoolProviderReturnsMatches(t *testing.T) {
 	}
 }
 
+func TestTargetPoolProviderMatchesBySessionAffinity(t *testing.T) {
+	client := &fakeTargetPoolClient{pools: []*gcp.TargetPool{
+		{Name: "pool-a", Region: "us-central1", SessionAffinity: "NONE", InstanceCount: 5},
+		{Name: "pool-b", Region: "us-central1", SessionAffinity: "CLIENT_IP_PROTO", InstanceCount: 3},
+	}}
+
+	provider := &TargetPoolProvider{NewClient: func(ctx context.Context, project string) (TargetPoolClient, error) {
+		return client, nil
+	}}
+
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "CLIENT_IP_PROTO"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "pool-b" {
+		t.Fatalf("expected 1 result for session affinity search, got %d", len(results))
+	}
+}
+
 func TestTargetPoolProviderPropagatesErrors(t *testing.T) {
 	provider := &TargetPoolProvider{NewClient: func(context.Context, string) (TargetPoolClient, error) {
 		return nil, errors.New("client boom")

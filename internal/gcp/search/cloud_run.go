@@ -43,7 +43,7 @@ func (p *CloudRunProvider) Search(ctx context.Context, project string, query Que
 
 	matches := make([]Result, 0, len(services))
 	for _, svc := range services {
-		if svc == nil || !query.Matches(svc.Name) {
+		if svc == nil || !query.MatchesAny(svc.Name, svc.URL, svc.LatestRevision) {
 			continue
 		}
 

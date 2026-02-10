@@ -43,7 +43,7 @@ func (p *URLMapProvider) Search(ctx context.Context, project string, query Query
 
 	matches := make([]Result, 0, len(urlMaps))
 	for _, urlMap := range urlMaps {
-		if urlMap == nil || !query.Matches(urlMap.Name) {
+		if urlMap == nil || !query.MatchesAny(urlMap.Name, urlMap.DefaultService) {
 			continue
 		}
 

@@ -43,7 +43,7 @@ func (p *BackendServiceProvider) Search(ctx context.Context, project string, que
 
 	matches := make([]Result, 0, len(services))
 	for _, svc := range services {
-		if svc == nil || !query.Matches(svc.Name) {
+		if svc == nil || !query.MatchesAny(svc.Name, svc.Protocol, svc.LoadBalancingScheme) {
 			continue
 		}
 

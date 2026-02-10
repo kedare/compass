@@ -43,7 +43,7 @@ func (p *ForwardingRuleProvider) Search(ctx context.Context, project string, que
 
 	matches := make([]Result, 0, len(rules))
 	for _, rule := range rules {
-		if rule == nil || !query.Matches(rule.Name) {
+		if rule == nil || !query.MatchesAny(rule.Name, rule.IPAddress, rule.IPProtocol, rule.LoadBalancingScheme) {
 			continue
 		}
 

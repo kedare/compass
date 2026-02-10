@@ -43,7 +43,7 @@ func (p *InstanceProvider) Search(ctx context.Context, project string, query Que
 
 	matches := make([]Result, 0, len(instances))
 	for _, inst := range instances {
-		if inst == nil || !query.Matches(inst.Name) {
+		if inst == nil || !query.MatchesAny(inst.Name, inst.InternalIP, inst.ExternalIP, inst.MachineType) {
 			continue
 		}
 

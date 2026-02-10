@@ -47,6 +47,25 @@ func TestGKEClusterProviderReturnsMatches(t *testing.T) {
 	}
 }
 
+func TestGKEClusterProviderMatchesByVersion(t *testing.T) {
+	client := &fakeGKEClusterClient{clusters: []*gcp.GKECluster{
+		{Name: "cluster-a", Location: "us-central1", CurrentMasterVersion: "1.27.3-gke.1700", NodeCount: 10},
+		{Name: "cluster-b", Location: "us-central1", CurrentMasterVersion: "1.26.5-gke.1400", NodeCount: 5},
+	}}
+
+	provider := &GKEClusterProvider{NewClient: func(ctx context.Context, project string) (GKEClusterClient, error) {
+		return client, nil
+	}}
+
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "1.27.3"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "cluster-a" {
+		t.Fatalf("expected 1 result for version search, got %d", len(results))
+	}
+}
+
 func TestGKEClusterProviderPropagatesErrors(t *testing.T) {
 	provider := &GKEClusterProvider{NewClient: func(context.Context, string) (GKEClusterClient, error) {
 		return nil, errors.New("client boom")

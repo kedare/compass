@@ -4,6 +4,8 @@ package search
 import (
 	"context"
 	"strings"
+
+	"github.com/lithammer/fuzzysearch/fuzzy"
 )
 
 // ResourceKind identifies the category of a searchable resource.
@@ -54,6 +56,8 @@ const (
 	KindVPNGateway ResourceKind = "compute.vpnGateway"
 	// KindVPNTunnel represents a Cloud VPN tunnel.
 	KindVPNTunnel ResourceKind = "compute.vpnTunnel"
+	// KindRoute represents a VPC route.
+	KindRoute ResourceKind = "compute.route"
 )
 
 // AllResourceKinds returns all available resource kind values for use in validation and completion.
@@ -81,6 +85,7 @@ func AllResourceKinds() []ResourceKind {
 		KindSecret,
 		KindVPNGateway,
 		KindVPNTunnel,
+		KindRoute,
 	}
 }
 
@@ -97,6 +102,7 @@ func IsValidResourceKind(kind string) bool {
 // Query captures the user supplied search term and matching behaviour.
 type Query struct {
 	Term  string
+	Fuzzy bool           // Use fuzzy matching instead of substring matching
 	Types []ResourceKind // Filter results to these types (empty means all types)
 }
 
@@ -112,7 +118,36 @@ func (q Query) Matches(value string) bool {
 		return false
 	}
 
+	if q.Fuzzy {
+		return fuzzy.MatchFold(normalized, value)
+	}
+
 	return strings.Contains(strings.ToLower(value), normalized)
+}
+
+// MatchesAny reports whether any of the provided values satisfies the query.
+func (q Query) MatchesAny(values ...string) bool {
+	normalized := q.NormalizedTerm()
+	if normalized == "" {
+		return false
+	}
+
+	for _, v := range values {
+		if v == "" {
+			continue
+		}
+		if q.Fuzzy {
+			if fuzzy.MatchFold(normalized, v) {
+				return true
+			}
+		} else {
+			if strings.Contains(strings.ToLower(v), normalized) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // MatchesType reports whether the provided resource kind is included in the query's type filter.

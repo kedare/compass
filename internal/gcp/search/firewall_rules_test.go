@@ -69,6 +69,126 @@ func TestFirewallRuleProviderPropagatesErrors(t *testing.T) {
 	}
 }
 
+func TestFirewallRuleProviderMatchesByDescription(t *testing.T) {
+	client := &fakeFirewallRuleClient{rules: []*gcp.FirewallRule{
+		{Name: "allow-internal", Direction: "INGRESS", Network: "default", Priority: 1000, Description: "Allow internal traffic between subnets"},
+		{Name: "deny-all", Direction: "INGRESS", Network: "default", Priority: 65535},
+	}}
+
+	provider := &FirewallRuleProvider{NewClient: func(ctx context.Context, project string) (FirewallRuleClient, error) {
+		return client, nil
+	}}
+
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "internal traffic"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "allow-internal" {
+		t.Fatalf("expected 1 result for description search, got %d", len(results))
+	}
+}
+
+func TestFirewallRuleProviderMatchesBySourceRange(t *testing.T) {
+	client := &fakeFirewallRuleClient{rules: []*gcp.FirewallRule{
+		{Name: "allow-office", Direction: "INGRESS", Network: "default", Priority: 1000, SourceRanges: []string{"203.0.113.0/24"}},
+		{Name: "allow-vpn", Direction: "INGRESS", Network: "default", Priority: 1000, SourceRanges: []string{"10.8.0.0/16"}},
+	}}
+
+	provider := &FirewallRuleProvider{NewClient: func(ctx context.Context, project string) (FirewallRuleClient, error) {
+		return client, nil
+	}}
+
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "203.0.113"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "allow-office" {
+		t.Fatalf("expected 1 result for source range search, got %d", len(results))
+	}
+}
+
+func TestFirewallRuleProviderMatchesByTargetTag(t *testing.T) {
+	client := &fakeFirewallRuleClient{rules: []*gcp.FirewallRule{
+		{Name: "allow-http-tagged", Direction: "INGRESS", Network: "default", Priority: 1000, TargetTags: []string{"http-server", "https-server"}},
+		{Name: "allow-ssh", Direction: "INGRESS", Network: "default", Priority: 1000, TargetTags: []string{"ssh-server"}},
+	}}
+
+	provider := &FirewallRuleProvider{NewClient: func(ctx context.Context, project string) (FirewallRuleClient, error) {
+		return client, nil
+	}}
+
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "https-server"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "allow-http-tagged" {
+		t.Fatalf("expected 1 result for target tag search, got %d", len(results))
+	}
+}
+
+func TestFirewallRuleProviderMatchesByAllowed(t *testing.T) {
+	client := &fakeFirewallRuleClient{rules: []*gcp.FirewallRule{
+		{Name: "allow-http", Direction: "INGRESS", Network: "default", Priority: 1000, Allowed: []string{"tcp:80,443"}},
+		{Name: "allow-icmp", Direction: "INGRESS", Network: "default", Priority: 1000, Allowed: []string{"icmp"}},
+	}}
+
+	provider := &FirewallRuleProvider{NewClient: func(ctx context.Context, project string) (FirewallRuleClient, error) {
+		return client, nil
+	}}
+
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "tcp:80"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "allow-http" {
+		t.Fatalf("expected 1 result for allowed search, got %d", len(results))
+	}
+}
+
+func TestFirewallRuleDetailsNewFields(t *testing.T) {
+	rule := &gcp.FirewallRule{
+		Name:         "test-rule",
+		Direction:    "INGRESS",
+		Network:      "my-vpc",
+		Priority:     1000,
+		Description:  "Allow HTTP from office",
+		SourceRanges: []string{"203.0.113.0/24", "198.51.100.0/24"},
+		TargetTags:   []string{"web-server"},
+		Allowed:      []string{"tcp:80,443"},
+	}
+
+	details := firewallRuleDetails(rule)
+	if details["description"] != "Allow HTTP from office" {
+		t.Errorf("expected description, got %q", details["description"])
+	}
+	if details["sourceRanges"] != "203.0.113.0/24, 198.51.100.0/24" {
+		t.Errorf("expected source ranges, got %q", details["sourceRanges"])
+	}
+	if details["targetTags"] != "web-server" {
+		t.Errorf("expected target tags, got %q", details["targetTags"])
+	}
+	if details["allowed"] != "tcp:80,443" {
+		t.Errorf("expected allowed, got %q", details["allowed"])
+	}
+}
+
+func TestFirewallRuleDetailsEmptyNewFields(t *testing.T) {
+	rule := &gcp.FirewallRule{Name: "minimal-rule"}
+	details := firewallRuleDetails(rule)
+	if _, ok := details["description"]; ok {
+		t.Error("expected no description key for empty description")
+	}
+	if _, ok := details["sourceRanges"]; ok {
+		t.Error("expected no sourceRanges key for empty source ranges")
+	}
+	if _, ok := details["targetTags"]; ok {
+		t.Error("expected no targetTags key for empty target tags")
+	}
+	if _, ok := details["allowed"]; ok {
+		t.Error("expected no allowed key for empty allowed")
+	}
+}
+
 func TestFirewallRuleProviderNilProvider(t *testing.T) {
 	var provider *FirewallRuleProvider
 	_, err := provider.Search(context.Background(), "proj-a", Query{Term: "foo"})

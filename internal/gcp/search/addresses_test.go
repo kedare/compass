@@ -65,6 +65,84 @@ func TestAddressProviderPropagatesErrors(t *testing.T) {
 	}
 }
 
+func TestAddressProviderMatchesByDescription(t *testing.T) {
+	client := &fakeAddressClient{addresses: []*gcp.Address{
+		{Name: "lb-frontend-ip", Address: "35.1.2.3", Region: "us-central1", AddressType: "EXTERNAL", Status: "IN_USE", Description: "frontend load balancer VIP"},
+		{Name: "nat-ip", Address: "34.5.6.7", Region: "us-central1", AddressType: "EXTERNAL", Status: "IN_USE"},
+	}}
+
+	provider := &AddressProvider{NewClient: func(ctx context.Context, project string) (AddressClient, error) {
+		return client, nil
+	}}
+
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "load balancer"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "lb-frontend-ip" {
+		t.Fatalf("expected 1 result for description search, got %d", len(results))
+	}
+}
+
+func TestAddressProviderMatchesByIP(t *testing.T) {
+	client := &fakeAddressClient{addresses: []*gcp.Address{
+		{Name: "web-ip", Address: "35.1.2.3", Region: "us-central1", AddressType: "EXTERNAL", Status: "IN_USE"},
+		{Name: "db-ip", Address: "10.0.0.5", Region: "us-central1", AddressType: "INTERNAL", Status: "IN_USE"},
+	}}
+
+	provider := &AddressProvider{NewClient: func(ctx context.Context, project string) (AddressClient, error) {
+		return client, nil
+	}}
+
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "10.0.0"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "db-ip" {
+		t.Fatalf("expected 1 result for IP search, got %d", len(results))
+	}
+}
+
+func TestAddressDetails(t *testing.T) {
+	addr := &gcp.Address{
+		Name:        "my-ip",
+		Address:     "35.1.2.3",
+		AddressType: "EXTERNAL",
+		Status:      "IN_USE",
+		Description: "web frontend IP",
+		Subnetwork:  "default",
+		Users:       []string{"forwarding-rule-1", "forwarding-rule-2"},
+	}
+
+	details := addressDetails(addr)
+	if details["address"] != "35.1.2.3" {
+		t.Errorf("expected address 35.1.2.3, got %q", details["address"])
+	}
+	if details["description"] != "web frontend IP" {
+		t.Errorf("expected description 'web frontend IP', got %q", details["description"])
+	}
+	if details["subnetwork"] != "default" {
+		t.Errorf("expected subnetwork 'default', got %q", details["subnetwork"])
+	}
+	if details["users"] != "forwarding-rule-1, forwarding-rule-2" {
+		t.Errorf("expected users list, got %q", details["users"])
+	}
+}
+
+func TestAddressDetailsEmpty(t *testing.T) {
+	addr := &gcp.Address{Name: "minimal-ip"}
+	details := addressDetails(addr)
+	if _, ok := details["description"]; ok {
+		t.Error("expected no description key for empty description")
+	}
+	if _, ok := details["subnetwork"]; ok {
+		t.Error("expected no subnetwork key for empty subnetwork")
+	}
+	if _, ok := details["users"]; ok {
+		t.Error("expected no users key for empty users")
+	}
+}
+
 func TestAddressProviderNilProvider(t *testing.T) {
 	var provider *AddressProvider
 	_, err := provider.Search(context.Background(), "proj-a", Query{Term: "foo"})

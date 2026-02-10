@@ -163,6 +163,9 @@ type Address struct {
 	Region      string
 	AddressType string
 	Status      string
+	Description string
+	Subnetwork  string
+	Users       []string
 }
 
 // Disk represents a Compute Engine persistent disk.
@@ -288,11 +291,15 @@ type CloudRunService struct {
 
 // FirewallRule represents a VPC firewall rule.
 type FirewallRule struct {
-	Name      string
-	Network   string
-	Direction string
-	Priority  int64
-	Disabled  bool
+	Name         string
+	Network      string
+	Direction    string
+	Priority     int64
+	Disabled     bool
+	Description  string
+	SourceRanges []string
+	TargetTags   []string
+	Allowed      []string
 }
 
 // Secret represents a Secret Manager secret.
@@ -300,4 +307,16 @@ type Secret struct {
 	Name         string
 	Replication  string
 	VersionCount int
+}
+
+// Route represents a VPC route.
+type Route struct {
+	Name        string
+	Description string
+	DestRange   string
+	Network     string
+	Priority    int64
+	NextHop     string
+	RouteType   string
+	Tags        []string
 }

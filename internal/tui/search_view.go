@@ -36,6 +36,7 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 	var modalOpen bool
 	var currentFilter string
 	var filterMode bool
+	var fuzzyMode bool
 	var currentSearchTerm string                     // Track current search term for affinity reinforcement
 	var recordedAffinity = make(map[string]struct{}) // Track what's been recorded this search session
 
@@ -84,7 +85,7 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 	// Status bar
 	status := tview.NewTextView().
 		SetDynamicColors(true).
-		SetText(" [yellow]Enter[-] search  [yellow]Esc[-] back  [yellow]/[-] filter results  [yellow]d[-] details  [yellow]?[-] help")
+		SetText(" [yellow]Tab[-] fuzzy  [yellow]Enter[-] search  [yellow]Esc[-] back  [yellow]/[-] filter results  [yellow]d[-] details  [yellow]?[-] help")
 
 	// Progress indicator
 	progressText := tview.NewTextView().
@@ -205,9 +206,9 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 
 			typeColor := getTypeColor(entry.Type)
 			table.SetCell(currentRow, 0, tview.NewTableCell(fmt.Sprintf("[%s]%s[-]", typeColor, entry.Type)).SetExpansion(1))
-			table.SetCell(currentRow, 1, tview.NewTableCell(entry.Name).SetExpansion(1))
-			table.SetCell(currentRow, 2, tview.NewTableCell(entry.Project).SetExpansion(1))
-			table.SetCell(currentRow, 3, tview.NewTableCell(entry.Location).SetExpansion(1))
+			table.SetCell(currentRow, 1, tview.NewTableCell(highlightMatch(entry.Name, currentSearchTerm)).SetExpansion(1))
+			table.SetCell(currentRow, 2, tview.NewTableCell(highlightMatch(entry.Project, currentSearchTerm)).SetExpansion(1))
+			table.SetCell(currentRow, 3, tview.NewTableCell(highlightMatch(entry.Location, currentSearchTerm)).SetExpansion(1))
 
 			if selectedKey != "" && newSelectedRow == -1 {
 				rowKey := entry.Name + "|" + entry.Project + "|" + entry.Location
@@ -299,29 +300,37 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 			actionStr = FormatActionsStatusBar(actions)
 		}
 
+		// Build fuzzy indicator and toggle hint
+		fuzzyBadge := ""
+		fuzzyToggle := "[yellow]Tab[-] fuzzy"
+		if fuzzyMode {
+			fuzzyBadge = " [green::b]FUZZY[-:-:-] "
+			fuzzyToggle = "[yellow]Tab[-] exact"
+		}
+
 		// During search, show search-specific status with context actions
 		if isSearching {
 			if actionStr != "" {
-				status.SetText(fmt.Sprintf(" [yellow]Searching...[-]  %s  [yellow]Esc[-] cancel", actionStr))
+				status.SetText(fmt.Sprintf("%s [yellow]Searching...[-]  %s  [yellow]Esc[-] cancel", fuzzyBadge, actionStr))
 			} else {
-				status.SetText(" [yellow]Searching...[-]  [yellow]Esc[-] cancel")
+				status.SetText(fmt.Sprintf("%s [yellow]Searching...[-]  [yellow]Esc[-] cancel", fuzzyBadge))
 			}
 			return
 		}
 
 		if entry == nil {
 			if count > 0 {
-				status.SetText(fmt.Sprintf(" [green]%d results[-]  [yellow]Enter[-] search  [yellow]/[-] filter  [yellow]Esc[-] back  [yellow]?[-] help", count))
+				status.SetText(fmt.Sprintf("%s[green]%d results[-]  %s  [yellow]Enter[-] search  [yellow]/[-] filter  [yellow]Esc[-] back  [yellow]?[-] help", fuzzyBadge, count, fuzzyToggle))
 			} else {
-				status.SetText(" [yellow]Enter[-] search  [yellow]/[-] filter  [yellow]Esc[-] back  [yellow]?[-] help")
+				status.SetText(fmt.Sprintf("%s%s  [yellow]Enter[-] search  [yellow]/[-] filter  [yellow]Esc[-] back  [yellow]?[-] help", fuzzyBadge, fuzzyToggle))
 			}
 			return
 		}
 
 		if currentFilter != "" {
-			status.SetText(fmt.Sprintf(" [green]Filter: %s[-]  %s  [yellow]/[-] edit  [yellow]Esc[-] clear  [yellow]?[-] help", currentFilter, actionStr))
+			status.SetText(fmt.Sprintf("%s[green]Filter: %s[-]  %s  [yellow]/[-] edit  [yellow]Esc[-] clear  [yellow]?[-] help", fuzzyBadge, currentFilter, actionStr))
 		} else {
-			status.SetText(fmt.Sprintf(" %s  [yellow]Enter[-] search  [yellow]/[-] filter  [yellow]Esc[-] back  [yellow]?[-] help", actionStr))
+			status.SetText(fmt.Sprintf("%s%s  %s  [yellow]Enter[-] search  [yellow]/[-] filter  [yellow]Esc[-] back  [yellow]?[-] help", fuzzyBadge, actionStr, fuzzyToggle))
 		}
 	}
 
@@ -419,7 +428,7 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 		})
 
 		// Run search
-		searchQuery := search.Query{Term: query}
+		searchQuery := search.Query{Term: query, Fuzzy: fuzzyMode}
 
 		callback := func(results []search.Result, progress search.SearchProgress) error {
 			// Check if cancelled
@@ -572,6 +581,22 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 		// If a modal is open, let it handle all keys (except Ctrl+C)
 		if modalOpen && event.Key() != tcell.KeyCtrlC {
 			return event
+		}
+
+		// Tab toggles fuzzy mode globally, regardless of focus
+		if event.Key() == tcell.KeyTab {
+			fuzzyMode = !fuzzyMode
+			if fuzzyMode {
+				searchInput.SetLabel(" Search (fuzzy): ")
+			} else {
+				searchInput.SetLabel(" Search: ")
+			}
+			updateStatusWithActions()
+			// Re-run current search if there is one
+			if currentSearchTerm != "" {
+				go performSearch(currentSearchTerm)
+			}
+			return nil
 		}
 
 		// If in filter mode, let the input field handle it
@@ -1067,6 +1092,11 @@ func createSearchEngine(parallelism int) *search.Engine {
 				return gcp.NewClient(ctx, project)
 			},
 		},
+		&search.RouteProvider{
+			NewClient: func(ctx context.Context, project string) (search.RouteClient, error) {
+				return gcp.NewClient(ctx, project)
+			},
+		},
 	)
 	engine.MaxConcurrentProjects = parallelism
 	return engine
@@ -1201,6 +1231,7 @@ func showSearchHelp(app *tview.Application, table *tview.Table, mainFlex *tview.
 
 [yellow]Search[-]
   [white]Enter[-]         Start search / Focus search input
+  [white]Tab[-]           Toggle fuzzy matching
   [white]Esc[-]           Cancel search (if running) / Clear filter / Go back
 
 [yellow]Navigation[-]
@@ -1221,6 +1252,7 @@ func showSearchHelp(app *tview.Application, table *tview.Table, mainFlex *tview.
   • Search can be cancelled at any time with Esc
   • Cancelled searches keep existing results
   • Filter (/) narrows displayed results without new search
+  • Tab toggles fuzzy mode (matches characters in order, e.g. "prd" matches "production")
   • Context-aware actions based on resource type
 
 [darkgray]Press Esc or ? to close this help[-]`
@@ -1260,4 +1292,28 @@ func showSearchHelp(app *tview.Application, table *tview.Table, mainFlex *tview.
 
 	*modalOpen = true
 	app.SetRoot(helpFlex, true).SetFocus(helpView)
+}
+
+// highlightMatch wraps the first occurrence of term in text with tview bold+yellow color tags.
+// The match is case-insensitive but preserves the original case in the output.
+func highlightMatch(text, term string) string {
+	if term == "" || text == "" {
+		return text
+	}
+
+	termLower := strings.ToLower(strings.TrimSpace(term))
+	if termLower == "" {
+		return text
+	}
+
+	idx := strings.Index(strings.ToLower(text), termLower)
+	if idx < 0 {
+		return text
+	}
+
+	before := text[:idx]
+	matched := text[idx : idx+len(termLower)]
+	after := text[idx+len(termLower):]
+
+	return before + "[yellow::b]" + matched + "[-:-:-]" + after
 }

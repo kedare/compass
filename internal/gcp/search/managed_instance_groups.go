@@ -44,7 +44,7 @@ func (p *MIGProvider) Search(ctx context.Context, project string, query Query) (
 
 	matches := make([]Result, 0, len(migs))
 	for _, mig := range migs {
-		if !query.Matches(mig.Name) {
+		if !query.MatchesAny(mig.Name, mig.Description, mig.BaseInstanceName, mig.InstanceTemplate) {
 			continue
 		}
 

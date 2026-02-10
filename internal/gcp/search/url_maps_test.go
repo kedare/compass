@@ -51,6 +51,25 @@ func TestURLMapProviderReturnsMatches(t *testing.T) {
 	}
 }
 
+func TestURLMapProviderMatchesByDefaultService(t *testing.T) {
+	client := &fakeURLMapClient{urlMaps: []*gcp.URLMap{
+		{Name: "map-a", DefaultService: "frontend-backend-svc", HostRuleCount: 2},
+		{Name: "map-b", DefaultService: "api-backend-svc", HostRuleCount: 1},
+	}}
+
+	provider := &URLMapProvider{NewClient: func(ctx context.Context, project string) (URLMapClient, error) {
+		return client, nil
+	}}
+
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "api-backend-svc"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "map-b" {
+		t.Fatalf("expected 1 result for default service search, got %d", len(results))
+	}
+}
+
 func TestURLMapProviderPropagatesErrors(t *testing.T) {
 	provider := &URLMapProvider{NewClient: func(context.Context, string) (URLMapClient, error) {
 		return nil, errors.New("client boom")

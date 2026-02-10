@@ -73,6 +73,35 @@ func TestVPNTunnelProviderReturnsMatches(t *testing.T) {
 	}
 }
 
+func TestVPNTunnelProviderMatchesByDetailFields(t *testing.T) {
+	client := &fakeVPNTunnelClient{tunnels: []*gcp.VPNTunnelInfo{
+		{Name: "tunnel-a", Region: "us-central1", PeerIP: "203.0.113.1", LocalGatewayIP: "35.1.2.3"},
+		{Name: "tunnel-b", Region: "us-central1", PeerIP: "198.51.100.1", LocalGatewayIP: "35.4.5.6"},
+	}}
+
+	provider := &VPNTunnelProvider{NewClient: func(ctx context.Context, project string) (VPNTunnelClient, error) {
+		return client, nil
+	}}
+
+	// Search by peer IP
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "203.0.113"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "tunnel-a" {
+		t.Fatalf("expected 1 result for peer IP search, got %d", len(results))
+	}
+
+	// Search by local gateway IP
+	results, err = provider.Search(context.Background(), "proj-a", Query{Term: "35.4.5"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "tunnel-b" {
+		t.Fatalf("expected 1 result for local IP search, got %d", len(results))
+	}
+}
+
 func TestVPNTunnelProviderPropagatesErrors(t *testing.T) {
 	provider := &VPNTunnelProvider{NewClient: func(context.Context, string) (VPNTunnelClient, error) {
 		return nil, errors.New("client boom")

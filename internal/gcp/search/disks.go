@@ -43,7 +43,7 @@ func (p *DiskProvider) Search(ctx context.Context, project string, query Query) 
 
 	matches := make([]Result, 0, len(disks))
 	for _, disk := range disks {
-		if disk == nil || !query.Matches(disk.Name) {
+		if disk == nil || !query.MatchesAny(disk.Name, disk.Type) {
 			continue
 		}
 
