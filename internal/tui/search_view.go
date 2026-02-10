@@ -461,16 +461,47 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 									projectsSearched = len(searchProjects)
 								}
 
-								// Show current project being searched
-								currentProjectInfo := ""
-								if prog.CurrentProject != "" {
-									currentProjectInfo = fmt.Sprintf(" | [cyan]%s[-]", prog.CurrentProject)
+								// Calculate percentage for calls
+								callPercent := 0
+								if prog.TotalRequests > 0 {
+									callPercent = (prog.CompletedRequests * 100) / prog.TotalRequests
 								}
 
-								progressText.SetText(fmt.Sprintf("[yellow]%s[%d/%d projects]%s | %d results[-]",
-									frame, projectsSearched, len(searchProjects), currentProjectInfo, count))
+								// Build progress message
+								var progressMsg string
+								if prog.CurrentProject != "" {
+									// Shorten long project names
+									projectName := prog.CurrentProject
+									if len(projectName) > 25 {
+										projectName = projectName[:22] + "..."
+									}
+
+									// Show current project with progress
+									if count > 0 {
+										progressMsg = fmt.Sprintf("[yellow]%s [cyan]%s[-] [dim]• %d/%d projects • %d/%d calls (%d%%)[:-:-] • [green]%d found[-]",
+											frame, projectName, projectsSearched, len(searchProjects),
+											prog.CompletedRequests, prog.TotalRequests, callPercent, count)
+									} else {
+										progressMsg = fmt.Sprintf("[yellow]%s [cyan]%s[-] [dim]• %d/%d projects • %d/%d calls (%d%%)[:-:-]",
+											frame, projectName, projectsSearched, len(searchProjects),
+											prog.CompletedRequests, prog.TotalRequests, callPercent)
+									}
+								} else {
+									// Fallback if no current project
+									if count > 0 {
+										progressMsg = fmt.Sprintf("[yellow]%s Searching [dim]• %d/%d projects • %d/%d calls (%d%%)[:-:-] • [green]%d found[-]",
+											frame, projectsSearched, len(searchProjects),
+											prog.CompletedRequests, prog.TotalRequests, callPercent, count)
+									} else {
+										progressMsg = fmt.Sprintf("[yellow]%s Searching [dim]• %d/%d projects • %d/%d calls (%d%%)[:-:-]",
+											frame, projectsSearched, len(searchProjects),
+											prog.CompletedRequests, prog.TotalRequests, callPercent)
+									}
+								}
+
+								progressText.SetText(progressMsg)
 							} else {
-								progressText.SetText(fmt.Sprintf("[yellow]%s Starting...[-]", frame))
+								progressText.SetText(fmt.Sprintf("[yellow]%s Starting search...[-]", frame))
 							}
 						}
 					})
@@ -1029,6 +1060,104 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 
 						app.QueueUpdateDraw(func() {
 							ShowConnectivityTestDetails(app, test, func() {
+								// On close callback
+								modalOpen = false
+								app.SetRoot(flex, true)
+								app.SetFocus(table)
+								updateStatusWithActions()
+							})
+							modalOpen = true
+						})
+					}()
+				} else if selectedEntry.Type == string(search.KindVPNGateway) {
+					// For VPN gateways, fetch and show full details
+					go func() {
+						// Progress callback to keep status updated
+						progressCallback := func(msg string) {
+							app.QueueUpdateDraw(func() {
+								status.SetText(fmt.Sprintf(" [yellow]%s[-]", msg))
+							})
+						}
+
+						progressCallback("Loading VPN gateway details...")
+
+						gcpClient, err := gcp.NewClient(ctx, selectedEntry.Project)
+						if err != nil {
+							app.QueueUpdateDraw(func() {
+								status.SetText(fmt.Sprintf(" [red]Error creating client: %v[-]", err))
+								time.AfterFunc(3*time.Second, func() {
+									app.QueueUpdateDraw(func() {
+										updateStatusWithActions()
+									})
+								})
+							})
+							return
+						}
+
+						gateway, err := gcpClient.GetVPNGatewayOverview(ctx, selectedEntry.Location, selectedEntry.Name, progressCallback)
+						if err != nil {
+							app.QueueUpdateDraw(func() {
+								status.SetText(fmt.Sprintf(" [red]Error loading gateway: %v[-]", err))
+								time.AfterFunc(3*time.Second, func() {
+									app.QueueUpdateDraw(func() {
+										updateStatusWithActions()
+									})
+								})
+							})
+							return
+						}
+
+						app.QueueUpdateDraw(func() {
+							ShowVPNGatewayDetails(app, gateway, func() {
+								// On close callback
+								modalOpen = false
+								app.SetRoot(flex, true)
+								app.SetFocus(table)
+								updateStatusWithActions()
+							})
+							modalOpen = true
+						})
+					}()
+				} else if selectedEntry.Type == string(search.KindVPNTunnel) {
+					// For VPN tunnels, fetch and show full details
+					go func() {
+						// Progress callback to keep status updated
+						progressCallback := func(msg string) {
+							app.QueueUpdateDraw(func() {
+								status.SetText(fmt.Sprintf(" [yellow]%s[-]", msg))
+							})
+						}
+
+						progressCallback("Loading VPN tunnel details...")
+
+						gcpClient, err := gcp.NewClient(ctx, selectedEntry.Project)
+						if err != nil {
+							app.QueueUpdateDraw(func() {
+								status.SetText(fmt.Sprintf(" [red]Error creating client: %v[-]", err))
+								time.AfterFunc(3*time.Second, func() {
+									app.QueueUpdateDraw(func() {
+										updateStatusWithActions()
+									})
+								})
+							})
+							return
+						}
+
+						tunnel, err := gcpClient.GetVPNTunnelOverview(ctx, selectedEntry.Location, selectedEntry.Name, progressCallback)
+						if err != nil {
+							app.QueueUpdateDraw(func() {
+								status.SetText(fmt.Sprintf(" [red]Error loading tunnel: %v[-]", err))
+								time.AfterFunc(3*time.Second, func() {
+									app.QueueUpdateDraw(func() {
+										updateStatusWithActions()
+									})
+								})
+							})
+							return
+						}
+
+						app.QueueUpdateDraw(func() {
+							ShowVPNTunnelDetails(app, tunnel, func() {
 								// On close callback
 								modalOpen = false
 								app.SetRoot(flex, true)
