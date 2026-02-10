@@ -51,6 +51,25 @@ func TestDiskProviderReturnsMatches(t *testing.T) {
 	}
 }
 
+func TestDiskProviderMatchesByType(t *testing.T) {
+	client := &fakeDiskClient{disks: []*gcp.Disk{
+		{Name: "fast-disk", Zone: "us-central1-a", Type: "pd-ssd", SizeGb: 500, Status: "READY"},
+		{Name: "cheap-disk", Zone: "us-central1-a", Type: "pd-standard", SizeGb: 1000, Status: "READY"},
+	}}
+
+	provider := &DiskProvider{NewClient: func(ctx context.Context, project string) (DiskClient, error) {
+		return client, nil
+	}}
+
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "pd-ssd"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "fast-disk" {
+		t.Fatalf("expected 1 result for disk type search, got %d", len(results))
+	}
+}
+
 func TestDiskProviderPropagatesErrors(t *testing.T) {
 	provider := &DiskProvider{NewClient: func(context.Context, string) (DiskClient, error) {
 		return nil, errors.New("client boom")

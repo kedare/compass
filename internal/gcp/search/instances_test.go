@@ -35,6 +35,44 @@ func TestInstanceProviderReturnsMatches(t *testing.T) {
 	}
 }
 
+func TestInstanceProviderMatchesByIP(t *testing.T) {
+	client := &fakeInstanceClient{instances: []*gcp.Instance{
+		{Name: "web-server-01", Project: "proj-a", Zone: "us-central1-a", Status: "RUNNING", InternalIP: "10.0.0.1", ExternalIP: "35.1.2.3"},
+		{Name: "db-server-01", Project: "proj-a", Zone: "us-central1-b", Status: "RUNNING", InternalIP: "10.0.0.2", MachineType: "n2-standard-4"},
+	}}
+
+	provider := &InstanceProvider{NewClient: func(ctx context.Context, project string) (InstanceClient, error) {
+		return client, nil
+	}}
+
+	// Search by internal IP
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "10.0.0.1"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "web-server-01" {
+		t.Fatalf("expected 1 result for IP search, got %d", len(results))
+	}
+
+	// Search by external IP
+	results, err = provider.Search(context.Background(), "proj-a", Query{Term: "35.1.2"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "web-server-01" {
+		t.Fatalf("expected 1 result for external IP search, got %d", len(results))
+	}
+
+	// Search by machine type
+	results, err = provider.Search(context.Background(), "proj-a", Query{Term: "n2-standard"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "db-server-01" {
+		t.Fatalf("expected 1 result for machine type search, got %d", len(results))
+	}
+}
+
 func TestInstanceProviderPropagatesErrors(t *testing.T) {
 	provider := &InstanceProvider{NewClient: func(context.Context, string) (InstanceClient, error) {
 		return nil, errors.New("client boom")

@@ -63,6 +63,44 @@ func TestMIGProviderReturnsMatches(t *testing.T) {
 	}
 }
 
+func TestMIGProviderMatchesByDetailFields(t *testing.T) {
+	client := &fakeMIGClient{migs: []gcp.ManagedInstanceGroup{
+		{Name: "mig-a", Description: "Web servers", BaseInstanceName: "web-instance", InstanceTemplate: "web-template"},
+		{Name: "mig-b", Description: "API servers", BaseInstanceName: "api-instance", InstanceTemplate: "api-template"},
+	}}
+
+	provider := &MIGProvider{NewClient: func(ctx context.Context, project string) (MIGClient, error) {
+		return client, nil
+	}}
+
+	// Search by description
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "API servers"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "mig-b" {
+		t.Fatalf("expected 1 result for description search, got %d", len(results))
+	}
+
+	// Search by base instance name
+	results, err = provider.Search(context.Background(), "proj-a", Query{Term: "web-instance"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "mig-a" {
+		t.Fatalf("expected 1 result for base instance name search, got %d", len(results))
+	}
+
+	// Search by instance template
+	results, err = provider.Search(context.Background(), "proj-a", Query{Term: "api-template"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "mig-b" {
+		t.Fatalf("expected 1 result for template search, got %d", len(results))
+	}
+}
+
 func TestMIGProviderPropagatesErrors(t *testing.T) {
 	provider := &MIGProvider{NewClient: func(context.Context, string) (MIGClient, error) {
 		return nil, errors.New("client boom")

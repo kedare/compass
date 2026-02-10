@@ -43,7 +43,7 @@ func (p *TargetPoolProvider) Search(ctx context.Context, project string, query Q
 
 	matches := make([]Result, 0, len(pools))
 	for _, pool := range pools {
-		if pool == nil || !query.Matches(pool.Name) {
+		if pool == nil || !query.MatchesAny(pool.Name, pool.SessionAffinity) {
 			continue
 		}
 

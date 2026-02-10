@@ -43,7 +43,7 @@ func (p *SecretProvider) Search(ctx context.Context, project string, query Query
 
 	matches := make([]Result, 0, len(secrets))
 	for _, secret := range secrets {
-		if secret == nil || !query.Matches(secret.Name) {
+		if secret == nil || !query.MatchesAny(secret.Name, secret.Replication) {
 			continue
 		}
 

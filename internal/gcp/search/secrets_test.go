@@ -51,6 +51,25 @@ func TestSecretProviderReturnsMatches(t *testing.T) {
 	}
 }
 
+func TestSecretProviderMatchesByReplication(t *testing.T) {
+	client := &fakeSecretClient{secrets: []*gcp.Secret{
+		{Name: "auto-secret", Replication: "AUTOMATIC", VersionCount: 1},
+		{Name: "managed-secret", Replication: "USER_MANAGED", VersionCount: 2},
+	}}
+
+	provider := &SecretProvider{NewClient: func(ctx context.Context, project string) (SecretClient, error) {
+		return client, nil
+	}}
+
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "USER_MANAGED"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "managed-secret" {
+		t.Fatalf("expected 1 result for replication search, got %d", len(results))
+	}
+}
+
 func TestSecretProviderPropagatesErrors(t *testing.T) {
 	provider := &SecretProvider{NewClient: func(context.Context, string) (SecretClient, error) {
 		return nil, errors.New("client boom")

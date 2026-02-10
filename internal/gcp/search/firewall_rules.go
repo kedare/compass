@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/kedare/compass/internal/gcp"
 )
@@ -43,7 +44,14 @@ func (p *FirewallRuleProvider) Search(ctx context.Context, project string, query
 
 	matches := make([]Result, 0, len(rules))
 	for _, rule := range rules {
-		if rule == nil || !query.Matches(rule.Name) {
+		if rule == nil {
+			continue
+		}
+		searchFields := []string{rule.Name, rule.Direction, rule.Network, rule.Description}
+		searchFields = append(searchFields, rule.SourceRanges...)
+		searchFields = append(searchFields, rule.TargetTags...)
+		searchFields = append(searchFields, rule.Allowed...)
+		if !query.MatchesAny(searchFields...) {
 			continue
 		}
 
@@ -77,6 +85,22 @@ func firewallRuleDetails(rule *gcp.FirewallRule) map[string]string {
 
 	if rule.Disabled {
 		details["disabled"] = "true"
+	}
+
+	if rule.Description != "" {
+		details["description"] = rule.Description
+	}
+
+	if len(rule.SourceRanges) > 0 {
+		details["sourceRanges"] = strings.Join(rule.SourceRanges, ", ")
+	}
+
+	if len(rule.TargetTags) > 0 {
+		details["targetTags"] = strings.Join(rule.TargetTags, ", ")
+	}
+
+	if len(rule.Allowed) > 0 {
+		details["allowed"] = strings.Join(rule.Allowed, ", ")
 	}
 
 	return details

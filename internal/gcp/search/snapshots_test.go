@@ -55,6 +55,25 @@ func TestSnapshotProviderReturnsMatches(t *testing.T) {
 	}
 }
 
+func TestSnapshotProviderMatchesBySourceDisk(t *testing.T) {
+	client := &fakeSnapshotClient{snapshots: []*gcp.Snapshot{
+		{Name: "snap-a", SourceDisk: "boot-disk-prod", Status: "READY"},
+		{Name: "snap-b", SourceDisk: "data-disk-dev", Status: "READY"},
+	}}
+
+	provider := &SnapshotProvider{NewClient: func(ctx context.Context, project string) (SnapshotClient, error) {
+		return client, nil
+	}}
+
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "data-disk-dev"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "snap-b" {
+		t.Fatalf("expected 1 result for source disk search, got %d", len(results))
+	}
+}
+
 func TestSnapshotProviderPropagatesErrors(t *testing.T) {
 	provider := &SnapshotProvider{NewClient: func(context.Context, string) (SnapshotClient, error) {
 		return nil, errors.New("client boom")

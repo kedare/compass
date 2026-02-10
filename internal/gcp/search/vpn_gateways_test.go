@@ -48,6 +48,25 @@ func TestVPNGatewayProviderReturnsMatches(t *testing.T) {
 	}
 }
 
+func TestVPNGatewayProviderMatchesByNetwork(t *testing.T) {
+	client := &fakeVPNGatewayClient{gateways: []*gcp.VPNGatewayInfo{
+		{Name: "gw-a", Region: "us-central1", Network: "prod-vpc"},
+		{Name: "gw-b", Region: "us-central1", Network: "staging-vpc"},
+	}}
+
+	provider := &VPNGatewayProvider{NewClient: func(ctx context.Context, project string) (VPNGatewayClient, error) {
+		return client, nil
+	}}
+
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "staging-vpc"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "gw-b" {
+		t.Fatalf("expected 1 result for network search, got %d", len(results))
+	}
+}
+
 func TestVPNGatewayProviderPropagatesErrors(t *testing.T) {
 	provider := &VPNGatewayProvider{NewClient: func(context.Context, string) (VPNGatewayClient, error) {
 		return nil, errors.New("client boom")

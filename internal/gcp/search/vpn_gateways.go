@@ -41,7 +41,7 @@ func (p *VPNGatewayProvider) Search(ctx context.Context, project string, query Q
 
 	matches := make([]Result, 0, len(gateways))
 	for _, gw := range gateways {
-		if gw == nil || !query.Matches(gw.Name) {
+		if gw == nil || !query.MatchesAny(gw.Name, gw.Network) {
 			continue
 		}
 

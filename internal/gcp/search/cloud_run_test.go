@@ -47,6 +47,35 @@ func TestCloudRunProviderReturnsMatches(t *testing.T) {
 	}
 }
 
+func TestCloudRunProviderMatchesByDetailFields(t *testing.T) {
+	client := &fakeCloudRunClient{services: []*gcp.CloudRunService{
+		{Name: "api-service", Region: "us-central1", URL: "https://api-service-xyz.run.app", LatestRevision: "api-service-00005"},
+		{Name: "web-frontend", Region: "us-central1", URL: "https://web-frontend-abc.run.app", LatestRevision: "web-frontend-00002"},
+	}}
+
+	provider := &CloudRunProvider{NewClient: func(ctx context.Context, project string) (CloudRunClient, error) {
+		return client, nil
+	}}
+
+	// Search by URL
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "xyz.run.app"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "api-service" {
+		t.Fatalf("expected 1 result for URL search, got %d", len(results))
+	}
+
+	// Search by revision
+	results, err = provider.Search(context.Background(), "proj-a", Query{Term: "web-frontend-00002"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "web-frontend" {
+		t.Fatalf("expected 1 result for revision search, got %d", len(results))
+	}
+}
+
 func TestCloudRunProviderPropagatesErrors(t *testing.T) {
 	provider := &CloudRunProvider{NewClient: func(context.Context, string) (CloudRunClient, error) {
 		return nil, errors.New("client boom")

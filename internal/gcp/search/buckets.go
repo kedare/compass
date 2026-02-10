@@ -43,7 +43,7 @@ func (p *BucketProvider) Search(ctx context.Context, project string, query Query
 
 	matches := make([]Result, 0, len(buckets))
 	for _, bucket := range buckets {
-		if bucket == nil || !query.Matches(bucket.Name) {
+		if bucket == nil || !query.MatchesAny(bucket.Name, bucket.StorageClass) {
 			continue
 		}
 

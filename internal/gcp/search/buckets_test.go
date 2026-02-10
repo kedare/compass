@@ -47,6 +47,25 @@ func TestBucketProviderReturnsMatches(t *testing.T) {
 	}
 }
 
+func TestBucketProviderMatchesByStorageClass(t *testing.T) {
+	client := &fakeBucketClient{buckets: []*gcp.Bucket{
+		{Name: "archive-bucket", Location: "US", StorageClass: "COLDLINE"},
+		{Name: "hot-bucket", Location: "US", StorageClass: "STANDARD"},
+	}}
+
+	provider := &BucketProvider{NewClient: func(ctx context.Context, project string) (BucketClient, error) {
+		return client, nil
+	}}
+
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "COLDLINE"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "archive-bucket" {
+		t.Fatalf("expected 1 result for storage class search, got %d", len(results))
+	}
+}
+
 func TestBucketProviderPropagatesErrors(t *testing.T) {
 	provider := &BucketProvider{NewClient: func(context.Context, string) (BucketClient, error) {
 		return nil, errors.New("client boom")

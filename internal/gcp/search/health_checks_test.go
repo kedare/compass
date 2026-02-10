@@ -51,6 +51,25 @@ func TestHealthCheckProviderReturnsMatches(t *testing.T) {
 	}
 }
 
+func TestHealthCheckProviderMatchesByType(t *testing.T) {
+	client := &fakeHealthCheckClient{checks: []*gcp.HealthCheck{
+		{Name: "http-check", Type: "HTTP", Port: 80},
+		{Name: "grpc-check", Type: "GRPC", Port: 50051},
+	}}
+
+	provider := &HealthCheckProvider{NewClient: func(ctx context.Context, project string) (HealthCheckClient, error) {
+		return client, nil
+	}}
+
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "GRPC"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "grpc-check" {
+		t.Fatalf("expected 1 result for type search, got %d", len(results))
+	}
+}
+
 func TestHealthCheckProviderPropagatesErrors(t *testing.T) {
 	provider := &HealthCheckProvider{NewClient: func(context.Context, string) (HealthCheckClient, error) {
 		return nil, errors.New("client boom")

@@ -67,7 +67,7 @@ func (r *outputRedirector) OrigStderr() *os.File {
 const (
 	statusDefault           = " [yellow]s[-] SSH  [yellow]d[-] details  [yellow]b[-] browser  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]v[-] VPN  [yellow]c[-] connectivity  [yellow]Shift+S[-] search  [yellow]i[-] IP lookup  [yellow]Esc[-] quit  [yellow]?[-] help"
 	statusFilterActive      = " [green]Filter active: '%s'[-]  [yellow]Esc[-] clear  [yellow]s[-] SSH  [yellow]d[-] details  [yellow]b[-] browser  [yellow]/[-] edit"
-	statusFilterMode        = " [yellow]Type to filter, Enter to apply, Esc to cancel[-]"
+	statusFilterMode        = " [yellow]Filter: spaces=AND  |=OR  -=NOT  (e.g. \"web|api -dev\")  Enter to apply, Esc to cancel[-]"
 	statusNoSelection       = " [red]No instance selected[-]"
 	statusDisconnected      = " [green]Disconnected from %s[-]"
 	statusLoadingDetails    = " [yellow]Loading instance details...[-]"
@@ -223,20 +223,10 @@ func (s *tuiState) updateTable() {
 	currentRow := 1
 	matchCount := 0
 
+	expr := parseFilter(filter)
 	for _, inst := range s.allInstances {
-		if filter != "" {
-			filterLower := strings.ToLower(filter)
-			nameLower := strings.ToLower(inst.Name)
-			projectLower := strings.ToLower(inst.Project)
-			zoneLower := strings.ToLower(inst.Zone)
-
-			nameMatch := strings.Contains(nameLower, filterLower)
-			projectMatch := strings.Contains(projectLower, filterLower)
-			zoneMatch := strings.Contains(zoneLower, filterLower)
-
-			if !nameMatch && !projectMatch && !zoneMatch {
-				continue
-			}
+		if !expr.matches(inst.Name, inst.Project, inst.Zone) {
+			continue
 		}
 
 		s.table.SetCell(currentRow, 0, tview.NewTableCell(inst.Name).SetExpansion(1))

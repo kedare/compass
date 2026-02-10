@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/kedare/compass/internal/gcp"
 )
@@ -43,7 +44,7 @@ func (p *AddressProvider) Search(ctx context.Context, project string, query Quer
 
 	matches := make([]Result, 0, len(addresses))
 	for _, addr := range addresses {
-		if addr == nil || !query.Matches(addr.Name) {
+		if addr == nil || !query.MatchesAny(addr.Name, addr.Address, addr.Description) {
 			continue
 		}
 
@@ -73,6 +74,18 @@ func addressDetails(addr *gcp.Address) map[string]string {
 
 	if addr.Status != "" {
 		details["status"] = addr.Status
+	}
+
+	if addr.Description != "" {
+		details["description"] = addr.Description
+	}
+
+	if addr.Subnetwork != "" {
+		details["subnetwork"] = addr.Subnetwork
+	}
+
+	if len(addr.Users) > 0 {
+		details["users"] = strings.Join(addr.Users, ", ")
 	}
 
 	return details

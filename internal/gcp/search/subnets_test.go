@@ -51,6 +51,35 @@ func TestSubnetProviderReturnsMatches(t *testing.T) {
 	}
 }
 
+func TestSubnetProviderMatchesByDetailFields(t *testing.T) {
+	client := &fakeSubnetClient{subnets: []*gcp.Subnet{
+		{Name: "subnet-a", Region: "us-central1", IPCidrRange: "10.0.0.0/24", Network: "vpc-alpha"},
+		{Name: "subnet-b", Region: "us-central1", IPCidrRange: "10.1.0.0/24", Network: "vpc-beta"},
+	}}
+
+	provider := &SubnetProvider{NewClient: func(ctx context.Context, project string) (SubnetClient, error) {
+		return client, nil
+	}}
+
+	// Search by CIDR
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "10.1.0"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "subnet-b" {
+		t.Fatalf("expected 1 result for CIDR search, got %d", len(results))
+	}
+
+	// Search by network
+	results, err = provider.Search(context.Background(), "proj-a", Query{Term: "vpc-alpha"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "subnet-a" {
+		t.Fatalf("expected 1 result for network search, got %d", len(results))
+	}
+}
+
 func TestSubnetProviderPropagatesErrors(t *testing.T) {
 	provider := &SubnetProvider{NewClient: func(context.Context, string) (SubnetClient, error) {
 		return nil, errors.New("client boom")

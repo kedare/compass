@@ -43,7 +43,7 @@ func (p *GKEClusterProvider) Search(ctx context.Context, project string, query Q
 
 	matches := make([]Result, 0, len(clusters))
 	for _, cluster := range clusters {
-		if cluster == nil || !query.Matches(cluster.Name) {
+		if cluster == nil || !query.MatchesAny(cluster.Name, cluster.CurrentMasterVersion) {
 			continue
 		}
 

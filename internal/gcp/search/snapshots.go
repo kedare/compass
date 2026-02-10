@@ -43,7 +43,7 @@ func (p *SnapshotProvider) Search(ctx context.Context, project string, query Que
 
 	matches := make([]Result, 0, len(snapshots))
 	for _, snapshot := range snapshots {
-		if snapshot == nil || !query.Matches(snapshot.Name) {
+		if snapshot == nil || !query.MatchesAny(snapshot.Name, snapshot.SourceDisk) {
 			continue
 		}
 

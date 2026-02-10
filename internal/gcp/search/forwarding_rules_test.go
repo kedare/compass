@@ -47,6 +47,44 @@ func TestForwardingRuleProviderReturnsMatches(t *testing.T) {
 	}
 }
 
+func TestForwardingRuleProviderMatchesByDetailFields(t *testing.T) {
+	client := &fakeForwardingRuleClient{rules: []*gcp.ForwardingRule{
+		{Name: "ext-lb", Region: "us-central1", IPAddress: "35.1.2.3", IPProtocol: "TCP", LoadBalancingScheme: "EXTERNAL"},
+		{Name: "int-lb", Region: "us-central1", IPAddress: "10.0.0.100", IPProtocol: "UDP", LoadBalancingScheme: "INTERNAL"},
+	}}
+
+	provider := &ForwardingRuleProvider{NewClient: func(ctx context.Context, project string) (ForwardingRuleClient, error) {
+		return client, nil
+	}}
+
+	// Search by IP address
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "35.1.2"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "ext-lb" {
+		t.Fatalf("expected 1 result for IP search, got %d", len(results))
+	}
+
+	// Search by protocol
+	results, err = provider.Search(context.Background(), "proj-a", Query{Term: "UDP"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "int-lb" {
+		t.Fatalf("expected 1 result for protocol search, got %d", len(results))
+	}
+
+	// Search by load balancing scheme
+	results, err = provider.Search(context.Background(), "proj-a", Query{Term: "INTERNAL"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "int-lb" {
+		t.Fatalf("expected 1 result for LB scheme search, got %d", len(results))
+	}
+}
+
 func TestForwardingRuleProviderPropagatesErrors(t *testing.T) {
 	provider := &ForwardingRuleProvider{NewClient: func(context.Context, string) (ForwardingRuleClient, error) {
 		return nil, errors.New("client boom")

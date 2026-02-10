@@ -41,7 +41,7 @@ func (p *VPNTunnelProvider) Search(ctx context.Context, project string, query Qu
 
 	matches := make([]Result, 0, len(tunnels))
 	for _, tunnel := range tunnels {
-		if tunnel == nil || !query.Matches(tunnel.Name) {
+		if tunnel == nil || !query.MatchesAny(tunnel.Name, tunnel.PeerIP, tunnel.LocalGatewayIP) {
 			continue
 		}
 

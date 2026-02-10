@@ -214,21 +214,11 @@ func showConnectivityViewUI(ctx context.Context, connClient *gcp.ConnectivityCli
 		}
 
 		// Filter entries
-		filterLower := strings.ToLower(filter)
+		expr := parseFilter(filter)
 		var filteredEntries []connectivityEntry
-		if filter == "" {
-			filteredEntries = allEntries
-		} else {
-			for _, entry := range allEntries {
-				// Match against name, source, destination, protocol, result
-				if strings.Contains(strings.ToLower(entry.DisplayName), filterLower) ||
-					strings.Contains(strings.ToLower(entry.Name), filterLower) ||
-					strings.Contains(strings.ToLower(entry.Source), filterLower) ||
-					strings.Contains(strings.ToLower(entry.Destination), filterLower) ||
-					strings.Contains(strings.ToLower(entry.Protocol), filterLower) ||
-					strings.Contains(strings.ToLower(entry.Result), filterLower) {
-					filteredEntries = append(filteredEntries, entry)
-				}
+		for _, entry := range allEntries {
+			if expr.matches(entry.DisplayName, entry.Name, entry.Source, entry.Destination, entry.Protocol, entry.Result) {
+				filteredEntries = append(filteredEntries, entry)
 			}
 		}
 

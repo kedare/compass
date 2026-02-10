@@ -47,6 +47,35 @@ func TestBackendServiceProviderReturnsMatches(t *testing.T) {
 	}
 }
 
+func TestBackendServiceProviderMatchesByDetailFields(t *testing.T) {
+	client := &fakeBackendServiceClient{services: []*gcp.BackendService{
+		{Name: "web-backend", Region: "us-central1", Protocol: "HTTP", LoadBalancingScheme: "EXTERNAL"},
+		{Name: "grpc-backend", Region: "us-central1", Protocol: "GRPC", LoadBalancingScheme: "INTERNAL"},
+	}}
+
+	provider := &BackendServiceProvider{NewClient: func(ctx context.Context, project string) (BackendServiceClient, error) {
+		return client, nil
+	}}
+
+	// Search by protocol
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "GRPC"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "grpc-backend" {
+		t.Fatalf("expected 1 result for protocol search, got %d", len(results))
+	}
+
+	// Search by load balancing scheme
+	results, err = provider.Search(context.Background(), "proj-a", Query{Term: "EXTERNAL"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "web-backend" {
+		t.Fatalf("expected 1 result for LB scheme search, got %d", len(results))
+	}
+}
+
 func TestBackendServiceProviderPropagatesErrors(t *testing.T) {
 	provider := &BackendServiceProvider{NewClient: func(context.Context, string) (BackendServiceClient, error) {
 		return nil, errors.New("client boom")

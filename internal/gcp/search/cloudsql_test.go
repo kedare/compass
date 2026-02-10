@@ -47,6 +47,35 @@ func TestCloudSQLProviderReturnsMatches(t *testing.T) {
 	}
 }
 
+func TestCloudSQLProviderMatchesByDetailFields(t *testing.T) {
+	client := &fakeCloudSQLClient{instances: []*gcp.CloudSQLInstance{
+		{Name: "my-postgres", Region: "us-central1", DatabaseVersion: "POSTGRES_14", Tier: "db-custom-4-16384", State: "RUNNABLE"},
+		{Name: "my-mysql", Region: "us-central1", DatabaseVersion: "MYSQL_8_0", Tier: "db-f1-micro", State: "RUNNABLE"},
+	}}
+
+	provider := &CloudSQLProvider{NewClient: func(ctx context.Context, project string) (CloudSQLClient, error) {
+		return client, nil
+	}}
+
+	// Search by database version
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "POSTGRES"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "my-postgres" {
+		t.Fatalf("expected 1 result for database version search, got %d", len(results))
+	}
+
+	// Search by tier
+	results, err = provider.Search(context.Background(), "proj-a", Query{Term: "db-f1-micro"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "my-mysql" {
+		t.Fatalf("expected 1 result for tier search, got %d", len(results))
+	}
+}
+
 func TestCloudSQLProviderPropagatesErrors(t *testing.T) {
 	provider := &CloudSQLProvider{NewClient: func(context.Context, string) (CloudSQLClient, error) {
 		return nil, errors.New("client boom")

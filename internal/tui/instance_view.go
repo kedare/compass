@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 	"time"
 
@@ -226,10 +225,8 @@ func (v *InstanceView) updateTable() {
 	for _, instance := range v.instances {
 		// Apply filter
 		if v.filterText != "" {
-			match := strings.Contains(strings.ToLower(instance.Name), strings.ToLower(v.filterText)) ||
-				strings.Contains(strings.ToLower(instance.Project), strings.ToLower(v.filterText)) ||
-				strings.Contains(strings.ToLower(instance.Zone), strings.ToLower(v.filterText))
-			if !match {
+			expr := parseFilter(v.filterText)
+			if !expr.matches(instance.Name, instance.Project, instance.Zone) {
 				continue
 			}
 		}

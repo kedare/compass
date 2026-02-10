@@ -292,19 +292,11 @@ func showVPNViewUI(ctx context.Context, gcpClient *gcp.Client, selectedProject s
 		}
 
 		// Filter entries
-		filterLower := strings.ToLower(filter)
+		expr := parseFilter(filter)
 		var filteredEntries []vpnEntry
-		if filter == "" {
-			filteredEntries = allEntries
-		} else {
-			for _, entry := range allEntries {
-				// Match against name, region, network, status
-				if strings.Contains(strings.ToLower(entry.Name), filterLower) ||
-					strings.Contains(strings.ToLower(entry.Region), filterLower) ||
-					strings.Contains(strings.ToLower(entry.Network), filterLower) ||
-					strings.Contains(strings.ToLower(entry.Status), filterLower) {
-					filteredEntries = append(filteredEntries, entry)
-				}
+		for _, entry := range allEntries {
+			if expr.matches(entry.Name, entry.Region, entry.Network, entry.Status) {
+				filteredEntries = append(filteredEntries, entry)
 			}
 		}
 

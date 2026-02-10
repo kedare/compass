@@ -44,7 +44,7 @@ func (p *InstanceTemplateProvider) Search(ctx context.Context, project string, q
 
 	matches := make([]Result, 0, len(templates))
 	for _, tmpl := range templates {
-		if tmpl == nil || !query.Matches(tmpl.Name) {
+		if tmpl == nil || !query.MatchesAny(tmpl.Name, tmpl.Description, tmpl.MachineType) {
 			continue
 		}
 

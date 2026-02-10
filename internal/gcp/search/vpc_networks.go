@@ -43,7 +43,7 @@ func (p *VPCNetworkProvider) Search(ctx context.Context, project string, query Q
 
 	matches := make([]Result, 0, len(networks))
 	for _, network := range networks {
-		if network == nil || !query.Matches(network.Name) {
+		if network == nil || !query.MatchesAny(network.Name) {
 			continue
 		}
 

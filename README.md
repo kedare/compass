@@ -31,6 +31,7 @@
   - [Smart Search Learning](#smart-search-learning)
 - [Connectivity Tests](#connectivity-tests)
 - [VPN Inspection](#vpn-inspection)
+- [Interactive TUI](#interactive-tui)
 - [Development](#development)
 - [CI/CD](#cicd)
 - [Roadmap](#roadmap)
@@ -54,6 +55,9 @@
 - 🔭 Cloud VPN inventory across gateways, tunnels, and BGP peers
 - 💾 Intelligent local cache with smart search learning for instant connections
 - 🧠 Search affinity system that learns your patterns and prioritizes relevant projects
+- 🔎 Global resource search across 22 GCP resource types with fuzzy matching and highlight
+- 🖥️ Interactive TUI (terminal UI) with keyboard-driven navigation (k9s-style)
+- 🧮 Advanced filtering with AND (spaces), OR (`|`), and NOT (`-`) operators across all views
 - 📊 Structured logging with configurable verbosity and clean spinner-based progress
 - ⚡ Zero configuration—relies on existing `gcloud` authentication
 - 🔁 In-place upgrades via `compass update` to pull the latest GitHub release
@@ -182,6 +186,9 @@ compass gcp search piou
 # Inspect VPN gateways
 compass gcp vpn list --project prod
 
+# Launch the interactive TUI
+compass interactive
+
 # Update to the latest published release
 compass update
 
@@ -270,14 +277,14 @@ TYPE              PROJECT       LOCATION         NAME          DETAILS
 compute.instance  prod-project  us-central1-b    piou-runner   status=RUNNING, machineType=e2-medium
 ```
 
-**Searchable resource types:**
+**Searchable resource types (22):**
 
 | Type | Kind | Details shown |
 |------|------|---------------|
 | Compute Engine instances | `compute.instance` | Status, machine type |
 | Managed Instance Groups | `compute.mig` | Location, regional/zonal |
 | Instance templates | `compute.instanceTemplate` | Machine type |
-| IP address reservations | `compute.address` | Address, type, status |
+| IP address reservations | `compute.address` | Address, type, status, description, subnetwork, users |
 | Persistent disks | `compute.disk` | Size, type, status |
 | Disk snapshots | `compute.snapshot` | Size, source disk, status |
 | Cloud Storage buckets | `storage.bucket` | Location, storage class |
@@ -292,13 +299,16 @@ compute.instance  prod-project  us-central1-b    piou-runner   status=RUNNING, m
 | VPC networks | `compute.network` | Auto-create subnets, subnet count |
 | VPC subnets | `compute.subnet` | Region, network, CIDR, purpose |
 | Cloud Run services | `run.service` | Region, URL, latest revision |
-| Firewall rules | `compute.firewall` | Network, direction, priority |
+| Firewall rules | `compute.firewall` | Network, direction, priority, description, source ranges, target tags, allowed protocols |
 | Secret Manager secrets | `secretmanager.secret` | Replication type |
 | HA VPN gateways | `compute.vpnGateway` | Network, interface count, IPs |
 | VPN tunnels | `compute.vpnTunnel` | Status, peer IP, IKE version, gateway |
+| VPC routes | `compute.route` | Destination range, network, priority, next hop, route type, tags |
 
 - Run `compass gcp projects import` first so the search knows which projects to inspect.
 - Use `--project <id>` when you want to bypass the cache and only inspect a single project.
+- Search matches against resource names and detail fields (e.g. description, IP addresses, tags).
+- In the TUI, press `Tab` to toggle fuzzy matching and `/` to filter results with AND/OR/NOT operators.
 
 ### IP Lookup Examples
 
@@ -808,6 +818,52 @@ compass gcp vpn get <tunnel-name> --type tunnel --region <region>
 - Configuration warnings (orphaned tunnels, missing configurations, etc.)
 
 **See [VPN Inspection Examples](#vpn-inspection-examples) for detailed output examples.**
+
+## Interactive TUI
+
+Compass includes a full terminal UI for interactive exploration, accessible via:
+
+```bash
+compass interactive   # or: compass i / compass tui
+```
+
+The TUI provides keyboard-driven navigation similar to [k9s](https://k9scli.io/):
+
+**Main view — Instance browser:**
+- `s` — SSH to the selected instance
+- `d` — Show instance details
+- `b` — Open in Cloud Console (browser)
+- `/` — Filter the displayed list
+- `Shift+S` — Global resource search
+- `Shift+R` — Refresh instance list
+- `v` — VPN view
+- `c` — Connectivity tests view
+- `i` — IP lookup view
+- `?` — Help
+- `Esc` — Quit (or clear active filter)
+
+**Global search (`Shift+S`):**
+- Searches across all 22 resource types in cached projects
+- Results appear progressively as they're found
+- `Tab` — Toggle fuzzy matching (e.g. "prd" matches "production")
+- `/` — Filter displayed results
+- `d` — Show details for a result
+- `s` — SSH to an instance result
+- `b` / `o` — Open in browser
+
+### Filtering
+
+All TUI views share the same filter syntax. Press `/` to enter filter mode, then type your query:
+
+| Operator | Syntax | Example | Meaning |
+|----------|--------|---------|---------|
+| AND | spaces | `web prod` | Must contain both "web" AND "prod" |
+| OR | pipe `\|` | `web\|api` | Must contain "web" OR "api" |
+| NOT | dash `-` | `-dev` | Must NOT contain "dev" |
+
+Operators can be combined: `web|api prod -staging` matches resources containing ("web" or "api") AND "prod" but NOT "staging".
+
+Press `Enter` to apply the filter, `Esc` to cancel.
 
 ## Development
 

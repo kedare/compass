@@ -56,6 +56,35 @@ func TestInstanceTemplateProviderReturnsMatches(t *testing.T) {
 	}
 }
 
+func TestInstanceTemplateProviderMatchesByDetailFields(t *testing.T) {
+	client := &fakeInstanceTemplateClient{templates: []*gcp.InstanceTemplate{
+		{Name: "tmpl-a", Description: "Web server template", MachineType: "e2-standard-4"},
+		{Name: "tmpl-b", Description: "Database template", MachineType: "n2-highmem-16"},
+	}}
+
+	provider := &InstanceTemplateProvider{NewClient: func(ctx context.Context, project string) (InstanceTemplateClient, error) {
+		return client, nil
+	}}
+
+	// Search by description
+	results, err := provider.Search(context.Background(), "proj-a", Query{Term: "Database"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "tmpl-b" {
+		t.Fatalf("expected 1 result for description search, got %d", len(results))
+	}
+
+	// Search by machine type
+	results, err = provider.Search(context.Background(), "proj-a", Query{Term: "e2-standard"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "tmpl-a" {
+		t.Fatalf("expected 1 result for machine type search, got %d", len(results))
+	}
+}
+
 func TestInstanceTemplateProviderPropagatesErrors(t *testing.T) {
 	provider := &InstanceTemplateProvider{NewClient: func(context.Context, string) (InstanceTemplateClient, error) {
 		return nil, errors.New("client boom")

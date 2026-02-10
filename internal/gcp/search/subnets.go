@@ -43,7 +43,7 @@ func (p *SubnetProvider) Search(ctx context.Context, project string, query Query
 
 	matches := make([]Result, 0, len(subnets))
 	for _, subnet := range subnets {
-		if subnet == nil || !query.Matches(subnet.Name) {
+		if subnet == nil || !query.MatchesAny(subnet.Name, subnet.IPCidrRange, subnet.Network) {
 			continue
 		}
 
