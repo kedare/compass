@@ -251,7 +251,7 @@ func showConnectivityViewUI(ctx context.Context, connClient *gcp.ConnectivityCli
 	// Status bar
 	status := tview.NewTextView().
 		SetDynamicColors(true).
-		SetText(" [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
+		SetText(" [yellow]b[-] browser  [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
 
 	// Create pages for modal overlays
 	pages := tview.NewPages()
@@ -278,7 +278,7 @@ func showConnectivityViewUI(ctx context.Context, connClient *gcp.ConnectivityCli
 			if currentFilter != "" {
 				status.SetText(fmt.Sprintf(" [green]Filter active: %s[-]", currentFilter))
 			} else {
-				status.SetText(" [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
+				status.SetText(" [yellow]b[-] browser  [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
 			}
 		case tcell.KeyEscape:
 			// Cancel filter mode without applying
@@ -292,7 +292,7 @@ func showConnectivityViewUI(ctx context.Context, connClient *gcp.ConnectivityCli
 			if currentFilter != "" {
 				status.SetText(fmt.Sprintf(" [green]Filter active: %s[-]", currentFilter))
 			} else {
-				status.SetText(" [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
+				status.SetText(" [yellow]b[-] browser  [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
 			}
 		}
 	})
@@ -305,76 +305,18 @@ func showConnectivityViewUI(ctx context.Context, connClient *gcp.ConnectivityCli
 			return
 		}
 
-		test := entry.Test
-		details := fmt.Sprintf(`[yellow::b]Test Details[-:-:-]
-
-[white::b]Name:[-:-:-] %s
-[white::b]Display Name:[-:-:-] %s
-[white::b]Description:[-:-:-] %s
-[white::b]Protocol:[-:-:-] %s
-[white::b]State:[-:-:-] %s
-
-[yellow::b]Source Endpoint:[-:-:-]
-%s
-
-[yellow::b]Destination Endpoint:[-:-:-]
-%s
-
-[yellow::b]Reachability:[-:-:-]
-%s
-
-[white::b]Created:[-:-:-] %s
-[white::b]Updated:[-:-:-] %s
-
-[darkgray]Press Esc to go back[-]`,
-			test.Name,
-			test.DisplayName,
-			test.Description,
-			test.Protocol,
-			formatTestState(test),
-			formatEndpointDetails(test.Source),
-			formatEndpointDetails(test.Destination),
-			formatReachabilityDetails(test.ReachabilityDetails),
-			test.CreateTime.Format("2006-01-02 15:04:05"),
-			test.UpdateTime.Format("2006-01-02 15:04:05"),
-		)
-
-		detailView := tview.NewTextView().
-			SetDynamicColors(true).
-			SetText(details).
-			SetScrollable(true).
-			SetWordWrap(true)
-		detailView.SetBorder(true).SetTitle(fmt.Sprintf(" Test: %s ", test.DisplayName))
-
-		// Create status bar for detail view
-		detailStatus := tview.NewTextView().
-			SetDynamicColors(true).
-			SetText(" [yellow]Esc[-] back  [yellow]up/down[-] scroll")
-
-		// Create fullscreen detail layout
-		detailFlex := tview.NewFlex().
-			SetDirection(tview.FlexRow).
-			AddItem(detailView, 0, 1, true).
-			AddItem(detailStatus, 1, 0, false)
-
-		// Set up input handler
-		detailView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-			if event.Key() == tcell.KeyEscape {
-				app.SetRoot(flex, true)
-				app.SetFocus(table)
-				modalOpen = false
-				if currentFilter != "" {
-					status.SetText(fmt.Sprintf(" [green]Filter active: %s[-]", currentFilter))
-				} else {
-					status.SetText(" [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
-				}
-				return nil
+		ShowConnectivityTestDetails(app, entry.Test, func() {
+			// On close callback
+			app.SetRoot(flex, true)
+			app.SetFocus(table)
+			modalOpen = false
+			if currentFilter != "" {
+				status.SetText(fmt.Sprintf(" [green]Filter active: %s[-]", currentFilter))
+			} else {
+				status.SetText(" [yellow]b[-] browser  [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
 			}
-			return event
 		})
-
 		modalOpen = true
-		app.SetRoot(detailFlex, true).SetFocus(detailView)
 	}
 
 	// Function to show help fullscreen
@@ -385,6 +327,7 @@ func showConnectivityViewUI(ctx context.Context, connClient *gcp.ConnectivityCli
   up/down, j/k     Navigate list
 
 [yellow]Test Actions:[-]
+  b            Open test in browser (Cloud Console)
   d            Show test details
   r            Rerun selected test
   Del          Delete selected test
@@ -426,7 +369,7 @@ func showConnectivityViewUI(ctx context.Context, connClient *gcp.ConnectivityCli
 				if currentFilter != "" {
 					status.SetText(fmt.Sprintf(" [green]Filter active: %s[-]", currentFilter))
 				} else {
-					status.SetText(" [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
+					status.SetText(" [yellow]b[-] browser  [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
 				}
 				return nil
 			}
@@ -462,7 +405,7 @@ func showConnectivityViewUI(ctx context.Context, connClient *gcp.ConnectivityCli
 						if currentFilter != "" {
 							status.SetText(fmt.Sprintf(" [green]Filter active: %s[-]", currentFilter))
 						} else {
-							status.SetText(" [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
+							status.SetText(" [yellow]b[-] browser  [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
 						}
 					})
 				})
@@ -505,7 +448,7 @@ func showConnectivityViewUI(ctx context.Context, connClient *gcp.ConnectivityCli
 									if currentFilter != "" {
 										status.SetText(fmt.Sprintf(" [green]Filter active: %s[-]", currentFilter))
 									} else {
-										status.SetText(" [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
+										status.SetText(" [yellow]b[-] browser  [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
 									}
 								})
 							})
@@ -517,6 +460,28 @@ func showConnectivityViewUI(ctx context.Context, connClient *gcp.ConnectivityCli
 		pages.AddPage("confirm", confirmModal, true, true)
 		modalOpen = true
 		app.SetFocus(confirmModal)
+	}
+
+	// Function to get selected entry
+	getSelectedEntry := func() *connectivityEntry {
+		row, _ := table.GetSelection()
+		if row <= 0 || row > len(allEntries) {
+			return nil
+		}
+
+		// Apply filter to get the correct entry
+		expr := parseFilter(currentFilter)
+		var filteredEntries []connectivityEntry
+		for _, entry := range allEntries {
+			if expr.matches(entry.DisplayName, entry.Name, entry.Source, entry.Destination, entry.Protocol, entry.Result) {
+				filteredEntries = append(filteredEntries, entry)
+			}
+		}
+
+		if row-1 < len(filteredEntries) {
+			return &filteredEntries[row-1]
+		}
+		return nil
 	}
 
 	// Keyboard handler
@@ -541,7 +506,7 @@ func showConnectivityViewUI(ctx context.Context, connClient *gcp.ConnectivityCli
 				status.SetText(" [yellow]Filter cleared[-]")
 				time.AfterFunc(2*time.Second, func() {
 					app.QueueUpdateDraw(func() {
-						status.SetText(" [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
+						status.SetText(" [yellow]b[-] browser  [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
 					})
 				})
 				return nil
@@ -564,7 +529,7 @@ func showConnectivityViewUI(ctx context.Context, connClient *gcp.ConnectivityCli
 							if currentFilter != "" {
 								status.SetText(fmt.Sprintf(" [green]Filter active: %s[-]", currentFilter))
 							} else {
-								status.SetText(" [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
+								status.SetText(" [yellow]b[-] browser  [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
 							}
 						})
 					})
@@ -588,7 +553,7 @@ func showConnectivityViewUI(ctx context.Context, connClient *gcp.ConnectivityCli
 								if currentFilter != "" {
 									status.SetText(fmt.Sprintf(" [green]Filter active: %s[-]", currentFilter))
 								} else {
-									status.SetText(" [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
+									status.SetText(" [yellow]b[-] browser  [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
 								}
 							})
 						})
@@ -604,6 +569,30 @@ func showConnectivityViewUI(ctx context.Context, connClient *gcp.ConnectivityCli
 				flex.AddItem(table, 0, 1, false)
 				flex.AddItem(status, 1, 0, false)
 				app.SetFocus(filterInput)
+				return nil
+			case 'b':
+				// Open in browser
+				entry := getSelectedEntry()
+				if entry == nil || entry.Test == nil {
+					return nil
+				}
+
+				url := fmt.Sprintf("https://console.cloud.google.com/net-intelligence/connectivity/tests/details/%s?project=%s",
+					entry.Name, selectedProject)
+				if err := OpenInBrowser(url); err != nil {
+					status.SetText(fmt.Sprintf(" [yellow]URL: %s[-]", url))
+				} else {
+					status.SetText(" [green]Opened in browser[-]")
+				}
+				time.AfterFunc(2*time.Second, func() {
+					app.QueueUpdateDraw(func() {
+						if currentFilter != "" {
+							status.SetText(fmt.Sprintf(" [green]Filter active: %s[-]", currentFilter))
+						} else {
+							status.SetText(" [yellow]b[-] browser  [yellow]d[-] details  [yellow]r[-] rerun  [yellow]Del[-] delete  [yellow]/[-] filter  [yellow]Shift+R[-] refresh  [yellow]Esc[-] back  [yellow]?[-] help")
+						}
+					})
+				})
 				return nil
 			case 'd':
 				// Show details
@@ -824,4 +813,79 @@ func formatReachabilityDetails(details *gcp.ReachabilityDetails) string {
 	}
 
 	return result.String()
+}
+
+// ShowConnectivityTestDetails displays a fullscreen detail view for a connectivity test.
+// This is a reusable function that can be called from different views.
+func ShowConnectivityTestDetails(app *tview.Application, test *gcp.ConnectivityTestResult, onClose func()) {
+	// Build return reachability section if available
+	returnReachabilitySection := ""
+	if test.ReturnReachabilityDetails != nil {
+		returnReachabilitySection = fmt.Sprintf("\n[yellow::b]Return Reachability (Destination → Source):[-:-:-]\n%s\n",
+			formatReachabilityDetails(test.ReturnReachabilityDetails))
+	}
+
+	details := fmt.Sprintf(`[yellow::b]Test Details[-:-:-]
+
+[white::b]Name:[-:-:-] %s
+[white::b]Display Name:[-:-:-] %s
+[white::b]Description:[-:-:-] %s
+[white::b]Protocol:[-:-:-] %s
+[white::b]State:[-:-:-] %s
+
+[yellow::b]Source Endpoint:[-:-:-]
+%s
+
+[yellow::b]Destination Endpoint:[-:-:-]
+%s
+
+[yellow::b]Reachability (Source → Destination):[-:-:-]
+%s%s
+[white::b]Created:[-:-:-] %s
+[white::b]Updated:[-:-:-] %s
+
+[darkgray]Press Esc to go back[-]`,
+		test.Name,
+		test.DisplayName,
+		test.Description,
+		test.Protocol,
+		formatTestState(test),
+		formatEndpointDetails(test.Source),
+		formatEndpointDetails(test.Destination),
+		formatReachabilityDetails(test.ReachabilityDetails),
+		returnReachabilitySection,
+		test.CreateTime.Format("2006-01-02 15:04:05"),
+		test.UpdateTime.Format("2006-01-02 15:04:05"),
+	)
+
+	detailView := tview.NewTextView().
+		SetDynamicColors(true).
+		SetText(details).
+		SetScrollable(true).
+		SetWordWrap(true)
+	detailView.SetBorder(true).SetTitle(fmt.Sprintf(" Test: %s ", test.DisplayName))
+
+	// Create status bar for detail view
+	detailStatus := tview.NewTextView().
+		SetDynamicColors(true).
+		SetText(" [yellow]Esc[-] back  [yellow]up/down[-] scroll")
+
+	// Create fullscreen detail layout
+	detailFlex := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(detailView, 0, 1, true).
+		AddItem(detailStatus, 1, 0, false)
+
+	// Set up input handler
+	detailView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			if onClose != nil {
+				onClose()
+			}
+			return nil
+		}
+		return event
+	})
+
+	app.SetRoot(detailFlex, true).SetFocus(detailView)
 }

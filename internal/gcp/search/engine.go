@@ -239,46 +239,75 @@ func (e *Engine) SearchStreaming(ctx context.Context, projects []string, query Q
 	var results []Result
 	var warnings []SearchWarning
 
-	var wg sync.WaitGroup
-	for _, project := range trimmed {
-		project := project
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	// Split projects into priority batches for better affinity-based ordering
+	// Search top projects first to show relevant results faster
+	priorityBatchSize := 5 // Search top 5 projects first
+	if len(trimmed) < priorityBatchSize {
+		priorityBatchSize = len(trimmed)
+	}
 
-			sem <- struct{}{}
-			defer func() { <-sem }()
+	searchProjectBatch := func(projects []string) {
+		var wg sync.WaitGroup
+		for _, project := range projects {
+			project := project
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
 
-			// Check if context was cancelled
-			if ctx.Err() != nil {
-				return
-			}
+				sem <- struct{}{}
+				defer func() { <-sem }()
 
-			for _, provider := range activeProviders {
-				// Check cancellation before each provider
+				// Check if context was cancelled
 				if ctx.Err() != nil {
 					return
 				}
 
-				providerResults, err := provider.Search(ctx, project, query)
+				for _, provider := range activeProviders {
+					// Check cancellation before each provider
+					if ctx.Err() != nil {
+						return
+					}
 
-				// Update completed count regardless of result
-				mu.Lock()
-				completedRequests++
-				currentCompleted := completedRequests
-				mu.Unlock()
+					providerResults, err := provider.Search(ctx, project, query)
 
-				if err != nil {
-					// Record warning but continue with other providers
+					// Update completed count regardless of result
 					mu.Lock()
-					warnings = append(warnings, SearchWarning{
-						Project:  project,
-						Provider: provider.Kind(),
-						Err:      err,
-					})
+					completedRequests++
+					currentCompleted := completedRequests
 					mu.Unlock()
 
-					// Still send progress update even on error
+					if err != nil {
+						// Record warning but continue with other providers
+						mu.Lock()
+						warnings = append(warnings, SearchWarning{
+							Project:  project,
+							Provider: provider.Kind(),
+							Err:      err,
+						})
+						mu.Unlock()
+
+						// Still send progress update even on error
+						if callback != nil {
+							progress := SearchProgress{
+								TotalRequests:     totalRequests,
+								CompletedRequests: currentCompleted,
+								PendingRequests:   totalRequests - currentCompleted,
+								CurrentProject:    project,
+								CurrentProvider:   string(provider.Kind()),
+							}
+							_ = callback(nil, progress)
+						}
+						continue
+					}
+
+					// Call the callback with new results and progress
+					mu.Lock()
+					results = append(results, providerResults...)
+					currentResults := make([]Result, len(providerResults))
+					copy(currentResults, providerResults)
+					mu.Unlock()
+
+					// Send progress update with new results
 					if callback != nil {
 						progress := SearchProgress{
 							TotalRequests:     totalRequests,
@@ -287,37 +316,26 @@ func (e *Engine) SearchStreaming(ctx context.Context, projects []string, query Q
 							CurrentProject:    project,
 							CurrentProvider:   string(provider.Kind()),
 						}
-						_ = callback(nil, progress)
-					}
-					continue
-				}
-
-				// Call the callback with new results and progress
-				mu.Lock()
-				results = append(results, providerResults...)
-				currentResults := make([]Result, len(providerResults))
-				copy(currentResults, providerResults)
-				mu.Unlock()
-
-				// Send progress update with new results
-				if callback != nil {
-					progress := SearchProgress{
-						TotalRequests:     totalRequests,
-						CompletedRequests: currentCompleted,
-						PendingRequests:   totalRequests - currentCompleted,
-						CurrentProject:    project,
-						CurrentProvider:   string(provider.Kind()),
-					}
-					if err := callback(currentResults, progress); err != nil {
-						// Callback requested stop - just return
-						return
+						if err := callback(currentResults, progress); err != nil {
+							// Callback requested stop - just return
+							return
+						}
 					}
 				}
-			}
-		}()
+			}()
+		}
+		wg.Wait()
 	}
 
-	wg.Wait()
+	// Search high-priority projects first
+	priorityBatch := trimmed[:priorityBatchSize]
+	searchProjectBatch(priorityBatch)
+
+	// Then search remaining projects
+	if len(trimmed) > priorityBatchSize {
+		remainingBatch := trimmed[priorityBatchSize:]
+		searchProjectBatch(remainingBatch)
+	}
 
 	// Sort results for consistent output
 	sort.Slice(results, func(i, j int) bool {
