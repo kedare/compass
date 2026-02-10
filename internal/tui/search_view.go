@@ -726,10 +726,11 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 
 							app.QueueUpdateDraw(func() {
 								cachedIAP := LoadIAPPreference(instance.Name)
+								cachedSSHFlags := LoadSSHFlags(instance.Name, resourceProject)
 								defaultUseIAP := instance.CanUseIAP
 
 								modalOpen = true
-								ShowSSHOptionsModal(app, instance.Name, defaultUseIAP, cachedIAP,
+								ShowSSHOptionsModal(app, instance.Name, defaultUseIAP, cachedIAP, cachedSSHFlags,
 									func(opts SSHOptions) {
 										app.SetRoot(flex, true)
 										app.SetFocus(table)
@@ -785,9 +786,10 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 				} else {
 					// Regular instance - show SSH modal directly
 					cachedIAP := LoadIAPPreference(resourceName)
+					cachedSSHFlags := LoadSSHFlags(resourceName, resourceProject)
 
 					modalOpen = true
-					ShowSSHOptionsModal(app, resourceName, false, cachedIAP,
+					ShowSSHOptionsModal(app, resourceName, false, cachedIAP, cachedSSHFlags,
 						func(opts SSHOptions) {
 							app.SetRoot(flex, true)
 							app.SetFocus(table)

@@ -42,6 +42,7 @@ const (
 			iap INTEGER,
 			last_used INTEGER,
 			mig_name TEXT,
+			ssh_flags TEXT,
 			PRIMARY KEY (name, project)
 		)`
 

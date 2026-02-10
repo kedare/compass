@@ -77,6 +77,11 @@ func TestGcpSshCommandFlags(t *testing.T) {
 	sshFlag := gcpSshCmd.Flags().Lookup("ssh-flag")
 	require.NotNil(t, sshFlag)
 	require.NotEmpty(t, sshFlag.Usage)
+
+	rememberFlagsFlag := gcpSshCmd.Flags().Lookup("remember-flags")
+	require.NotNil(t, rememberFlagsFlag)
+	require.NotEmpty(t, rememberFlagsFlag.Usage)
+	require.Equal(t, "false", rememberFlagsFlag.DefValue)
 }
 
 func TestGcpCommandStructure(t *testing.T) {

@@ -27,11 +27,12 @@ const (
 )
 
 var (
-	project      string
-	zone         string
-	sshFlags     []string
-	resourceType string
-	iapFlag      bool
+	project       string
+	zone          string
+	sshFlags      []string
+	resourceType  string
+	iapFlag       bool
+	rememberFlags bool
 )
 
 var gcpCmd = &cobra.Command{
@@ -71,7 +72,13 @@ Examples:
   compass gcp ssh my-instance --zone us-central1-a --project my-project
 
   # Combine resource type with zone for fastest search
-  compass gcp ssh my-instance --type instance --zone us-central1-a --project my-project`,
+  compass gcp ssh my-instance --type instance --zone us-central1-a --project my-project
+
+  # Remember SSH flags for future connections
+  compass gcp ssh my-instance --project my-project --ssh-flag="-v" --ssh-flag="-D 1080" --remember-flags
+
+  # Subsequent connection automatically reuses saved flags
+  compass gcp ssh my-instance`,
 	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: gcpSSHCompletion,
 	Run: func(cmd *cobra.Command, args []string) {
@@ -317,6 +324,15 @@ Examples:
 			logger.Log.Debugf("Using cached IAP preference (%t) for %s", *pref, instance.Name)
 		}
 
+		// Load cached SSH flags if the user didn't provide any
+		sshFlagSet := cmd.Flags().Changed("ssh-flag")
+		if !sshFlagSet {
+			if cached := loadSSHFlags(instance.Name, instance.Project); len(cached) > 0 {
+				sshFlags = cached
+				logger.Log.Infof("Using remembered SSH flags for %s: %v", instance.Name, sshFlags)
+			}
+		}
+
 		// Update project from the found instance's project
 		project = instance.Project
 
@@ -330,6 +346,11 @@ Examples:
 
 		if iapFlagSet {
 			rememberIAPPreference(instance, iapFlag)
+		}
+
+		// Save SSH flags if --remember-flags is set
+		if rememberFlags {
+			rememberSSHFlags(instance, sshFlags)
 		}
 
 		// Connect via SSH with IAP tunnel
@@ -406,6 +427,59 @@ func rememberIAPPreference(instance *gcp.Instance, preferIAP bool) {
 	}
 
 	logger.Log.Debugf("Stored IAP preference (%t) for %s", preferIAP, instance.Name)
+}
+
+// loadSSHFlags returns the cached SSH flags for the provided instance when available.
+func loadSSHFlags(instanceName, projectName string) []string {
+	cacheStore, err := gcp.LoadCache()
+	if err != nil || cacheStore == nil || instanceName == "" {
+		return nil
+	}
+
+	var info *cache.LocationInfo
+	var found bool
+
+	if projectName != "" {
+		info, found = cacheStore.GetWithProject(instanceName, projectName)
+	} else {
+		info, found = cacheStore.Get(instanceName)
+	}
+
+	if !found || info == nil {
+		return nil
+	}
+
+	return info.SSHFlags
+}
+
+// rememberSSHFlags persists the provided SSH flags for the resolved instance.
+func rememberSSHFlags(instance *gcp.Instance, flags []string) {
+	if instance == nil {
+		return
+	}
+
+	cacheStore, err := gcp.LoadCache()
+	if err != nil || cacheStore == nil {
+		return
+	}
+
+	info, found := cacheStore.GetWithProject(instance.Name, instance.Project)
+	if !found || info == nil {
+		info = &cache.LocationInfo{
+			Project: instance.Project,
+			Zone:    instance.Zone,
+			Type:    cache.ResourceTypeInstance,
+		}
+	}
+
+	info.SSHFlags = flags
+
+	if err := cacheStore.Set(instance.Name, info); err != nil {
+		logger.Log.Warnf("Failed to save SSH flags for %s: %v", instance.Name, err)
+		return
+	}
+
+	logger.Log.Debugf("Stored SSH flags for %s: %v", instance.Name, flags)
 }
 
 // boolPtr returns a pointer to the provided boolean value.
@@ -1209,6 +1283,7 @@ func init() {
 	gcpSshCmd.Flags().StringVarP(&resourceType, "type", "t", "", "Resource type: 'instance' or 'mig' (auto-detected if not specified)")
 	gcpSshCmd.Flags().StringSliceVar(&sshFlags, "ssh-flag", []string{}, "Additional SSH flags to pass to the SSH command (can be used multiple times)")
 	gcpSshCmd.Flags().BoolVar(&iapFlag, "iap", false, "Force usage of IAP tunneling (true/false). Defaults to automatic detection based on the instance configuration")
+	gcpSshCmd.Flags().BoolVar(&rememberFlags, "remember-flags", false, "Remember the provided SSH flags for this instance and reuse them on future connections")
 	if err := gcpSshCmd.RegisterFlagCompletionFunc("zone", gcpSSHZoneCompletion); err != nil {
 		logger.Log.Fatalf("Failed to register zone completion: %v", err)
 	}

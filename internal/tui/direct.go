@@ -283,7 +283,8 @@ func (s *tuiState) actionSSH() bool {
 	} else {
 		defaultUseIAP := (inst.HasLiveData && inst.ExternalIP == "") || inst.CanUseIAP
 		cachedIAP := LoadIAPPreference(instName)
-		s.showSSHModal(instName, instProject, instZone, defaultUseIAP, cachedIAP)
+		cachedSSHFlags := LoadSSHFlags(instName, instProject)
+		s.showSSHModal(instName, instProject, instZone, defaultUseIAP, cachedIAP, cachedSSHFlags)
 	}
 	return true
 }
@@ -352,13 +353,14 @@ func (s *tuiState) connectToMIGInstance(client *gcp.Client, project string, inst
 
 	s.app.QueueUpdateDraw(func() {
 		cachedIAP := LoadIAPPreference(instance.Name)
-		s.showSSHModal(instance.Name, project, instance.Zone, instance.CanUseIAP, cachedIAP)
+		cachedSSHFlags := LoadSSHFlags(instance.Name, project)
+		s.showSSHModal(instance.Name, project, instance.Zone, instance.CanUseIAP, cachedIAP, cachedSSHFlags)
 	})
 }
 
-func (s *tuiState) showSSHModal(instName, instProject, instZone string, defaultUseIAP bool, cachedIAP *bool) {
+func (s *tuiState) showSSHModal(instName, instProject, instZone string, defaultUseIAP bool, cachedIAP *bool, cachedSSHFlags []string) {
 	s.kb.SetMode(ModeModal)
-	ShowSSHOptionsModal(s.app, instName, defaultUseIAP, cachedIAP,
+	ShowSSHOptionsModal(s.app, instName, defaultUseIAP, cachedIAP, cachedSSHFlags,
 		func(opts SSHOptions) {
 			s.app.SetRoot(s.flex, true)
 			s.app.SetFocus(s.table)
