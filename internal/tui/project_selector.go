@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/kedare/compass/internal/cache"
@@ -70,10 +69,10 @@ func ShowProjectSelector(app *tview.Application, c *cache.Cache, title string, o
 		}
 
 		// Filter and add projects
-		filterLower := strings.ToLower(filter)
+		expr := parseFilter(filter)
 		row := 1
 		for _, project := range projects {
-			if filter == "" || strings.Contains(strings.ToLower(project), filterLower) {
+			if expr.matches(project) {
 				table.SetCell(row, 0, tview.NewTableCell(project).SetExpansion(1))
 				row++
 			}
@@ -203,7 +202,7 @@ func ShowProjectSelector(app *tview.Application, c *cache.Cache, title string, o
 				flex.AddItem(table, 0, 1, false)
 				flex.AddItem(status, 1, 0, false)
 				app.SetFocus(filterInput)
-				status.SetText(" [yellow]Type to filter, Enter to apply, Esc to cancel[-]")
+				status.SetText(" [yellow]Filter: spaces=AND  |=OR  -=NOT  (e.g. \"web|api -dev\")  Enter to apply, Esc to cancel[-]")
 				return nil
 			}
 		}

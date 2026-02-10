@@ -140,20 +140,14 @@ func RunIPLookupView(ctx context.Context, c *cache.Cache, app *tview.Application
 			table.RemoveRow(row)
 		}
 
-		filterLower := strings.ToLower(filter)
+		filterExpr := parseFilter(filter)
 		currentRow := 1
 		matchCount := 0
 		newSelectedRow := -1
 
 		for _, entry := range results {
-			if filter != "" {
-				if !strings.Contains(strings.ToLower(entry.Resource), filterLower) &&
-					!strings.Contains(strings.ToLower(entry.Project), filterLower) &&
-					!strings.Contains(strings.ToLower(entry.Location), filterLower) &&
-					!strings.Contains(strings.ToLower(entry.Kind), filterLower) &&
-					!strings.Contains(strings.ToLower(entry.Details), filterLower) {
-					continue
-				}
+			if !filterExpr.matches(entry.Resource, entry.Project, entry.Location, entry.Kind, entry.Details) {
+				continue
 			}
 
 			kindColor := getKindColor(entry.Kind)
@@ -222,18 +216,12 @@ func RunIPLookupView(ctx context.Context, c *cache.Cache, app *tview.Application
 		resultsMu.Lock()
 		defer resultsMu.Unlock()
 
-		filterLower := strings.ToLower(currentFilter)
+		expr := parseFilter(currentFilter)
 		visibleIdx := 0
 		for i := range allResults {
 			entry := &allResults[i]
-			if currentFilter != "" {
-				if !strings.Contains(strings.ToLower(entry.Resource), filterLower) &&
-					!strings.Contains(strings.ToLower(entry.Project), filterLower) &&
-					!strings.Contains(strings.ToLower(entry.Location), filterLower) &&
-					!strings.Contains(strings.ToLower(entry.Kind), filterLower) &&
-					!strings.Contains(strings.ToLower(entry.Details), filterLower) {
-					continue
-				}
+			if !expr.matches(entry.Resource, entry.Project, entry.Location, entry.Kind, entry.Details) {
+				continue
 			}
 			visibleIdx++
 			if visibleIdx == row {
@@ -543,7 +531,7 @@ func RunIPLookupView(ctx context.Context, c *cache.Cache, app *tview.Application
 				filterInput.SetText(currentFilter)
 				rebuildLayout(true, false)
 				app.SetFocus(filterInput)
-				status.SetText(" [yellow]Type to filter results, Enter to apply, Esc to cancel[-]")
+				status.SetText(" [yellow]Filter: spaces=AND  |=OR  -=NOT  (e.g. \"web|api -dev\")  Enter to apply, Esc to cancel[-]")
 				return nil
 
 			case 'd':

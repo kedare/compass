@@ -188,20 +188,15 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 			table.RemoveRow(row)
 		}
 
-		filterLower := strings.ToLower(filter)
+		filterExpr := parseFilter(filter)
 		currentRow := 1
 		matchCount := 0
 		newSelectedRow := -1
 
 		for _, entry := range results {
 
-			if filter != "" {
-				if !strings.Contains(strings.ToLower(entry.Name), filterLower) &&
-					!strings.Contains(strings.ToLower(entry.Project), filterLower) &&
-					!strings.Contains(strings.ToLower(entry.Location), filterLower) &&
-					!strings.Contains(strings.ToLower(entry.Type), filterLower) {
-					continue
-				}
+			if !filterExpr.matches(entry.Name, entry.Project, entry.Location, entry.Type) {
+				continue
 			}
 
 			typeColor := getTypeColor(entry.Type)
@@ -267,17 +262,12 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 		resultsMu.Lock()
 		defer resultsMu.Unlock()
 
-		filterLower := strings.ToLower(currentFilter)
+		expr := parseFilter(currentFilter)
 		visibleIdx := 0
 		for i := range allResults {
 			entry := &allResults[i]
-			if currentFilter != "" {
-				if !strings.Contains(strings.ToLower(entry.Name), filterLower) &&
-					!strings.Contains(strings.ToLower(entry.Project), filterLower) &&
-					!strings.Contains(strings.ToLower(entry.Location), filterLower) &&
-					!strings.Contains(strings.ToLower(entry.Type), filterLower) {
-					continue
-				}
+			if !expr.matches(entry.Name, entry.Project, entry.Location, entry.Type) {
+				continue
 			}
 			visibleIdx++
 			if visibleIdx == row {
@@ -649,7 +639,7 @@ func RunSearchView(ctx context.Context, c *cache.Cache, app *tview.Application, 
 				filterInput.SetText(currentFilter)
 				rebuildLayout(true, false)
 				app.SetFocus(filterInput)
-				status.SetText(" [yellow]Type to filter results, Enter to apply, Esc to cancel[-]")
+				status.SetText(" [yellow]Filter: spaces=AND  |=OR  -=NOT  (e.g. \"web|api -dev\")  Enter to apply, Esc to cancel[-]")
 				return nil
 
 			case 's':
@@ -1252,6 +1242,9 @@ func showSearchHelp(app *tview.Application, table *tview.Table, mainFlex *tview.
   • Search can be cancelled at any time with Esc
   • Cancelled searches keep existing results
   • Filter (/) narrows displayed results without new search
+  • Filter supports: spaces (AND), | (OR), - (NOT)
+    Example: "compute.instance prod" = instances in prod projects
+    Example: "web|api -dev" = web or api resources, excluding dev
   • Tab toggles fuzzy mode (matches characters in order, e.g. "prd" matches "production")
   • Context-aware actions based on resource type
 
