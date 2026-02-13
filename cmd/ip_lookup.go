@@ -250,7 +250,8 @@ func executeLookupAcrossClients(ctx context.Context, ip string, clients []*gcp.C
 				return groupCtx.Err()
 			}
 
-			associations, err := client.LookupIPAddress(groupCtx, ip)
+			// Use optimized lookup that leverages cached subnet information
+			associations, err := client.LookupIPAddressFast(groupCtx, ip)
 
 			res := lookupResult{
 				client:       client,

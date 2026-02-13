@@ -81,6 +81,9 @@ func vpnTunnelDetails(tunnel *gcp.VPNTunnelInfo) map[string]string {
 	if tunnel.GatewayLink != "" {
 		parts := strings.Split(tunnel.GatewayLink, "/")
 		details["gateway"] = parts[len(parts)-1]
+		details["isHA"] = "true" // HA VPN tunnel
+	} else if tunnel.TargetGatewayLink != "" {
+		details["isHA"] = "false" // Classic VPN tunnel
 	}
 
 	return details

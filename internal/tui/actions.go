@@ -1031,13 +1031,19 @@ func GetCloudConsoleURL(resourceType, name, project, location string, details ma
 		return buildCloudConsoleURL(path.Join("compute/snapshotsDetail/projects", project, "global/snapshots", name), project)
 
 	case string(search.KindForwardingRule):
-		return buildCloudConsoleURL(path.Join("net-services/loadbalancing/advanced/forwardingRules/details", location, name), project)
+		if location == "global" {
+			return buildCloudConsoleURL(path.Join("net-services/loadbalancing/advanced/globalForwardingRules/details", name), project)
+		}
+		return buildCloudConsoleURL(path.Join("net-services/loadbalancing/advanced/forwardingRules/details/regions", location, "forwardingRules", name), project)
 
 	case string(search.KindBackendService):
 		return buildCloudConsoleURL(path.Join("net-services/loadbalancing/advanced/backendServices/details", name), project)
 
 	case string(search.KindHealthCheck):
-		return buildCloudConsoleURL("compute/healthChecks", project)
+		if location == "" || location == "global" {
+			return buildCloudConsoleURL(path.Join("compute/healthChecks/details", name), project)
+		}
+		return buildCloudConsoleURL(path.Join("compute/healthChecks/details/regions", location, name), project)
 
 	case string(search.KindURLMap):
 		return buildCloudConsoleURL(path.Join("net-services/loadbalancing/advanced/urlMaps/details", name), project)
@@ -1052,13 +1058,21 @@ func GetCloudConsoleURL(resourceType, name, project, location string, details ma
 		return buildCloudConsoleURL(path.Join("networking/firewalls/details", name), project)
 
 	case string(search.KindVPNGateway):
-		return buildCloudConsoleURL(path.Join("hybrid/vpn/gateways/details", location, name), project)
+		return buildCloudConsoleURL(path.Join("hybrid/vpn/gateways/details", location, name), project) + "&isHA=true"
 
 	case string(search.KindVPNTunnel):
-		return buildCloudConsoleURL(path.Join("hybrid/vpn/tunnels/details", location, name), project)
+		baseURL := buildCloudConsoleURL(path.Join("hybrid/vpn/tunnels/details", location, name), project)
+		// Add isHA=true for HA VPN tunnels (not Classic VPN)
+		if details["isHA"] == "true" {
+			return baseURL + "&isHA=true"
+		}
+		return baseURL
 
 	case string(search.KindConnectivityTest):
 		return buildCloudConsoleURL(path.Join("net-intelligence/connectivity/tests/details", name), project)
+
+	case string(search.KindRoute):
+		return buildCloudConsoleURL(path.Join("networking/routes/details", name), project)
 
 	default:
 		return buildCloudConsoleURL("home/dashboard", project)
