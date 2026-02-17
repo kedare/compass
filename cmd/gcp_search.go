@@ -10,6 +10,7 @@ import (
 	"github.com/kedare/compass/internal/gcp"
 	"github.com/kedare/compass/internal/gcp/search"
 	"github.com/kedare/compass/internal/logger"
+	"github.com/kedare/compass/internal/output"
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
 )
@@ -294,7 +295,6 @@ When both --type and --no-type are used, --no-type is applied to the --type filt
 		}
 
 		displaySearchResults(searchOutput.Results)
-		displaySearchWarnings(searchOutput.Warnings)
 
 		return nil
 	},
@@ -364,34 +364,8 @@ func resolveSearchProjects(searchTerm string, resourceTypes []string) ([]string,
 	return trimmed, nil
 }
 
-// displaySearchWarnings shows any warnings from providers that failed during search.
-func displaySearchWarnings(warnings []search.SearchWarning) {
-	if len(warnings) == 0 {
-		return
-	}
-
-	// Group warnings by provider to avoid repeating the same API error for every project
-	providerErrors := make(map[search.ResourceKind]int)
-	for _, w := range warnings {
-		providerErrors[w.Provider]++
-	}
-
-	pterm.Println()
-	pterm.Warning.Printf("Some providers encountered errors (%d total):\n", len(warnings))
-	for provider, count := range providerErrors {
-		// Find a sample error for this provider
-		var sampleErr error
-		for _, w := range warnings {
-			if w.Provider == provider {
-				sampleErr = w.Err
-				break
-			}
-		}
-		pterm.Warning.Printf("  - %s: %d project(s) failed - %v\n", provider, count, sampleErr)
-	}
-}
-
-// displaySearchResults renders the search matches to stdout using pterm tables.
+// displaySearchResults renders the search matches to stdout.
+// It uses a full table when the terminal is wide enough, otherwise falls back to a compact card layout.
 func displaySearchResults(results []search.Result) {
 	if len(results) == 0 {
 		pterm.Info.Println("No resources matched your query.")
@@ -412,10 +386,28 @@ func displaySearchResults(results []search.Result) {
 		})
 	}
 
-	if err := pterm.DefaultTable.WithBoxed(true).WithHasHeader().WithData(rows).Render(); err != nil {
-		logger.Log.Warnf("Failed to render search results table: %v", err)
-		for _, row := range rows[1:] {
-			pterm.Println(strings.Join(row, "\t"))
+	// Try rendering as a table first, then check if it fits
+	rendered, err := pterm.DefaultTable.WithBoxed(true).WithHasHeader().WithData(rows).Srender()
+	if err == nil && output.FitsTerminalWidth(rendered) {
+		pterm.Println(rendered)
+		return
+	}
+
+	// Fall back to compact card layout for narrow terminals
+	displaySearchResultsCompact(results)
+}
+
+// displaySearchResultsCompact renders search results in a compact card layout suitable for narrow terminals.
+func displaySearchResultsCompact(results []search.Result) {
+	for i, result := range results {
+		if i > 0 {
+			pterm.Println()
+		}
+		pterm.Printf("[%s] %s\n", pterm.Bold.Sprint(string(result.Type)), pterm.Bold.Sprint(result.Name))
+		pterm.Printf("  %-10s %s\n", "Project:", result.Project)
+		pterm.Printf("  %-10s %s\n", "Location:", result.Location)
+		if details := formatResultDetails(result.Details); details != "" {
+			pterm.Printf("  %-10s %s\n", "Details:", details)
 		}
 	}
 }

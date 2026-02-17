@@ -15,8 +15,8 @@ import (
 	"golang.org/x/term"
 )
 
-// detectTerminalWidth returns the width of the current terminal when available.
-func detectTerminalWidth() (int, bool) {
+// DetectTerminalWidth returns the width of the current terminal when available.
+func DetectTerminalWidth() (int, bool) {
 	if raw, ok := os.LookupEnv("COLUMNS"); ok {
 		if width, err := strconv.Atoi(raw); err == nil && width > 0 {
 			return width, true
@@ -406,7 +406,7 @@ func displayForwardAndReturnPaths(forwardTraces []*gcp.Trace, returnTraces []*gc
 			return false
 		}
 
-		if fitsTerminalWidth(combined) {
+		if FitsTerminalWidth(combined) {
 			fmt.Print(combined)
 
 			return true
@@ -554,9 +554,9 @@ func traceStepCells(trace *gcp.Trace, index int) [5]string {
 	return [5]string{stepNum, getStepIcon(index, len(trace.Steps), step.CausesDrop), stepType, resource, status}
 }
 
-// fitsTerminalWidth reports whether the rendered block fits within the current terminal width.
-func fitsTerminalWidth(block string) bool {
-	width, ok := detectTerminalWidth()
+// FitsTerminalWidth reports whether the rendered block fits within the current terminal width.
+func FitsTerminalWidth(block string) bool {
+	width, ok := DetectTerminalWidth()
 	return fitsTerminalWidthWithLimit(block, width, ok)
 }
 
