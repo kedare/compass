@@ -91,7 +91,7 @@ func TestDisplayForwardAndReturnPaths_RespectsTerminalWidth(t *testing.T) {
 	wide := required + 10
 	t.Setenv("COLUMNS", strconv.Itoa(wide))
 
-	width, ok := detectTerminalWidth()
+	width, ok := DetectTerminalWidth()
 	require.True(t, ok)
 	require.Equal(t, wide, width)
 
