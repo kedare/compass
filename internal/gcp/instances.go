@@ -229,6 +229,25 @@ func (c *Client) FindInstanceInMIG(ctx context.Context, migName, zone string) (*
 	return instance, nil
 }
 
+// EnrichBootDiskSourceImage fetches the source image for the boot disk attached to the instance.
+// This makes a separate Disks.Get API call and should only be used when displaying details.
+func (c *Client) EnrichBootDiskSourceImage(ctx context.Context, instance *Instance) {
+	if instance == nil {
+		return
+	}
+	for i := range instance.Disks {
+		if !instance.Disks[i].Boot || instance.Disks[i].Name == "" {
+			continue
+		}
+		disk, err := c.service.Disks.Get(c.project, instance.Zone, instance.Disks[i].Name).Context(ctx).Do()
+		if err != nil {
+			logger.Log.Debugf("Failed to fetch disk %s details: %v", instance.Disks[i].Name, err)
+			continue
+		}
+		instance.Disks[i].SourceImage = extractSourceImageName(disk.SourceImage)
+	}
+}
+
 func (c *Client) convertInstance(instance *compute.Instance) *Instance {
 	result := &Instance{
 		Name:              instance.Name,

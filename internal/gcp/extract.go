@@ -114,6 +114,28 @@ func extractMIGNameFromCreatedBy(createdByURL string) string {
 	return ""
 }
 
+// extractSourceImageName extracts a user-friendly "project/image-name" from a GCP source image URL.
+// Expected format: .../projects/{project}/global/images/{image-name}
+func extractSourceImageName(sourceImageURL string) string {
+	if sourceImageURL == "" {
+		return ""
+	}
+	// URL format: .../projects/{project}/global/images/{image-name}
+	parts := strings.Split(sourceImageURL, "/")
+	for i, part := range parts {
+		if part == "images" && i+1 < len(parts) {
+			imageName := parts[i+1]
+			for j := i - 1; j >= 0; j-- {
+				if parts[j] == "projects" && j+1 < len(parts) {
+					return parts[j+1] + "/" + imageName
+				}
+			}
+			return imageName
+		}
+	}
+	return extractResourceName(sourceImageURL)
+}
+
 func extractHealthCheckPort(hc *compute.HealthCheck) int64 {
 	if hc.HttpHealthCheck != nil {
 		return hc.HttpHealthCheck.Port
