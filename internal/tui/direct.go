@@ -414,6 +414,8 @@ func (s *tuiState) loadAndShowDetails(inst *instanceData) {
 			return
 		}
 
+		projectClient.EnrichBootDiskSourceImage(s.ctx, gcpInst)
+
 		s.app.QueueUpdateDraw(func() {
 			detailText := FormatInstanceDetails(gcpInst, inst.Project)
 			s.showDetailView(detailText, fmt.Sprintf(" Instance: %s ", inst.Name))

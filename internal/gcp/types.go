@@ -56,14 +56,15 @@ type Instance struct {
 
 // InstanceDisk represents a disk attached to an instance.
 type InstanceDisk struct {
-	Name       string
-	Boot       bool
-	AutoDelete bool
-	Mode       string
-	Type       string
-	DiskSizeGb int64
-	DiskType   string
-	Source     string
+	Name        string
+	Boot        bool
+	AutoDelete  bool
+	Mode        string
+	Type        string
+	DiskSizeGb  int64
+	DiskType    string
+	Source      string
+	SourceImage string
 }
 
 // ManagedInstanceRef represents a reference to a managed instance.

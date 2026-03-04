@@ -554,6 +554,9 @@ func (e *InstanceActionExecutor) ExecuteDetails(ctx *ActionContext, showDetailFu
 			_ = cacheStore.MarkProjectUsed(e.Project)
 		}
 
+		// Enrich boot disk source image (requires extra API call)
+		client.EnrichBootDiskSourceImage(ctx.Ctx, instance)
+
 		// Format instance details
 		details := FormatInstanceDetails(instance, e.Project)
 
@@ -622,6 +625,9 @@ func FormatInstanceDetails(instance *gcp.Instance, project string) string {
 				sizeStr = fmt.Sprintf(" (%dGB)", disk.DiskSizeGb)
 			}
 			details.WriteString(fmt.Sprintf("  [white::b]Disk %d:[-:-:-]           %s%s%s\n", i+1, disk.Name, sizeStr, bootStr))
+			if disk.SourceImage != "" {
+				details.WriteString(fmt.Sprintf("    [white::b]Source Image:[-:-:-]   %s\n", disk.SourceImage))
+			}
 		}
 	}
 
